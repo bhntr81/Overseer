@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""Run checks without contacting the user's live tmux server."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+root = Path(__file__).resolve().parents[1]
+with tempfile.TemporaryDirectory(prefix='overseer-check-') as directory:
+    env = dict(os.environ, TMUX_TMPDIR=directory)
+    env.pop('TMUX', None)
+    raise SystemExit(subprocess.run([sys.executable, '-B', '-m', 'unittest', 'discover', '-s', 'tests', '-v'],
+                                   cwd=root, env=env).returncode)

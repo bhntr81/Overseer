@@ -1,0 +1,182 @@
+[
+  {
+    "id": "F01",
+    "title": "Codex noninteractive execution",
+    "url": "https://learn.chatgpt.com/docs/non-interactive-mode",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "JSONL events and structured results; local version must be checked."
+  },
+  {
+    "id": "F02",
+    "title": "Codex GitHub review",
+    "url": "https://learn.chatgpt.com/docs/third-party/github",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Connected repository reviews supplement CI and approvals."
+  },
+  {
+    "id": "F03",
+    "title": "Codex iterative repair",
+    "url": "https://developers.openai.com/cookbook/examples/codex/build_iterative_repair_loops_with_codex",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Review/repair/validation example; not a throughput benchmark."
+  },
+  {
+    "id": "F04",
+    "title": "Cursor Agent",
+    "url": "https://cursor.com/docs/agent/overview",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Editing, terminal/browser tools; checkpoints distinct from Git."
+  },
+  {
+    "id": "F05",
+    "title": "Cursor automations",
+    "url": "https://cursor.com/docs/cloud-agent/automations",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Scheduled and event-triggered workers; entitlement not verified."
+  },
+  {
+    "id": "F06",
+    "title": "Claude headless",
+    "url": "https://code.claude.com/docs/en/headless",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Structured programmatic output; flags depend on client version."
+  },
+  {
+    "id": "F07",
+    "title": "Claude GitHub Actions",
+    "url": "https://code.claude.com/docs/en/github-actions",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "GitHub integration; not enabled in this project."
+  },
+  {
+    "id": "F08",
+    "title": "Grok Build scripting",
+    "url": "https://docs.x.ai/build/cli/headless-scripting",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Headless JSON and ACP; local authentication not verified."
+  },
+  {
+    "id": "F09",
+    "title": "Grok Bot",
+    "url": "https://docs.x.ai/grok-bot/overview",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Persistent assistant product; shared account computer is an access boundary."
+  },
+  {
+    "id": "F10",
+    "title": "Grok function calling",
+    "url": "https://docs.x.ai/developers/tools/function-calling",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Application executes custom function calls; model request is not execution proof."
+  },
+  {
+    "id": "F11",
+    "title": "GitHub rulesets",
+    "url": "https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Required checks and reviews; plan/repo availability varies."
+  },
+  {
+    "id": "F12",
+    "title": "GitHub concurrency",
+    "url": "https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Workflow concurrency is separate from factory task ownership."
+  },
+  {
+    "id": "F13",
+    "title": "Playwright traces",
+    "url": "https://playwright.dev/docs/trace-viewer",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Browser regression evidence and debugging."
+  },
+  {
+    "id": "F14",
+    "title": "Ruff",
+    "url": "https://docs.astral.sh/ruff/",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Python lint/format tool; speed claims are vendor claims."
+  },
+  {
+    "id": "F15",
+    "title": "Semgrep CI",
+    "url": "https://docs.semgrep.dev/semgrep-ci/sample-ci-configs",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "CI scan integration; package/plan features differ."
+  },
+  {
+    "id": "F16",
+    "title": "GitHub dependency review",
+    "url": "https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-review",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Dependency-change review; private repo access needs verification."
+  },
+  {
+    "id": "F17",
+    "title": "Temporal durable AI",
+    "url": "https://docs.temporal.io/ai",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Durable workflow orchestration candidate, deferred."
+  },
+  {
+    "id": "F18",
+    "title": "LangGraph persistence",
+    "url": "https://docs.langchain.com/oss/python/langgraph/persistence",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Checkpointed agent state, not required alongside other schedulers."
+  },
+  {
+    "id": "F19",
+    "title": "OpenTelemetry",
+    "url": "https://opentelemetry.io/docs/concepts/signals/",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Traces, metrics and logs for later observability."
+  },
+  {
+    "id": "F20",
+    "title": "METR early-2025 study",
+    "url": "https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/",
+    "retrieved": "2026-10-18",
+    "access": "opened",
+    "type": "empirical",
+    "scope_and_limitations": "Specific randomized study; not evidence about all developers or current model rankings."
+  }
+]

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "status": "proposal_not_enforced_by_local_command_runner",
+  "decision_owner": "model_router",
+  "approval_owner": "factory_director_within_ceo_delegation",
+  "global_provider_concurrency": 1,
+  "max_agent_depth": 3,
+  "one_writer_per_workspace": true,
+  "required_inputs": ["task_id", "spec_hash", "role", "risk", "required_capabilities", "project_constraints", "measured_evidence", "provider_availability", "budget"],
+  "required_decision_fields": ["provider", "model", "reasoning_effort", "rationale", "evidence_ids", "fallback", "stop_condition"],
+  "providers": {
+    "codex": {"enabled_for_factory": false, "allowed_models": []},
+    "claude": {"enabled_for_factory": false, "allowed_models": []},
+    "cursor": {"enabled_for_factory": false, "allowed_models": []},
+    "grok_build": {"enabled_for_factory": false, "allowed_models": []},
+    "grok_bot": {"enabled_for_factory": false, "allowed_models": []}
+  },
+  "rules": [
+    "Honor required provider/model authorship; unavailable required model means blocked, not silent fallback.",
+    "Choose from verified capability allowlists, not invented model names.",
+    "Prefer matched local acceptance/time/cost evidence; label unmeasured choices provisional.",
+    "No automatic provider billing or privacy boundary change.",
+    "Record requested versus observed model identity separately.",
+    "Unknown cost and token usage remain null.",
+    "Provider supervisors must enforce approved quotas before spawning descendants."
+  ]
+}

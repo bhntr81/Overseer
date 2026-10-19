@@ -1,0 +1,14 @@
+[Unit]
+Description=Overseer LLM terminal continuation monitor
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/Overseer
+ExecStart=/usr/bin/python3 -m overseer run
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
