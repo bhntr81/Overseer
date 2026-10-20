@@ -1022,3 +1022,105 @@ Oct 20 01:11:48 INFO queue releases %7: stopped
 The OpenCode turn ended with `OVERSEER_NEEDS_INPUT`, so the pane is now held
 by the stop marker and waits for the operator. The turn itself ran 50m 41s
 with about 110 tool calls and four delegated agents.
+
+### The contract block: the missing REQUEST inputs become spec fields
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. The increment is filed against exactly one pillar row, the
+CONTRACT row of `docs/HARNESS_FRAMEWORK.md`. The previous step had closed the
+OpenCode client gap in the monitor and named what was still open: a Grok
+session remains undrivable, the factory still has no real provider adapter,
+and `%7` waits on the operator. The Grok client gap needs a live Grok turn to
+measure and the account reports `Weekly limit left: 0%`, and a provider
+adapter is a separate, externally gated milestone, so this step took the
+factory's CONTRACT row, whose next increment was already named in the project.
+
+The increment adds an optional `contract` block to the command-mode task
+spec. It is closed: exactly eleven keys, `role`, `risk_tier`,
+`external_effects`, `protected_paths`, `approval_requirements`,
+`acceptance_ids`, `required_capabilities`, `project_constraints`,
+`measured_evidence`, `provider_availability`, and `budget`. A missing key, an
+unknown key, a wrong type, an out-of-range value, a protected path that leaves
+the workspace, and acceptance identifiers that do not match the submitted
+acceptance commands are all rejected with a message that names the field.
+`acceptance_ids` are labels for the commands that were already submitted; they
+add, remove, reorder, and alter nothing, and the controller-owned verifier
+identities and the acceptance path are untouched. The three controller-owned
+modes (`fixture`, `fake_provider`, `isolation_probe`) keep their exact closed
+field sets and still reject a `contract` key.
+
+The block is recorded, never enforced. Nothing acts on a declared risk tier,
+protected path, approval requirement, or budget. The protected-path check is a
+lexical shape check on a declaration, not a write guard, and the runner still
+executes trusted local commands with the user's own privileges.
+
+```text
+python3 -m unittest discover -s tests -p 'test_factory.py' -v
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --check
+```
+
+Results, copied from the run: the factory suite ran 46 tests in 2.914 seconds,
+OK; the full suite ran 132 tests in 13.666 seconds, OK; the document reference
+checker reported `91 references checked in HARNESS_FRAMEWORK.md`; `git diff
+--check` exited 0. The factory suite grew from 33 to 46 tests. Token usage and
+monetary cost were not supplied by the runtime and remain unavailable.
+
+Files changed: `overseer/factory.py` (the contract constants, the validation
+helpers, the contract validation, the command-mode allowed key set, the
+`REQUEST_INPUT_FIELDS` map, and the contract in the inspect result),
+`tests/test_factory.py` (a new `ContractTests` class), `factory/routing-policy.json`
+(the `status` string only), `docs/HARNESS_FRAMEWORK.md` (the CONTRACT row, the
+REQUEST paragraph, the PERMISSIONS clause, and the claims list), `README.md`
+(one paragraph on the optional block), and this log.
+
+The optional-versus-mandatory decision was the writer's, and it was kept:
+`docs/FACTORY_EXECUTION.md` documents the repository example task as
+idempotently re-submittable, and neither that file nor the example task is in
+this increment's scope, so a mandatory block would falsify a documented
+statement. A command-mode spec without a contract is still valid, still
+submittable, and still runs; `inspect` reports `contract` as `None` for it.
+Making the block mandatory is the recorded next increment for the row.
+
+Disagreements between the blueprint, the routing policy, and the code, kept
+visible rather than smoothed over:
+
+- The policy's nine `required_inputs` are inputs to a routing decision, not
+  all authored task fields. `task_id` and `spec_hash` are facts of the stored
+  task, and `spec_hash` is derived, not submitted. `measured_evidence` and
+  `provider_availability` are environment observations; the contract can only
+  hold submitter declarations of them, and no code reads them. The mapping is
+  in code as `REQUEST_INPUT_FIELDS` `overseer/factory.py:80`, and the test
+  suite reads the real policy file to prove the two agree.
+- The policy's `required_decision_fields` have no code counterpart. Provider,
+  model, reasoning effort, rationale, evidence IDs, fallback, and stop
+  condition are the router's fields, and no router exists. That is named as
+  remaining work.
+- The blueprint's minimum task fields are not covered by one increment. This
+  step covers the Risk and Budget groups and the policy's input names. The
+  Dependency group, the Execution group's provider, model, and adapter
+  identity, and the Result group's candidate revision and acceptance decision
+  are out of scope.
+- The routing policy file's `status` is now
+  `required_inputs_have_validated_code_counterparts_no_runtime_router`. It is
+  still a proposal: the test suite reads the file, no runtime code reads it,
+  and no router enforces its decisions. `docs/HARNESS_FRAMEWORK.md` says
+  exactly that, and the former sentence that no code reads either that file
+  or `factory/skills-provenance.json` was corrected: the provenance file is
+  read by no code at all.
+
+The CONTRACT verdict now records that the factory contract carries the missing
+REQUEST inputs as a validated optional block, that those statements are
+recorded and not enforced, and that the monitor's request contract is still
+one free-text string. That monitor-side gap is unchanged and is recorded as a
+separate open item rather than dropped. Every line citation in the pillar map
+was re-read by content after the edit, because the reference checker proves
+only that a path exists and a line is in range. The PERMISSIONS row was
+corrected for factual accuracy only; its verdict and next increment are
+unchanged.
+
+Not touched: the live tmux server and every pane, the running monitor service
+(still PID 3550026, not restarted), the live factory ledger at
+`~/.local/state/overseer/factory` (its `jobs.sqlite3` still carries its
+2026-10-19 22:34:24 timestamp), `config.json`, and the monitor's own modules.

@@ -11,7 +11,12 @@ import time
 import unittest
 from unittest.mock import patch
 
-from overseer.factory import FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID, Factory, fixture_candidate_path
+from overseer.factory import (
+    CONTRACT_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID, PROVIDER_NAMES,
+    REQUEST_INPUT_FIELDS, Factory, canonical, fixture_candidate_path, validate,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FactoryTests(unittest.TestCase):
@@ -624,3 +629,229 @@ class FactoryTests(unittest.TestCase):
         command['scenario'] = 'success'
         with self.assertRaises(ValueError):
             self.f.submit(command)
+
+
+class ContractTests(unittest.TestCase):
+    """The optional contract block: validated, recorded, never enforced."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / 'state' / 'jobs.sqlite3'
+        self.f = Factory(self.db)
+        self.addCleanup(self.f.close)
+
+    def contract(self, **overrides):
+        block = {
+            'role': 'implementation',
+            'risk_tier': 'medium',
+            'external_effects': ['publishes a release note'],
+            'protected_paths': ['secrets'],
+            'approval_requirements': ['operator-review'],
+            'acceptance_ids': ['A1'],
+            'required_capabilities': ['filesystem write'],
+            'project_constraints': ['keep the public API stable'],
+            'measured_evidence': None,
+            'provider_availability': None,
+            'budget': {
+                'wall_time_seconds': 600,
+                'token_limit': None,
+                'cost_limit_usd': None,
+                'resource_limits': {'cpu_seconds': 60, 'memory_mb': 512,
+                                    'process_count': 4, 'disk_mb': 64},
+                'repair_allowance': 1,
+            },
+        }
+        block.update(overrides)
+        return block
+
+    def command_spec(self, name='one', checks=None, contract=None):
+        spec = {
+            'id': name, 'objective': 'write and independently verify result',
+            'workspace': str(self.root), 'timeout_seconds': 2,
+            'implementation': [sys.executable, '-c',
+                               "from pathlib import Path; Path('result').write_text('ok')"],
+            'checks': checks or [[sys.executable, '-c',
+                                  "from pathlib import Path; assert Path('result').read_text() == 'ok'"]],
+        }
+        if contract is not None:
+            spec['contract'] = contract
+        return spec
+
+    def contract_spec(self, name='one', contract=None, checks=None):
+        return self.command_spec(name, checks, self.contract() if contract is None else contract)
+
+    def test_valid_contract_is_accepted_and_recorded(self):
+        spec = self.contract_spec('contract-one')
+        self.assertTrue(self.f.submit(spec))
+        saved = self.f.inspect('contract-one')
+        self.assertEqual(saved['contract'], spec['contract'])
+        self.assertEqual(saved['spec']['contract'], spec['contract'])
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        recorded = json.loads((Path(result['evidence']) / 'task.json').read_text())
+        self.assertEqual(recorded['contract'], spec['contract'])
+
+    def test_missing_contract_field_is_rejected(self):
+        for field in CONTRACT_FIELDS:
+            with self.subTest(field=field):
+                block = self.contract()
+                del block[field]
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.contract_spec('missing', block))
+
+    def test_unmeasured_contract_fields_accept_null(self):
+        for field in ('measured_evidence', 'provider_availability'):
+            with self.subTest(field=field):
+                block = self.contract()
+                block[field] = None
+                self.assertTrue(self.f.submit(self.contract_spec('null-' + field, block)))
+
+    def test_wrong_contract_types_are_rejected(self):
+        cases = (
+            {'role': 7},
+            {'risk_tier': 3},
+            {'external_effects': 'not a list'},
+            {'required_capabilities': 'not a list'},
+            {'project_constraints': 'not a list'},
+            {'measured_evidence': 'not a list'},
+            {'provider_availability': 'not an object'},
+            {'budget': 'not an object'},
+        )
+        for index, case in enumerate(cases):
+            with self.subTest(case=case):
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.contract_spec('wrong-' + str(index), self.contract(**case)))
+
+    def test_wrong_budget_values_are_rejected(self):
+        def budget(**overrides):
+            block = self.contract()
+            block['budget'].update(overrides)
+            return block
+
+        cases = (
+            budget(wall_time_seconds=True),
+            budget(wall_time_seconds=86401),
+            budget(wall_time_seconds=0),
+            budget(token_limit=-1),
+            budget(token_limit='1000'),
+            budget(cost_limit_usd=-0.5),
+            budget(cost_limit_usd=True),
+            budget(repair_allowance=11),
+            budget(repair_allowance=False),
+            budget(resource_limits={'disk_mb': -1}),
+            budget(resource_limits={'unknown_limit': 1}),
+            budget(resource_limits='none'),
+        )
+        for index, block in enumerate(cases):
+            with self.subTest(index=index):
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.contract_spec('budget-' + str(index), block))
+
+    def test_unknown_key_inside_the_contract_is_rejected(self):
+        for key in ('verifier', 'sandbox', 'approver'):
+            with self.subTest(key=key):
+                block = self.contract()
+                block[key] = 'anything'
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.contract_spec('unknown-' + key, block))
+
+    def test_unknown_key_inside_the_budget_is_rejected(self):
+        block = self.contract()
+        block['budget']['savings'] = 0.42
+        with self.assertRaises(ValueError):
+            self.f.submit(self.contract_spec('budget-extra', block))
+
+    def test_protected_paths_must_stay_inside_the_workspace(self):
+        for path in ('../outside', '/etc/passwd', 'a/../../b', '.', '', 'secrets/../../etc'):
+            with self.subTest(path=path):
+                block = self.contract(protected_paths=[path])
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.contract_spec('protected', block))
+        inside = self.contract(protected_paths=['secrets', 'src/config.json'])
+        self.assertTrue(self.f.submit(self.contract_spec('protected-inside', inside)))
+
+    def test_acceptance_ids_must_match_the_acceptance_commands(self):
+        second = [sys.executable, '-c', 'pass']
+        checks = [[sys.executable, '-c',
+                   "from pathlib import Path; assert Path('result').read_text() == 'ok'"], second]
+        cases = (
+            self.contract(acceptance_ids=['A1']),
+            self.contract(acceptance_ids=['A1', 'A1']),
+            self.contract(acceptance_ids=['A1', 'not an id']),
+            self.contract(acceptance_ids=[]),
+        )
+        for index, block in enumerate(cases):
+            with self.subTest(index=index):
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.contract_spec('acceptance-' + str(index), block, checks))
+        matched = self.contract(acceptance_ids=['A1', 'A2'])
+        self.assertTrue(self.f.submit(self.contract_spec('acceptance-ok', matched, checks)))
+
+    def test_controller_modes_still_reject_a_contract_block(self):
+        specs = (
+            {'id': 'f', 'objective': 'verify a trusted fixture candidate',
+             'mode': 'fixture', 'fixture': 'known_good'},
+            {'id': 'p', 'objective': 'run the fake provider', 'mode': 'fake_provider',
+             'scenario': 'success'},
+            {'id': 'i', 'objective': 'probe the boundary', 'mode': 'isolation_probe'},
+        )
+        for spec in specs:
+            with self.subTest(spec=spec):
+                with self.assertRaises(ValueError):
+                    self.f.submit({**spec, 'contract': self.contract()})
+
+    def test_contract_is_covered_by_the_frozen_spec_hash(self):
+        spec = self.contract_spec('frozen')
+        self.assertTrue(self.f.submit(spec))
+        stored = self.f.inspect('frozen')
+        self.assertEqual(stored['spec_hash'], hashlib.sha256(canonical(spec).encode()).hexdigest())
+        changed = self.contract_spec('frozen')
+        changed['contract']['risk_tier'] = 'high'
+        with self.assertRaisesRegex(ValueError, 'immutable'):
+            self.f.submit(changed)
+        self.assertFalse(self.f.submit(self.contract_spec('frozen')))
+
+    def test_routing_policy_required_inputs_have_code_counterparts(self):
+        policy = json.loads((ROOT / 'factory' / 'routing-policy.json').read_text())
+        self.assertEqual(set(policy['required_inputs']), set(REQUEST_INPUT_FIELDS))
+        self.assertEqual(policy['status'],
+                         'required_inputs_have_validated_code_counterparts_no_runtime_router')
+        self.assertTrue(set(policy['providers']) <= PROVIDER_NAMES)
+        spec = self.contract_spec('policy')
+        validate(spec)
+        self.assertTrue(self.f.submit(spec))
+        stored = self.f.inspect('policy')
+        self.assertEqual(stored['spec_hash'], hashlib.sha256(canonical(spec).encode()).hexdigest())
+        wrong_types = {
+            'role': 1, 'risk_tier': 1, 'required_capabilities': 'text',
+            'project_constraints': 'text', 'measured_evidence': 'text',
+            'provider_availability': 'text', 'budget': 'text',
+        }
+        for name, location in REQUEST_INPUT_FIELDS.items():
+            if location.startswith('contract.'):
+                field = location.split('.', 1)[1]
+                with self.subTest(input=name, missing=True):
+                    block = self.contract()
+                    del block[field]
+                    with self.assertRaises(ValueError):
+                        self.f.submit(self.contract_spec('policy-missing', block))
+                with self.subTest(input=name, wrong_type=True):
+                    block = self.contract()
+                    block[field] = wrong_types[field]
+                    with self.assertRaises(ValueError):
+                        self.f.submit(self.contract_spec('policy-wrong', block))
+            elif location == 'id':
+                with self.subTest(input=name):
+                    spec_without_id = self.contract_spec('policy-no-id')
+                    del spec_without_id['id']
+                    with self.assertRaises(ValueError):
+                        self.f.submit(spec_without_id)
+
+    def test_a_spec_without_a_contract_still_runs(self):
+        spec = self.command_spec('legacy')
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        self.assertIsNone(self.f.inspect('legacy')['contract'])

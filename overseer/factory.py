@@ -56,6 +56,39 @@ FAKE_PROVIDER_VERIFIER_ID = 'fake-provider-answer-v1:' + hashlib.sha256(
     canonical(FAKE_PROVIDER_VERIFIER_MANIFEST).encode('utf-8')
 ).hexdigest()
 
+# The closed contract block. These fields are recorded, never enforced.
+CONTRACT_FIELDS = (
+    'role', 'risk_tier', 'external_effects', 'protected_paths',
+    'approval_requirements', 'acceptance_ids', 'required_capabilities',
+    'project_constraints', 'measured_evidence', 'provider_availability', 'budget',
+)
+BUDGET_FIELDS = (
+    'wall_time_seconds', 'token_limit', 'cost_limit_usd',
+    'resource_limits', 'repair_allowance',
+)
+RESOURCE_LIMIT_NAMES = frozenset({
+    'cpu_seconds', 'memory_mb', 'process_count', 'disk_mb',
+})
+CONTRACT_ROLES = frozenset({'implementation', 'verification', 'review', 'research'})
+RISK_TIERS = frozenset({'low', 'medium', 'high'})
+PROVIDER_NAMES = frozenset({'codex', 'claude', 'cursor', 'grok_build', 'grok_bot'})
+IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}')
+EVIDENCE_IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}')
+
+# Code counterpart for factory/routing-policy.json:9 required_inputs. The JSON
+# file is not read at run time; the test suite proves the two agree.
+REQUEST_INPUT_FIELDS = {
+    'task_id': 'id',
+    'spec_hash': 'derived: sha256 of the canonical spec',
+    'role': 'contract.role',
+    'risk': 'contract.risk_tier',
+    'required_capabilities': 'contract.required_capabilities',
+    'project_constraints': 'contract.project_constraints',
+    'measured_evidence': 'contract.measured_evidence',
+    'provider_availability': 'contract.provider_availability',
+    'budget': 'contract.budget',
+}
+
 
 def fixture_candidate_path(evidence, relative_path):
     """Resolve the fixture's one allowed output file without following links."""
@@ -97,6 +130,129 @@ def verify_fake_provider_candidate(candidate_bytes):
     return True, 'candidate contains the expected answer'
 
 
+def _text_list(contract, field, maximum, item_max):
+    value = contract[field]
+    if not isinstance(value, list):
+        raise ValueError(f'contract {field} must be a list')
+    if len(value) > maximum:
+        raise ValueError(f'contract {field} accepts at most {maximum} entries')
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f'contract {field} entries must be nonempty text')
+        if len(item) > item_max or '\0' in item:
+            raise ValueError(f'contract {field} entries must be short text without NUL')
+    return value
+
+
+def _identifier_list(contract, field, maximum):
+    value = contract[field]
+    if not isinstance(value, list):
+        raise ValueError(f'contract {field} must be a list')
+    if len(value) > maximum:
+        raise ValueError(f'contract {field} accepts at most {maximum} entries')
+    for item in value:
+        if not isinstance(item, str) or IDENTIFIER.fullmatch(item) is None:
+            raise ValueError(f'contract {field} entries must be identifiers')
+    return value
+
+
+def _validate_budget(budget):
+    if not isinstance(budget, dict):
+        raise ValueError('contract budget must be an object')
+    if set(budget) != set(BUDGET_FIELDS):
+        raise ValueError('contract budget must have exactly: ' + ', '.join(BUDGET_FIELDS))
+    wall = budget['wall_time_seconds']
+    if type(wall) is not int or not 1 <= wall <= 86400:
+        raise ValueError('contract budget wall_time_seconds must be an integer from 1 to 86400')
+    tokens = budget['token_limit']
+    if tokens is not None and (type(tokens) is not int or tokens < 0):
+        raise ValueError('contract budget token_limit must be null or a nonnegative integer')
+    cost = budget['cost_limit_usd']
+    if cost is not None and (type(cost) not in (int, float) or cost < 0):
+        raise ValueError('contract budget cost_limit_usd must be null or a nonnegative number')
+    limits = budget['resource_limits']
+    if limits is not None:
+        if not isinstance(limits, dict):
+            raise ValueError('contract budget resource_limits must be null or an object')
+        for name, value in limits.items():
+            if name not in RESOURCE_LIMIT_NAMES:
+                raise ValueError(f'contract budget resource_limits has an unknown limit: {name}')
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(
+                    f'contract budget resource_limits {name} must be null or a nonnegative integer')
+    allowance = budget['repair_allowance']
+    if type(allowance) is not int or not 0 <= allowance <= 10:
+        raise ValueError('contract budget repair_allowance must be an integer from 0 to 10')
+
+
+def _validate_protected_paths(paths, workspace):
+    root = os.path.normpath(workspace)
+    for path in paths:
+        if not isinstance(path, str) or not path.strip() or '\0' in path:
+            raise ValueError('contract protected_paths entries must be nonempty text without NUL')
+        if path.startswith('/') or (len(path) > 1 and path[1] == ':'):
+            raise ValueError('contract protected_paths entries must be relative')
+        if '..' in Path(path).parts:
+            raise ValueError('contract protected_paths entries cannot escape the workspace')
+        joined = os.path.normpath(os.path.join(root, path))
+        if joined == root or not joined.startswith(root + os.sep):
+            raise ValueError('contract protected_paths entries must stay inside the workspace')
+
+
+def validate_contract(contract, spec):
+    """Validate the optional contract block of a command-mode task spec.
+
+    The block is recorded, not enforced: it states a risk tier, protected
+    paths, approval requirements, acceptance identifiers, and a budget, and
+    nothing in the runner acts on those statements.
+    """
+    if not isinstance(contract, dict):
+        raise ValueError('contract must be an object')
+    if set(contract) != set(CONTRACT_FIELDS):
+        raise ValueError('contract must have exactly: ' + ', '.join(CONTRACT_FIELDS))
+    if contract['role'] not in CONTRACT_ROLES:
+        raise ValueError('contract role must be one of: ' + ', '.join(sorted(CONTRACT_ROLES)))
+    if contract['risk_tier'] not in RISK_TIERS:
+        raise ValueError('contract risk_tier must be one of: ' + ', '.join(sorted(RISK_TIERS)))
+    _text_list(contract, 'external_effects', 16, 200)
+    _text_list(contract, 'required_capabilities', 32, 200)
+    _text_list(contract, 'project_constraints', 32, 200)
+    _identifier_list(contract, 'approval_requirements', 16)
+    _validate_protected_paths(contract['protected_paths'], spec['workspace'])
+
+    identifiers = contract['acceptance_ids']
+    if not isinstance(identifiers, list):
+        raise ValueError('contract acceptance_ids must be a list')
+    if len(identifiers) != len(spec['checks']):
+        raise ValueError('contract acceptance_ids must match the number of acceptance commands')
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError('contract acceptance_ids entries must be unique')
+    for identifier in identifiers:
+        if not isinstance(identifier, str) or IDENTIFIER.fullmatch(identifier) is None:
+            raise ValueError('contract acceptance_ids entries must be identifiers')
+
+    evidence = contract['measured_evidence']
+    if evidence is not None:
+        if not isinstance(evidence, list) or len(evidence) > 32:
+            raise ValueError('contract measured_evidence must be null or a list of at most 32 entries')
+        for item in evidence:
+            if not isinstance(item, str) or EVIDENCE_IDENTIFIER.fullmatch(item) is None:
+                raise ValueError('contract measured_evidence entries must be evidence identifiers')
+
+    availability = contract['provider_availability']
+    if availability is not None:
+        if not isinstance(availability, dict):
+            raise ValueError('contract provider_availability must be null or an object')
+        for name, available in availability.items():
+            if name not in PROVIDER_NAMES:
+                raise ValueError(f'contract provider_availability has an unknown provider: {name}')
+            if type(available) is not bool:
+                raise ValueError('contract provider_availability values must be booleans')
+
+    _validate_budget(contract['budget'])
+    return contract
+
+
 def validate(spec):
     if not isinstance(spec, dict):
         raise ValueError('invalid task object')
@@ -125,7 +281,7 @@ def validate(spec):
         return spec
 
     if 'mode' in spec or 'fixture' in spec or 'scenario' in spec or set(spec) - {
-        'id', 'objective', 'workspace', 'implementation', 'checks', 'timeout_seconds'
+        'id', 'objective', 'workspace', 'implementation', 'checks', 'timeout_seconds', 'contract'
     }:
         raise ValueError('unknown task fields or invalid task object')
     if not isinstance(spec.get('workspace'), str) or not Path(spec['workspace']).is_absolute() or not Path(spec['workspace']).is_dir():
@@ -137,6 +293,8 @@ def validate(spec):
     for argv in [spec.get('implementation'), *spec['checks']]:
         if not isinstance(argv, list) or not argv or not all(isinstance(v, str) and v and '\0' not in v for v in argv):
             raise ValueError('commands must be nonempty argument arrays; no implicit shell')
+    if 'contract' in spec:
+        validate_contract(spec['contract'], spec)
     return spec
 
 
@@ -257,6 +415,7 @@ class Factory:
             result['evidence_problem'] = None if evidence_valid else evidence_problem
             result['attempts'] = [dict(r) for r in self.db.execute(
                 'SELECT * FROM attempts WHERE job_id=? ORDER BY lease_generation', (job_id,))]
+        result['contract'] = result['spec'].get('contract')
         result['events'] = [dict(r) for r in self.db.execute('SELECT * FROM events WHERE job_id=? ORDER BY seq', (job_id,))]
         return result
 

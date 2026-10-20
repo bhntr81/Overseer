@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "proposal_not_enforced_by_local_command_runner",
+  "status": "required_inputs_have_validated_code_counterparts_no_runtime_router",
   "decision_owner": "model_router",
   "approval_owner": "factory_director_within_ceo_delegation",
   "global_provider_concurrency": 1,
