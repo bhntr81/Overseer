@@ -1855,8 +1855,11 @@ above. The five files corrected were `overseer/factory.py`,
 
 The user asked that Overseer manage only the tmux windows and projects that
 are explicitly targeted, instead of sweeping every active pane, and that the
-work stay inside the Overseer workspace. The dedicated prompt-writing agent
-authored the bounded prompt; the primary agent executed it.
+work stay inside the Overseer workspace. This increment was written and
+executed by the primary agent without a separate prompt-writing agent, because
+the workspace had just moved and another agent was committing to the same
+repository, so one writer held the tree. That is a deviation from the standing
+workflow and is recorded here rather than papered over.
 
 The transport already required an explicit enrollment to be managed, but it
 had no way to name a project. `config.json` now carries the scope:
