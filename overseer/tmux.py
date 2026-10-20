@@ -142,12 +142,21 @@ class Tmux:
         return [row["pane"] for row in self.inventory()
                 if not row["excluded"] and (row["enabled"] or self.targeted(row))]
 
+    def scoped(self, pane):
+        """Report whether a pane is inside the managed scope without enrollment."""
+        for row in self.inventory():
+            if row["pane"] == pane:
+                return not row["excluded"] and self.targeted(row)
+        return False
+
     def snapshot(self, pane, require_opt_in=True):
         metadata = command("display-message", "-p", "-t", pane,
                            "#{pane_id}\t#{pane_current_command}\t#{pane_pid}\t"
                            "#{cursor_y}\t#{pane_in_mode}\t#{pane_dead}\t#{@overseer}\t"
                            "#{cursor_x}\t#{@overseer_target}").rstrip("\n").split("\t")
-        if len(metadata) != 9 or (require_opt_in and metadata[6] != "1"):
+        if len(metadata) != 9:
+            raise RuntimeError("pane is no longer opted in")
+        if require_opt_in and metadata[6] != "1" and not self.scoped(pane):
             raise RuntimeError("pane is no longer opted in")
         actual, process, pid, cursor_y, mode, dead, _, cursor_x, binding = metadata
         if binding:

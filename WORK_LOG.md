@@ -1883,6 +1883,14 @@ Targeting the Overseer session brought a dead client back into the monitor's
 view, and a dead client used to be reported on every poll. The stale notice
 is now reported once per episode instead of once per poll.
 
+The first version of the scope check was wrong, and the live run showed it. A
+targeted pane that was never enrolled failed the raw opt-in test, and the
+monitor treated that as a failed observation, which aborts the whole poll and
+starves every other pane. The opt-in test is now scope-aware: a pane is
+readable when it is enrolled or inside the target scope, and the transport
+still refuses to type into a pane that is not in scope. The live journal now
+shows the dead Overseer client reported once, and the queue polls cleanly.
+
 The suite grew from 178 to 192 tests, all passing, and the document reference
 checker resolves all 112 citations. The live tmux server, every pane, and the
 running sessions of other projects were not touched; no work was routed

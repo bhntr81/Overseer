@@ -90,6 +90,26 @@ class ScopeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'excluded or no longer watched'):
                 backend.send(type('S', (), {'pane': '%0'})(), 'Continue.')
 
+    def test_a_targeted_pane_may_be_read_and_written(self):
+        backend = Tmux(targets=['other'])
+        rows = [row('%0', '0', 'other', 'Other')]
+        metadata = "%0\tcodex\t123\t1\t0\t0\t0\t2\t\n"
+
+        def fake(*args):
+            if args[0] == 'list-panes':
+                return inventory(rows)(*args)
+            if args[0] == 'display-message':
+                return metadata
+            if args[0] == 'capture-pane':
+                return 'Would you like me to continue?\n›\n'
+            return ''
+
+        with patch('overseer.tmux.command', side_effect=fake):
+            self.assertEqual(backend.panes(), ['%0'])
+            snapshot = backend.snapshot('%0')
+        self.assertEqual(snapshot.pane, '%0')
+        self.assertTrue(snapshot.ready)
+
     def test_under_rejects_a_sibling_directory(self):
         self.assertTrue(under('/home/kali/Projects/Overseer', '/home/kali/Projects'))
         self.assertFalse(under('/home/kali/Projects/Overseer2', '/home/kali/Projects/Overseer'))
