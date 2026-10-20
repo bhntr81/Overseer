@@ -154,6 +154,11 @@ chosen model is reported instead of being forced. When the chosen provider uses
 a different client, the work is routed: a new session is started for that client
 in the same working directory and the pane it came from stays paused.
 
+The Codex picker has two steps. The first lists the models and the second asks
+for the reasoning level, where the scope key `s` applies the change to the
+session only and leaves the global default alone. The monitor uses the session
+scope, so a change made through it does not edit the client's configuration.
+
 ### Credit fallback hierarchy
 
 `config.json` carries a `fallback_policy`:
@@ -271,13 +276,15 @@ eligible sends that have no report; it does not clear existing stop markers or
 resend old messages. Code changes apply after the user service is restarted.
 Config changes apply on the next poll.
 
-The foreground command must be `codex` or `claude`, with an empty composer line
-(`>`, `›`, or `❯`, including the verified empty Codex placeholder). A shell,
+The foreground command must be `codex`, `claude`, or `opencode`, with an empty
+composer line (`>`, `›`, `❯`, or `»`, including the verified empty Codex
+placeholder and the OpenCode composer box). A shell,
 typed draft, copy mode, exited pane, unrecognized
 question, visible generation marker, or sensitive/permission wording causes a
 skip. UI versions, wrappers, placeholders, and different languages can cause
 missed prompts. These checks are heuristics, not proof of an agent's state;
-validate against your clients in dry-run mode first.
+validate against your clients in dry-run mode first. A Grok session is not
+recognized, so the monitor reports it instead of driving it.
 
 Replies have a 15-minute cooldown and a limit of 12 per pane per rolling day.
 The monitor persists fingerprints in `~/.local/state/overseer/state.json` so

@@ -938,3 +938,39 @@ The operator's answer for `%3` was applied: `python3 -m overseer model-select %3
 paused, and otherwise untouched. The monitor sent the new session the
 configured continuation 181 seconds after the route, and the OpenCode session
 began the work on its own default model, `MiniMax M3.1 Flash Free OpenCode`.
+
+### Repair the model picker driver, switch %4, and clear the Codex default
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. The Codex picker has two steps: a model list and then a
+reasoning level with a scope choice, where `s` applies the change to the
+session only. The driver in `overseer/tmux.py` typed the command but never
+opened the picker, and it matched entries over the whole screen, so a
+conversation line could be taken for the highlighted entry.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+```
+
+The driver now opens the picker, searches only the block between the picker's
+own header and footer, navigates in either direction, applies the change to
+the session, and verifies the composer footer. It escapes and clears the
+composer when the model is not offered, and it never selects a different
+model. The pure helpers for the picker block, the reasoning screen, and the
+navigation count are in `overseer/modelchoice.py` with tests. The suite grew
+from 110 to 115 tests, all passing, and the document reference checker
+resolves all 83 citations.
+
+Pane `%2` was switched to `gpt-5.6-terra medium` for the session only. Pane
+`%4` was switched the same way through the repaired driver: its footer changed
+from `GPT-6-Astra medium` to `GPT-5.6-Terra medium`, its `OVERSEER_NEEDS_INPUT`
+marker and its conversation are intact, and no work was restarted. Neither
+pane was routed, because a route would have discarded the conversation.
+
+The Codex default was cleared as well. `~/.codex/config.toml` was backed up to
+`~/.codex/config.toml.backup-20261020T052519Z`, byte-identical to the
+original, and only the `model` value changed, from `gpt-6-luna` to
+`gpt-5.6-terra`; `codex doctor` now reports `model gpt-5.6-terra · openai`.
+Running sessions keep their own model until they are switched, so this
+changes the default for new sessions only.

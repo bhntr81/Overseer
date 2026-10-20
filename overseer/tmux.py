@@ -7,7 +7,8 @@ import subprocess
 import time
 
 from .modelchoice import (
-    find_entry, footer_model, footer_shows, model_id, opencode_empty, selected_index,
+    effort_screen, find_entry, footer_model, footer_shows, model_id, navigation,
+    opencode_empty, picker_block, selected_index,
 )
 
 CLIENTS = frozenset({"codex", "claude", "opencode"})
@@ -104,33 +105,51 @@ class Tmux:
         """Read a pane without requiring the opt-in. Sending still requires it."""
         return self.snapshot(pane, require_opt_in=False)
 
+    def _clear_picker(self, pane):
+        """Leave any picker and clear a leftover command from the composer."""
+        command("send-keys", "-t", pane, "Escape")
+        time.sleep(0.3)
+        if "/model" in command("capture-pane", "-p", "-t", pane):
+            for _ in range(6):
+                command("send-keys", "-t", pane, "BSpace")
+            time.sleep(0.3)
+        return command("capture-pane", "-p", "-t", pane)
+
     def select_model(self, pane, model):
         """Apply a model to a live client through the client's own picker."""
         current = self.inspect(pane)
         if not current.ready:
             raise RuntimeError("pane is not ready for a model change")
         command("send-keys", "-t", pane, "-l", "--", "/model")
-        # The client batches fast input, so the picker needs a moment to render.
+        time.sleep(0.6)
+        command("send-keys", "-t", pane, "Enter")
         time.sleep(1.0)
-        lines = command("capture-pane", "-p", "-t", pane).splitlines()
-        target = find_entry(lines, model)
-        if target is None:
-            command("send-keys", "-t", pane, "Escape")
+        screen = command("capture-pane", "-p", "-t", pane)
+        block = picker_block(screen.splitlines())
+        target = find_entry(block, model)
+        highlighted = selected_index(block)
+        if not block or target is None or highlighted is None:
+            self._clear_picker(pane)
             raise RuntimeError("the client does not offer %s" % model_id(model))
-        highlighted = selected_index(lines)
-        if highlighted is None:
-            command("send-keys", "-t", pane, "Escape")
-            raise RuntimeError("the client picker did not show a selected entry")
-        for _ in range(max(0, target - highlighted)):
-            command("send-keys", "-t", pane, "Down")
+        key, count = navigation(target, highlighted)
+        for _ in range(count):
+            command("send-keys", "-t", pane, key)
         time.sleep(0.2)
         command("send-keys", "-t", pane, "Enter")
         time.sleep(1.0)
-        after = command("capture-pane", "-p", "-t", pane)
-        if not footer_shows(after, model):
-            command("send-keys", "-t", pane, "Escape")
+        screen = command("capture-pane", "-p", "-t", pane)
+        if not footer_shows(screen, model):
+            if not effort_screen(screen):
+                self._clear_picker(pane)
+                raise RuntimeError("the client did not report %s" % model_id(model))
+            # The scope key applies the change to this session only.
+            command("send-keys", "-t", pane, "s")
+            time.sleep(1.0)
+            screen = command("capture-pane", "-p", "-t", pane)
+        if not footer_shows(screen, model):
+            self._clear_picker(pane)
             raise RuntimeError("the client did not report %s" % model_id(model))
-        return footer_model(after)
+        return footer_model(screen)
 
     def send(self, original, reply):
         if original.pane not in self.panes():

@@ -41,6 +41,9 @@ SELECTED = re.compile(r"^[>❯»›]\s")
 FOOTER = "default]"
 RESOLUTIONS = "model-resolutions.json"
 BOX = "┃"
+PICKER_HEADER = "Select Model and Effort"
+PICKER_FOOTER = "enter select"
+EFFORT_HEADER = "Select Reasoning Level"
 EXHAUSTED = "CREDITS_EXHAUSTED_WAITING"
 DEFAULT_POLICY = {
     "primary": [],
@@ -210,6 +213,40 @@ def selected_index(lines):
         if SELECTED.match(line.strip()):
             return index
     return None
+
+
+def picker_block(lines):
+    """Return the entries of a model picker, or an empty list.
+
+    Only the block between the picker's own header and footer is searched, so
+    a conversation line can never be mistaken for a picker entry.
+    """
+    start = None
+    for index, line in enumerate(lines):
+        if PICKER_HEADER in line:
+            start = index
+            break
+    if start is None:
+        return []
+    for index in range(start + 1, len(lines)):
+        if PICKER_FOOTER in lines[index]:
+            return lines[start + 1:index]
+    return lines[start + 1:]
+
+
+def effort_screen(text):
+    """Report whether a captured screen is the reasoning level step."""
+    return EFFORT_HEADER in (text or "")
+
+
+def navigation(target, highlighted):
+    """Return the key and the number of presses that reach the target entry."""
+    if target is None or highlighted is None:
+        return "Down", 0
+    delta = target - highlighted
+    if delta == 0:
+        return "Down", 0
+    return ("Down" if delta > 0 else "Up"), abs(delta)
 
 
 def footer_model(text):

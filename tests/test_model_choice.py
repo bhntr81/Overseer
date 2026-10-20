@@ -11,11 +11,41 @@ from unittest.mock import Mock, patch
 
 from overseer.__main__ import main, model_select, tick
 from overseer.modelchoice import (
-    detect, fallback_chain, find_entry, footer_shows, model_id, next_hop, providers, selected_index,
+    detect, effort_screen, fallback_chain, find_entry, footer_shows, model_id, navigation,
+    next_hop, picker_block, providers, selected_index,
 )
 from overseer.policy import Policy
 from overseer.scheduler import phase
-from overseer.tmux import Snapshot
+from overseer.tmux import Snapshot, Tmux
+
+CONVERSATION = [
+    '› Overseer workflow adoption check, authorized by the user. Read the instructions.',
+    'Worked for 3s • 10:00 PM',
+]
+COMPOSER = '› Ask Codex to do anything'
+PICKER = [
+    '  Select Model and Effort',
+    '',
+    '› 1. GPT-6-Luna     Fast and affordable model for easier tasks.',
+    '  2. GPT-5.6-Terra  Older balanced model for straightforward work.',
+    '  3. GPT-5.6-Luna   Older fast and efficient model.',
+    '',
+    '  enter select · esc back',
+]
+EFFORT = [
+    '  Select Reasoning Level for GPT-5.6-Terra',
+    '',
+    '  1. Low               Fast responses with lighter reasoning',
+    '› 2. Medium (default)  Balances speed and reasoning depth for everyday tasks',
+    '  3. High              Greater reasoning depth for complex problems',
+    '',
+    '  enter default · s session · esc back',
+]
+APPLIED = [
+    '• Model changed to gpt-5.6-terra medium for this session only',
+    '  GPT-5.6-Terra medium · ~/Projects/clubwpt-ocr · Main [default]',
+    COMPOSER,
+]
 
 
 MODEL_ERROR = (
@@ -216,6 +246,79 @@ class ModelChoiceTests(unittest.TestCase):
         self.assertFalse(draft.ready)
         boxed = Snapshot('%0', 'opencode', '1', 'text', '┃', '0', '0')
         self.assertTrue(boxed.ready)
+
+    def test_picker_block_ignores_conversation_lines(self):
+        screen = CONVERSATION + PICKER
+        block = picker_block(screen)
+        self.assertEqual(len(block), 5)
+        self.assertEqual(find_entry(block, 'gpt-5.6-terra'), 2)
+        self.assertEqual(selected_index(block), 1)
+        self.assertNotIn('workflow adoption', ' '.join(block))
+
+    def test_effort_screen_is_detected(self):
+        self.assertTrue(effort_screen('\n'.join(CONVERSATION + EFFORT)))
+        self.assertFalse(effort_screen('\n'.join(CONVERSATION + PICKER)))
+
+    def test_navigation_reaches_the_target_from_either_side(self):
+        self.assertEqual(navigation(2, 2), ('Down', 0))
+        self.assertEqual(navigation(3, 1), ('Down', 2))
+        self.assertEqual(navigation(1, 3), ('Up', 2))
+
+    def test_driver_selects_the_model_and_applies_it_to_the_session(self):
+        backend = Tmux()
+        state = {'phase': 'start', 'keys': []}
+
+        def fake(*args):
+            if args[0] == 'capture-pane':
+                return {'start': '\n'.join(CONVERSATION + [COMPOSER]),
+                        'picker': '\n'.join(CONVERSATION + PICKER),
+                        'effort': '\n'.join(CONVERSATION + EFFORT),
+                        'applied': '\n'.join(CONVERSATION + APPLIED)}[state['phase']]
+            if args[0] == 'display-message':
+                return '\t'.join(['%4', 'codex', '1234', str(len(CONVERSATION)), '0', '0', '1', '2', ''])
+            if args[0] == 'send-keys':
+                key = args[-1]
+                state['keys'].append(key)
+                if key == '/model':
+                    state['phase'] = 'typed'
+                elif key == 'Enter' and state['phase'] == 'typed':
+                    state['phase'] = 'picker'
+                elif key == 'Enter' and state['phase'] == 'picker':
+                    state['phase'] = 'effort'
+                elif key == 's':
+                    state['phase'] = 'applied'
+            return ''
+
+        with patch('overseer.tmux.command', side_effect=fake):
+            reported = backend.select_model('%4', 'gpt-5.6-terra')
+        self.assertEqual(reported, 'GPT-5.6-Terra medium')
+        self.assertEqual(state['keys'], ['/model', 'Enter', 'Down', 'Enter', 's'])
+
+    def test_driver_refuses_a_model_the_picker_does_not_offer(self):
+        backend = Tmux()
+        state = {'phase': 'start', 'keys': []}
+
+        def fake(*args):
+            if args[0] == 'capture-pane':
+                return {'start': '\n'.join(CONVERSATION + [COMPOSER]),
+                        'picker': '\n'.join(CONVERSATION + PICKER)}[state['phase']]
+            if args[0] == 'display-message':
+                return '\t'.join(['%4', 'codex', '1234', str(len(CONVERSATION)), '0', '0', '1', '2', ''])
+            if args[0] == 'send-keys':
+                key = args[-1]
+                state['keys'].append(key)
+                if key == '/model':
+                    state['phase'] = 'typed'
+                elif key == 'Enter' and state['phase'] == 'typed':
+                    state['phase'] = 'picker'
+            return ''
+
+        with patch('overseer.tmux.command', side_effect=fake):
+            with self.assertRaisesRegex(RuntimeError, 'does not offer'):
+                backend.select_model('%4', 'gpt-imaginary')
+        self.assertIn('Escape', state['keys'])
+        self.assertNotIn('Down', state['keys'])
+        self.assertNotIn('s', state['keys'])
 
 
 if __name__ == '__main__':
