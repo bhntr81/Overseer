@@ -60,7 +60,7 @@ and the ledger stores the four memory record kinds: a verified fact, a
 decision, a hypothesis, and a historical attempt. The manifest records what
 was supplied; nothing assembles context from a codebase and no memory record
 is consulted when a task runs.
-A command-mode task may carry an optional `contract` block that states the
+A command-mode task must carry a `contract` block that states the
 role, risk tier, external effects, protected paths, approval requirements,
 acceptance identifiers, required capabilities, project constraints, measured
 evidence, provider availability, and budget limits. The block is validated and

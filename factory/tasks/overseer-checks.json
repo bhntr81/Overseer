@@ -4,5 +4,24 @@
   "workspace": "/home/kali/Programming/Projects/Overseer",
   "timeout_seconds": 120,
   "implementation": ["python3", "-c", "from pathlib import Path; assert Path('overseer/factory.py').is_file(); print('Factory source is present')"],
-  "checks": [["python3", "scripts/check"]]
+  "checks": [["python3", "scripts/check"]],
+  "contract": {
+    "role": "verification",
+    "risk_tier": "low",
+    "external_effects": [],
+    "protected_paths": ["overseer", "tests", "scripts"],
+    "approval_requirements": [],
+    "acceptance_ids": ["A1"],
+    "required_capabilities": ["local test execution"],
+    "project_constraints": ["run the repository's own checks only"],
+    "measured_evidence": null,
+    "provider_availability": null,
+    "budget": {
+      "wall_time_seconds": 3600,
+      "token_limit": null,
+      "cost_limit_usd": null,
+      "resource_limits": null,
+      "repair_allowance": 0
+    }
+  }
 }

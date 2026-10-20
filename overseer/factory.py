@@ -371,8 +371,9 @@ def validate(spec):
     for argv in [spec.get('implementation'), *spec['checks']]:
         if not isinstance(argv, list) or not argv or not all(isinstance(v, str) and v and '\0' not in v for v in argv):
             raise ValueError('commands must be nonempty argument arrays; no implicit shell')
-    if 'contract' in spec:
-        validate_contract(spec['contract'], spec)
+    if 'contract' not in spec:
+        raise ValueError('command-mode tasks require a contract block')
+    validate_contract(spec['contract'], spec)
     if 'envelope' in spec:
         validate_envelope(spec['envelope'], spec)
     return spec

@@ -1712,3 +1712,121 @@ suite ran 172 tests, OK; the document reference checker reported `109
 references checked in HARNESS_FRAMEWORK.md`; `git diff --check` exited 0. Token
 usage and monetary cost were not supplied by the runtime and remain
 unavailable.
+
+### The required contract block
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. The increment is filed against exactly one pillar row, the
+CONTRACT row of `docs/HARNESS_FRAMEWORK.md`, and it completes the first two
+parts of that row's next increment. The monitor-side request contract is
+untouched and remains recorded as a separate open gap.
+
+A command-mode task must now carry a contract block. A submission without one
+is refused at submit time with a `ValueError` that names the contract, and no
+row is written. The block's eleven keys, every bound, the acceptance
+identifier count rule, the uniqueness rule, and the lexical protected-path rule
+are unchanged, and the block is still recorded and never enforced: no budget
+limit, protected path, approval requirement, or risk tier is acted on. The
+three controller-owned modes return earlier in the validation, so they keep
+their exact closed key sets and still run with no contract.
+
+The requirement is checked at submit, not at run. A job stored before the
+requirement is never re-validated, is not rewritten, and is still dispatched
+and still inspected with its stored specification and its recorded results
+unchanged. The shipped behaviour of re-submitting such a stored specification
+is the honest consequence of the minimal change: `submit()` validates before
+it compares the stored hash, so re-submitting an already-stored
+pre-requirement specification now raises the contract error instead of
+returning the idempotent `False`. The rule was not reordered to hide that,
+because the earlier increment fixed `submit()`'s ordering on purpose.
+
+The repository's example task now carries a valid contract with one
+acceptance identifier for its one acceptance command, so the documented submit
+command still works. The private runtime ledger was neither opened in place,
+nor written, nor migrated by hand: everything established about it was
+established by copying the file to a temporary directory and querying the
+copy read-only. That copy holds three stored jobs, all command-mode and all
+without a contract, and none of them is the example's ID.
+
+```text
+python3 -m unittest discover -s tests -p 'test_factory.py' -v
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --check
+```
+
+Results, copied from the run: the factory suite ran 92 tests, OK; the full
+suite ran 178 tests, OK; the document reference checker reported `109
+references checked in HARNESS_FRAMEWORK.md`; `git diff --check` exited 0. The
+factory suite grew from 86 to 92 tests. Token usage and monetary cost were
+not supplied by the runtime and remain unavailable.
+
+Files changed: `overseer/factory.py` (the required contract check in the
+command-mode branch), `tests/test_factory.py` (the shared contract helper, the
+updated spec builders, and a new `RequiredContractTests` class),
+`factory/tasks/overseer-checks.json` (the contract block),
+`docs/FACTORY_EXECUTION.md` (the example, the legacy-job rule, and the
+current counts), `docs/HARNESS_FRAMEWORK.md` (the CONTRACT row, the
+process-order sentence, the contract claims bullet, three citations that did
+not hold their claim, and every re-cited line), `README.md` (the requirement),
+and this log.
+
+Acceptance checks and the test that proves each one:
+
+1. a command-mode task without a contract is refused with a message naming the
+   contract, and no row is written —
+   `test_a_command_mode_task_without_a_contract_is_rejected`
+2. a command-mode task with a contract is accepted —
+   `test_a_command_mode_task_with_a_contract_is_accepted`
+3. the three controller-owned modes still run with no contract —
+   `test_the_controller_modes_still_run_without_a_contract`
+4. a stored legacy job still runs, still inspects with `contract` as `None`,
+   and keeps its stored hash and specification —
+   `test_a_stored_legacy_job_still_runs_and_is_not_rewritten`, and the same
+   rule inside `ContractTests.test_a_spec_without_a_contract_still_runs`
+5. the repository example task carries a valid contract, validates, and
+   submits — `test_the_repository_example_task_carries_a_valid_contract`
+6. the runner reports the missing contract as a JSON error with exit status 1
+   and no traceback — `test_the_runner_reports_the_missing_contract_as_a_json_error`
+
+Three existing tests changed how they reach their subject without being
+weakened: `ContractTests.test_a_spec_without_a_contract_still_runs` and the
+absent half of `ContextTests.test_the_context_manifest_records_the_contract_acceptance_ids`
+now write their job row the way the ledger held it before the rule, and the
+spec builders attach a contract whose acceptance identifiers match the final
+number of acceptance commands.
+
+Three pillar-map citations that did not hold their claim were corrected while
+the file was re-cited: the product-acceptance claim pointed at a sentence
+about duplicate task IDs and now points at the line that says a passed run is
+explicitly not product or release acceptance, the continuous-integration claim
+now points at the line that says the check is not yet running on a remote
+repository, and the agent-traces claim now says that the execution record does
+not mention traces and points at the line that carries the concurrency claim.
+The reference checker passes all of them either way: it proves only that a
+path exists and a line is in range.
+
+Disagreements and limits, kept visible:
+
+- The blueprint makes the Risk group and the Budget group required task
+  fields and freezes the task contract at dispatch. The block now covers those
+  two groups for command-mode tasks, and the freeze is met by the existing
+  specification hash rather than by a separate freeze mechanism. The
+  blueprint's Identity, Dependency, Execution, Verification, and Result groups
+  remain uncovered by this code.
+- The earlier increment kept the block optional on the record that a mandatory
+  block would falsify a documented statement about the example task. This
+  increment reverses that decision because the example task and the execution
+  record are now in scope, and the document now says the opposite of what it
+  said before.
+- The stored `overseer-foundation-checks-001` record names the pre-move
+  workspace path, which the operator moved. The contract rule does not touch
+  that record, and whether it could run today is decided by its own recorded
+  workspace: the runner does not refuse it, does not rewrite it, and still
+  inspects it, but its recorded workspace path no longer exists.
+- The monitor's request contract is still one free-text string. That gap is
+  unchanged and separately filed; this increment does not close it.
+
+Not touched: the live tmux server and every pane, the running monitor service,
+the live factory ledger, `config.json`, the monitor's own modules,
+`factory/routing-policy.json`, and the routing policy's status string.

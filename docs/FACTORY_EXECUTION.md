@@ -72,6 +72,28 @@ new ID. Each task specifies an existing absolute workspace, an objective, one
 implementation argv, one or more acceptance argvs, and a per-command timeout.
 There is no implicit shell or automatic tool/model selection.
 
+A command-mode task must carry a `contract` block. The block states the role,
+the risk tier, the external effects, the protected paths, the approval
+requirements, the acceptance identifiers, the required capabilities, the project
+constraints, the measured evidence, the provider availability, and the budget.
+It is validated, frozen with the specification hash, and recorded; nothing
+enforces it, no budget limit, protected path, approval requirement, or risk
+tier is acted on. The example carries one, with one acceptance identifier for
+its one acceptance command.
+
+The requirement is checked when a task is submitted, not when a stored job
+runs. A job stored before the requirement is not refused, is not rewritten, and
+is still dispatched and still inspected with its stored specification and its
+recorded results unchanged. Whether such a job succeeds is decided by its own
+recorded commands and its own recorded workspace, not by the contract rule:
+the `overseer-foundation-checks-001` record names the pre-move workspace path,
+which the operator moved, so the runner does not refuse it but its recorded
+workspace no longer exists.
+
+The private runtime ledger was neither opened in place, nor written, nor
+migrated by hand. Everything above was established by copying the ledger file
+to a temporary directory and querying the copy read-only.
+
 After an interrupted worker, use `reconcile`, inspect its evidence/workspace and
 recorded child group, then `resolve ID --note 'what was inspected'` only after
 checking actual effects. Resolution marks it failed rather than pretending it
@@ -83,6 +105,11 @@ passed or silently retrying it. A queued task can be cancelled with `cancel ID`.
 tests successfully. The suite covers immutable submission, real file changes,
 independent failed checks, timeout, bounded logs, FIFO, cancellation, worker lock,
 setup failure, and actual worker death. Existing monitor/queue/transport tests pass.
+
+The suite is now 92 factory tests and 172 tests in total, all passing, with the
+contract block required for new command-mode submissions. The figures above are
+the counts observed when those slices were built; the current counts are the
+ones the local check command reports.
 
 Persisted runs:
 

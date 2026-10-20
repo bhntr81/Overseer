@@ -20,6 +20,41 @@ from overseer.factory import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def attach_contract(spec, **overrides):
+    """Give a command-mode spec a valid contract block for its acceptance commands."""
+    block = {
+        'role': 'implementation',
+        'risk_tier': 'low',
+        'external_effects': [],
+        'protected_paths': [],
+        'approval_requirements': [],
+        'acceptance_ids': [f'A{index + 1}' for index in range(len(spec.get('checks') or []))],
+        'required_capabilities': [],
+        'project_constraints': [],
+        'measured_evidence': None,
+        'provider_availability': None,
+        'budget': {
+            'wall_time_seconds': 600, 'token_limit': None, 'cost_limit_usd': None,
+            'resource_limits': None, 'repair_allowance': 0,
+        },
+    }
+    block.update(overrides)
+    spec = dict(spec)
+    spec['contract'] = block
+    return spec
+
+
+def store_legacy_job(factory, spec, state='queued'):
+    """Write a job row the way the ledger held it before the contract rule."""
+    data = canonical(spec)
+    digest = hashlib.sha256(data.encode()).hexdigest()
+    factory.db.execute(
+        'INSERT INTO jobs(id,spec,spec_hash,state,created) VALUES(?,?,?,?,?)',
+        (spec['id'], data, digest, state, time.time()))
+    factory.db.commit()
+    return digest
+
+
 class FactoryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -30,10 +65,10 @@ class FactoryTests(unittest.TestCase):
         self.addCleanup(self.f.close)
 
     def spec(self, name='one'):
-        return {'id': name, 'objective': 'write and independently verify result',
+        return attach_contract({'id': name, 'objective': 'write and independently verify result',
                 'workspace': str(self.root), 'timeout_seconds': 2,
                 'implementation': [sys.executable, '-c', "from pathlib import Path; Path('result').write_text('ok')"],
-                'checks': [[sys.executable, '-c', "from pathlib import Path; assert Path('result').read_text() == 'ok'"]]}
+                'checks': [[sys.executable, '-c', "from pathlib import Path; assert Path('result').read_text() == 'ok'"]]})
 
     def fixture_spec(self, name='fixture', scenario='known_good'):
         return {'id': name, 'objective': 'verify a trusted fixture candidate',
@@ -57,12 +92,14 @@ class FactoryTests(unittest.TestCase):
         self.assertTrue(self.f.submit(spec))
         self.assertFalse(self.f.submit(spec))
         spec['checks'] = [[sys.executable, '-c', 'pass']]
+        spec = attach_contract(spec)
         with self.assertRaisesRegex(ValueError, 'immutable'):
             self.f.submit(spec)
 
     def test_failed_check_is_not_passed(self):
         spec = self.spec()
         spec['checks'] = [[sys.executable, '-c', 'raise SystemExit(3)']]
+        spec = attach_contract(spec)
         self.f.submit(spec)
         result = self.f.run_one()
         self.assertEqual(result['state'], 'failed')
@@ -110,6 +147,7 @@ class FactoryTests(unittest.TestCase):
         spec = self.spec()
         spec['implementation'] = [sys.executable, '-c', 'import sys; print(sys.argv[1])', '$(touch unexpected)']
         spec['checks'] = [[sys.executable, '-c', "from pathlib import Path; assert not Path('unexpected').exists()"]]
+        spec = attach_contract(spec)
         self.f.submit(spec)
         self.assertEqual(self.f.run_one()['state'], 'passed')
 
@@ -117,6 +155,7 @@ class FactoryTests(unittest.TestCase):
         spec = self.spec()
         spec['implementation'] = [sys.executable, '-c', "print('x' * 3000000)"]
         spec['checks'] = [[sys.executable, '-c', 'pass']]
+        spec = attach_contract(spec)
         self.f.submit(spec)
         result = self.f.run_one()
         self.assertEqual(result['state'], 'passed')
@@ -678,7 +717,8 @@ class ContractTests(unittest.TestCase):
         }
         if contract is not None:
             spec['contract'] = contract
-        return spec
+            return spec
+        return attach_contract(spec)
 
     def contract_spec(self, name='one', contract=None, checks=None):
         return self.command_spec(name, checks, self.contract() if contract is None else contract)
@@ -881,11 +921,23 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('Traceback', result.stderr)
 
     def test_a_spec_without_a_contract_still_runs(self):
-        spec = self.command_spec('legacy')
-        self.assertTrue(self.f.submit(spec))
+        spec = {'id': 'legacy', 'objective': 'write and independently verify result',
+                'workspace': str(self.root), 'timeout_seconds': 5,
+                'implementation': [sys.executable, '-c',
+                                   "from pathlib import Path; Path('result').write_text('ok')"],
+                'checks': [[sys.executable, '-c',
+                            "from pathlib import Path; assert Path('result').read_text() == 'ok'"]]}
+        with self.assertRaisesRegex(ValueError, 'contract'):
+            self.f.submit(spec)
+        # A job stored before the rule is never re-validated, is not rewritten,
+        # and is still dispatched and inspected.
+        digest = store_legacy_job(self.f, spec)
         result = self.f.run_one()
         self.assertEqual(result['state'], 'passed')
-        self.assertIsNone(self.f.inspect('legacy')['contract'])
+        saved = self.f.inspect('legacy')
+        self.assertIsNone(saved['contract'])
+        self.assertEqual(saved['spec_hash'], digest)
+        self.assertNotIn('contract', saved['spec'])
 
 
 class EnvelopeTests(unittest.TestCase):
@@ -920,7 +972,7 @@ class EnvelopeTests(unittest.TestCase):
         }
         if envelope is not None:
             spec['envelope'] = envelope
-        return spec
+        return attach_contract(spec)
 
     def envelope_spec(self, name='one', envelope=None):
         return self.command_spec(name, self.envelope() if envelope is None else envelope)
@@ -1236,6 +1288,8 @@ class ContextTests(unittest.TestCase):
             spec['contract'] = contract
         if envelope is not None:
             spec['envelope'] = envelope
+        if contract is None:
+            return attach_contract(spec)
         return spec
 
     def envelope(self, **overrides):
@@ -1304,6 +1358,7 @@ class ContextTests(unittest.TestCase):
         self.assertFalse(commands[0]['timed_out'])
         failing = self.command_spec('failing')
         failing['checks'] = [[sys.executable, '-c', 'raise SystemExit(3)']]
+        failing = attach_contract(failing)
         self.assertTrue(self.f.submit(failing))
         failed = self.f.run_one()
         self.assertEqual(failed['state'], 'failed')
@@ -1358,7 +1413,14 @@ class ContextTests(unittest.TestCase):
         with_contract = self.manifest_of(self.f.run_one())
         self.assertEqual(with_contract['acceptance_ids'], ['A1'])
         self.assertEqual(with_contract['acceptance_ids_source'], 'contract')
-        self.assertTrue(self.f.submit(self.command_spec('without-contract')))
+        # A stored job from before the contract rule carries no identifiers.
+        legacy = {'id': 'without-contract', 'objective': 'write and independently verify result',
+                  'workspace': str(self.root), 'timeout_seconds': 5,
+                  'implementation': [sys.executable, '-c',
+                                     "from pathlib import Path; Path('marker').write_text('ok')"],
+                  'checks': [[sys.executable, '-c',
+                              "from pathlib import Path; assert Path('marker').read_text() == 'ok'"]]}
+        store_legacy_job(self.f, legacy)
         without = self.manifest_of(self.f.run_one())
         self.assertEqual(without['acceptance_ids'], [])
         self.assertEqual(without['acceptance_ids_source'], 'absent')
@@ -1541,3 +1603,75 @@ class ContextTests(unittest.TestCase):
         self.f.backup(destination)
         self.f.restore(destination)
         self.assertEqual(len(self.f.memory('legacy-job')), 0)
+
+
+class RequiredContractTests(unittest.TestCase):
+    """The contract block is required for new command-mode submissions."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / 'state' / 'jobs.sqlite3'
+        self.f = Factory(self.db)
+        self.addCleanup(self.f.close)
+
+    def command_spec(self, name='one'):
+        return {'id': name, 'objective': 'write and independently verify result',
+                'workspace': str(self.root), 'timeout_seconds': 5,
+                'implementation': [sys.executable, '-c',
+                                   "from pathlib import Path; Path('marker').write_text('ok')"],
+                'checks': [[sys.executable, '-c',
+                            "from pathlib import Path; assert Path('marker').read_text() == 'ok'"]]}
+
+    def test_a_command_mode_task_without_a_contract_is_rejected(self):
+        with self.assertRaises(ValueError) as caught:
+            self.f.submit(self.command_spec('no-contract'))
+        self.assertIn('contract', str(caught.exception))
+        self.assertEqual(
+            self.f.db.execute("SELECT COUNT(*) AS n FROM jobs WHERE id='no-contract'").fetchone()['n'], 0)
+
+    def test_a_command_mode_task_with_a_contract_is_accepted(self):
+        self.assertTrue(self.f.submit(attach_contract(self.command_spec('with-contract'))))
+        self.assertEqual(self.f.inspect('with-contract')['state'], 'queued')
+
+    def test_the_controller_modes_still_run_without_a_contract(self):
+        specs = (
+            {'id': 'f', 'objective': 'o', 'mode': 'fixture', 'fixture': 'known_good'},
+            {'id': 'p', 'objective': 'o', 'mode': 'fake_provider', 'scenario': 'success'},
+            {'id': 'i', 'objective': 'o', 'mode': 'isolation_probe'},
+        )
+        for spec in specs:
+            with self.subTest(spec=spec):
+                self.assertTrue(self.f.submit(spec))
+        self.assertEqual(self.f.run_one()['state'], 'passed')
+
+    def test_a_stored_legacy_job_still_runs_and_is_not_rewritten(self):
+        spec = self.command_spec('legacy')
+        digest = store_legacy_job(self.f, spec)
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        saved = self.f.inspect('legacy')
+        self.assertIsNone(saved['contract'])
+        self.assertEqual(saved['spec_hash'], digest)
+        self.assertNotIn('contract', saved['spec'])
+
+    def test_the_repository_example_task_carries_a_valid_contract(self):
+        spec = json.loads((ROOT / 'factory' / 'tasks' / 'overseer-checks.json').read_text())
+        self.assertEqual(set(spec['contract']), set(CONTRACT_FIELDS))
+        validate(spec)
+        self.assertTrue(self.f.submit(spec))
+        self.assertEqual(self.f.inspect(spec['id'])['contract']['risk_tier'],
+                         spec['contract']['risk_tier'])
+
+    def test_the_runner_reports_the_missing_contract_as_a_json_error(self):
+        path = self.root / 'no-contract.json'
+        path.write_text(json.dumps(self.command_spec('cli-no-contract')))
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        result = subprocess.run(
+            [sys.executable, '-m', 'overseer.factory', '--db',
+             str(self.root / 'cli' / 'jobs.sqlite3'), 'submit', str(path)],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('contract', json.loads(result.stdout)['error'])
+        self.assertNotIn('Traceback', result.stderr)
