@@ -2474,3 +2474,128 @@ A `continue` report of an earlier turn still drives a prompt in the queue, as
 it did before the handoff existed; that is not changed here. The citations of
 the policy and the scheduler were re-derived by hand after the last edit, and
 the reference checker resolves 147 references.
+
+### The selection widened by the relation and the memory
+
+The user asked to continue the work through the standing loop. The CONTEXT
+row named the next increment: widen the selection with the relation and the
+memory. The prompt was written by the dedicated prompt-writing agent, refreshed
+by it after the writer loop landed, and executed by the primary agent; it is
+kept in `CONTEXT_WIDEN_SELECTION_NEXT_PROMPT.md`.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+grep -n "^from overseer\|^import overseer" overseer/codemap.py
+git diff --stat
+```
+
+The map now adds, in one round, the files that a current decision names by
+path and the files that hold a caller of a symbol of the task's own selection,
+even when the task terms do not match them. A decision widens only when it is a
+decision, its status is current, and it informs a decision, and only its
+affected component and its entry are read for a path, on path boundaries; its
+source, its invalidation condition, and its reason never are. A decision that
+names a symbol but no path does not widen, because the map cannot know the
+symbols of a file it has not read. A verified fact, a superseded decision, a
+hypothesis, and a historical attempt never widen. A caller comes from the
+callers of the primary relations, so a test file, which is the test relation,
+never widens as a caller, and a secret is never widened and is counted apart.
+What a widened file calls, or what names it, does not widen further.
+
+The decision candidates come first, in the order of the recall, then the
+callers by their reference count and then by path. At most 4 files are added,
+never past the selection bound of 12 and never in place of a file the task
+selected; every candidate the bounds left out is listed with its reason, up to
+20. The task's own files are detailed first and spend the excerpt budget
+first; a widened file is excerpted from what is left, and its relations come
+from the same, single relation search, so the bytes and files the search
+reads are unchanged. The counts describe what is shown: the widened count is
+the number of widened files in the selection, the primary and widened counts
+add up to the selection, and the candidates are the widened files and the
+left-out ones.
+
+The widening reaches the attempt through the digest, where a widened file's
+header says why it was widened and a tail line counts what was left out,
+through `OVERSEER_CODEBASE_WIDENED`, through the manifest, where each selected
+file carries `widened_by` and the codebase block carries the selection, and
+through `codebase.json`. The supplied list says how many files were widened;
+it claims context supplied, not proof of relevance.
+
+No existing test needed to be made more specific: the 278 earlier tests pass
+unchanged. Thirteen tests were added and the suite runs 291 tests. Each
+mutation was applied alone and failed the suite: M1 a primary file displaced
+(`test_the_widening_never_displaces_and_keeps_its_bounds`,
+`test_the_selection_is_bounded`); M2 any decision status widens and M3 a fact
+widens (`test_a_record_that_is_not_usable_never_widens`); M4 the test relation
+fed in as callers (`test_a_test_file_is_not_widened_as_a_caller`); M5 a second
+round (`test_the_widening_is_one_round` and the bound test); M6 the widening
+bound ignored and M8 callers ordered by path only
+(`test_the_widening_adds_at_most_its_bound_by_reference_count`); M7 candidates
+counted as widened (three tests); M9 the widened files excerpted before the
+primary ones (`test_the_primary_excerpts_are_unchanged_by_the_widening`); M10
+a substring path match (`test_a_path_widens_only_on_its_boundaries`); M11 a
+secret admitted (`test_a_secret_is_never_widened`); M12 widened files without
+relations (`test_a_caller_file_is_widened`, `test_the_widening_is_one_round`)
+and without memory (`test_a_current_decision_widens_the_file_it_names`); M13
+the other fields of a decision read for a path
+(`test_only_the_component_and_entry_of_a_decision_widen`); M14 a hidden second
+round in the same pass (`test_the_widening_is_one_round`). Three mutations
+first survived and the tests were strengthened: the first M4, which removed
+the test-file check, was equivalent, because the callers already exclude the
+test files, and was replaced by one that feeds the test relation in; M8
+survived because the test's paths sorted in the order of their reference
+counts; and M9 survived because the test's files never spent the excerpt
+budget, so it now fills most of the budget with four primary files.
+
+A secret-named file that calls a selected symbol is never opened, so the map
+cannot know it is a caller; only a secret that a decision names is counted as
+left out. Every citation of `overseer/codemap.py` and `overseer/factory.py` in
+the pillar map was re-derived from a line map of the old and the new code and
+checked by hand after the last edit; the checker resolves 155 references.
+
+### Review correction: the wrong bound named, ties by the file tree, and capped callers unseen
+
+A fresh reviewer read the widening against the prompt and found three defects
+and weak tests. They were checked by running them, and they were true.
+
+With nine to eleven primary files the room the selection bound left was
+smaller than the widening bound, and a candidate past it was still told that
+the widening bound of 4 was reached, though fewer than 4 files were widened.
+The reason now names the bound that applied.
+
+The paths one decision names were taken in the order of the file tree, which
+puts the root before its directories, so the file tree decided which one the
+bound kept; the prompt asked for ties by path. They are now taken in path
+order.
+
+The callers come from the caller lists of the relation, which hold at most 20
+references per symbol, so a file holding only callers past that cap was never
+a candidate and was not counted as left out, while the selection said nothing
+was left out. Each relation now records its full caller count, and the
+selection counts the caller lists that were cut and says that a file holding
+only callers past the cap is not a candidate. A widened file's reference count
+is still the count of the references inside the cap.
+
+A decision without a record id put `None` into the widened record ids and the
+digest; it no longer does. A file named by a decision and calling a selected
+symbol is now marked by whether a decision named it, not by whether it has a
+record id.
+
+The reviewer's mutations of the order of the decision tier, the count of a
+file in both tiers, the reasons of such a file, the record id in the digest,
+the bounds of the record ids, the symbols, and the left-out list, and a secret
+taking a slot all passed the tests. Six tests were added for them and the
+defects, and the test that the widening never displaces now names the twelve
+files it expects instead of computing them with the code it checks. Thirty
+mutations were applied one at a time, M1 to M14 of the prompt with the
+replaced M4 and the memory variant of M12, the reviewer's, and four that undo
+the corrections; each fails the suite, and the runner now reports a mutation
+whose pattern no longer applies instead of counting it. The suite runs 297
+tests.
+
+Two limits remain. A file a decision names that is binary or too large is
+widened with no symbols and no excerpt, and takes a slot. The digest's
+truncation note is added after its limit, as it was before this increment.
+The citations of the map in the pillar map were re-derived by hand after the
+last edit; the checker resolves 155 references.

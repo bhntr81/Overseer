@@ -2685,6 +2685,342 @@ class ContextTests(unittest.TestCase):
                 '\n[truncated]')[0]), limit)
         self.assertIn('memory: 1 recalled records', codebase_summary(context))
 
+    def check_selection(self, context):
+        """The counts of the widening describe what the map shows."""
+        selection = context['selection']
+        widened = [entry for entry in context['selected'] if entry.get('widened_by')]
+        self.assertEqual(selection['widened'], len(widened))
+        self.assertEqual(selection['primary'] + selection['widened'], len(context['selected']))
+        self.assertEqual(selection['candidates'],
+                         selection['widened'] + selection['left_out_count'])
+        self.assertEqual(selection['widened_by_decision'] + selection['widened_by_caller'],
+                         selection['widened'])
+        return {entry['path']: entry for entry in context['selected']}
+
+    def caller_workspace(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('app.py', 'from widget import build_filter\n\n\n'
+                                    'def run():\n    return build_filter()\n')
+
+    def widen_spec(self, name):
+        spec = self.command_spec(name)
+        spec['objective'] = 'repair the widget filter'
+        return spec
+
+    def test_a_caller_file_is_widened(self):
+        self.caller_workspace()
+        self.assertTrue(self.f.submit(self.widen_spec('widen-caller')))
+        context = self.codebase_of(self.f.run_one())
+        selected = self.check_selection(context)
+        self.assertIsNone(selected['widget.py']['widened_by'])
+        widened = selected['app.py']['widened_by']
+        self.assertEqual(widened['via'], ['caller'])
+        self.assertEqual(widened['symbols'], ['build_filter'])
+        self.assertEqual(widened['references'], 1)
+        self.assertEqual(widened['how'], ['parsed'])
+        self.assertEqual(selected['app.py']['score'], 0)
+        self.assertEqual([relation['symbol'] for relation in selected['app.py']['relations']],
+                         ['run'])
+        self.assertEqual(context['selection']['widened'], 1)
+
+    def test_a_test_file_is_not_widened_as_a_caller(self):
+        self.caller_workspace()
+        self.write_source('tests/test_build.py', 'from widget import build_filter\n\n\n'
+                                                 'def test_build():\n'
+                                                  '    assert build_filter() == 1\n')
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-test'))
+        selected = self.check_selection(context)
+        self.assertNotIn('tests/test_build.py', selected)
+        self.assertNotIn('tests/test_build.py',
+                         [item['path'] for item in context['selection']['left_out']])
+        relation = self.relation_of(context, 'widget.py', 'build_filter')
+        self.assertEqual([test['file'] for test in relation['tests']], ['tests/test_build.py'])
+
+    def test_a_current_decision_widens_the_file_it_names(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('pkg/store.py', 'def save():\n    return 2\n')
+        self.assertTrue(self.f.submit(self.widen_spec('widen-decision')))
+        decision = self.decide('widen-decision', 'pkg/store.py', 'keep the store format')
+        context = self.codebase_of(self.f.run_one())
+        selected = self.check_selection(context)
+        widened = selected['pkg/store.py']['widened_by']
+        self.assertEqual(widened['via'], ['decision'])
+        self.assertEqual(widened['record_ids'], [decision['record_id']])
+        self.assertEqual(widened['how'], ['textual'])
+        self.assertEqual(self.memory_ids(selected['pkg/store.py']), [decision['record_id']])
+        self.assertEqual(selected['pkg/store.py']['reason'], 'a current decision names this file')
+
+    def test_a_record_that_is_not_usable_never_widens(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        names = ['old_a.py', 'old_b.py', 'old_c.py', 'old_d.py', 'old_e.py']
+        for name in names:
+            self.write_source(name, 'def unrelated():\n    return 0\n')
+        records = [
+            self.record('s', component='old_a.py', status='superseded', usable=False),
+            self.record('f', component='old_b.py', kind='verified_fact'),
+            self.record('i', component='old_c.py', kind='verified_fact', status='invalidated',
+                        usable=False),
+            self.record('h', component='old_d.py', kind='hypothesis', status='unverified',
+                        usable=False),
+            self.record('t', component='old_e.py', kind='historical_attempt',
+                        status='historical', usable=False),
+        ]
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-unusable'),
+                                    memory=records)
+        selected = self.check_selection(context)
+        for name in names:
+            self.assertNotIn(name, selected)
+        self.assertEqual(context['selection']['candidates'], 0)
+
+    def test_the_widening_never_displaces_and_keeps_its_bounds(self):
+        for index in range(12):
+            self.write_source('widget_%02d.py' % index, 'def build_%d():\n    return 1\n' % index)
+        self.write_source('app.py', 'from widget_00 import build_0\n\n\n'
+                                    'def run():\n    return build_0()\n')
+        spec = self.widen_spec('widen-full')
+        context = assemble_codebase(str(self.root), spec)
+        selected = self.check_selection(context)
+        self.assertEqual(sorted(selected), ['widget_%02d.py' % index for index in range(12)])
+        self.assertEqual(context['selection']['widened'], 0)
+        self.assertEqual(context['selection']['left_out'],
+                         [{'path': 'app.py', 'via': ['caller'],
+                           'reason': 'the selection bound of 12 was reached by the task\'s '
+                                     'own selection'}])
+
+    def test_the_widening_adds_at_most_its_bound_by_reference_count(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('filter.py', 'def other():\n    return 2\n')
+        # The reference count orders the callers before the path does.
+        calls = {'z_many.py': 3, 'y_two.py': 2, 'c3.py': 1, 'c4.py': 1, 'c5.py': 1, 'c6.py': 1}
+        for name, count in calls.items():
+            body = ''.join('    build_filter()\n' for _ in range(count))
+            self.write_source(name, 'from widget import build_filter\n\n\ndef go():\n' + body)
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-bound'))
+        selected = self.check_selection(context)
+        widened = [entry['path'] for entry in context['selected'] if entry['widened_by']]
+        self.assertEqual(widened, ['z_many.py', 'y_two.py', 'c3.py', 'c4.py'])
+        self.assertEqual([item['path'] for item in context['selection']['left_out']],
+                         ['c5.py', 'c6.py'])
+        self.assertTrue(all(item['reason'] == 'the widening bound of 4 was reached'
+                            for item in context['selection']['left_out']))
+        self.assertEqual(context['limits']['max_widened_files'], 4)
+        self.assertIn('widget.py', selected)
+        self.assertIn('filter.py', selected)
+        digest = codebase_summary(context)
+        self.assertIn('selection: 4 files widened, 2 candidates left out', digest)
+
+    def test_the_left_out_reason_names_the_bound_that_applied(self):
+        for index in range(10):
+            self.write_source('widget_%02d.py' % index, 'def build_%d():\n    return 1\n' % index)
+        for name in ('c1.py', 'c2.py', 'c3.py'):
+            self.write_source(name, 'from widget_00 import build_0\n\n\n'
+                                    'def go():\n    return build_0()\n')
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-room'))
+        self.check_selection(context)
+        self.assertEqual(context['selection']['widened'], 2)
+        self.assertEqual(context['selection']['left_out'],
+                         [{'path': 'c3.py', 'via': ['caller'],
+                           'reason': 'the selection bound of 12 was reached after 2 widened '
+                                     'files'}])
+
+    def test_the_decision_tier_keeps_the_recall_order_and_then_the_path_order(self):
+        from overseer.codemap import widen
+        names = ['z.py', 'a/b.py', 'm.py', 'k.py']
+        files = [{'path': 'widget.py', 'kind': 'source'}] + [
+            {'path': name, 'kind': 'source'} for name in names]
+        selected = [{'path': 'widget.py', 'relations': []}]
+        records = [self.record('new', component='z.py and a/b.py'),
+                   self.record('old', component='m.py, k.py')]
+        added = [entry['path'] for entry in widen(files, selected, records)['added']]
+        self.assertEqual(added, ['a/b.py', 'z.py', 'k.py', 'm.py'])
+
+    def test_a_file_named_by_a_decision_and_calling_a_symbol_is_one_candidate(self):
+        self.caller_workspace()
+        records = [self.record('d', component='app.py')]
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-both'), memory=records)
+        selected = self.check_selection(context)
+        widened = selected['app.py']['widened_by']
+        self.assertEqual(widened['via'], ['decision', 'caller'])
+        self.assertEqual(widened['how'], ['parsed', 'textual'])
+        self.assertEqual((context['selection']['widened_by_decision'],
+                          context['selection']['widened_by_caller']), (1, 0))
+        self.assertEqual(context['selection']['candidates'], 1)
+        digest = codebase_summary(context)
+        self.assertIn('widened: a current decision d names this file; calls build_filter '
+                      '(1 references)', digest)
+
+    def test_the_widened_record_ids_symbols_and_left_out_are_bounded(self):
+        from overseer.codemap import (MAX_WIDEN_LEFT_OUT, MAX_WIDEN_RECORD_IDS,
+                                      MAX_WIDEN_SYMBOLS, widen)
+        names = ['f%02d.py' % index for index in range(MAX_WIDEN_LEFT_OUT + 10)]
+        files = [{'path': 'widget.py', 'kind': 'source'}] + [
+            {'path': name, 'kind': 'source'} for name in names]
+        symbols = ['s%d' % index for index in range(MAX_WIDEN_SYMBOLS + 3)]
+        selected = [{'path': 'widget.py', 'relations': [
+            {'symbol': symbol, 'callers': [{'file': 'f00.py', 'line': 1, 'kind': 'call',
+                                            'how': 'parsed'}], 'tests': []}
+            for symbol in symbols]}]
+        records = [self.record('r%d' % index, component='f00.py')
+                   for index in range(MAX_WIDEN_RECORD_IDS + 3)]
+        records.append(self.record('all', component=' '.join(names)))
+        records.append(self.record(None, component='f01.py'))
+        result = widen(files, selected, records)
+        first = result['added'][0]
+        self.assertEqual(first['path'], 'f00.py')
+        self.assertEqual(len(first['widened_by']['record_ids']), MAX_WIDEN_RECORD_IDS)
+        self.assertEqual(len(first['widened_by']['symbols']), MAX_WIDEN_SYMBOLS)
+        self.assertNotIn(None, result['added'][1]['widened_by']['record_ids'])
+        facts = result['facts']
+        self.assertEqual(len(facts['left_out']), MAX_WIDEN_LEFT_OUT)
+        self.assertEqual(facts['left_out_count'], len(names) - 4)
+        self.assertTrue(facts['left_out_truncated'])
+
+    def test_a_secret_does_not_take_a_widening_slot(self):
+        from overseer.codemap import widen
+        names = ['config/secrets.json', 'a.py', 'b.py', 'c.py', 'd.py']
+        files = [{'path': 'widget.py', 'kind': 'source'}] + [
+            {'path': name, 'kind': 'source'} for name in names]
+        selected = [{'path': 'widget.py', 'relations': []}]
+        records = [self.record('s', component='config/secrets.json'),
+                   self.record('o', component='a.py b.py c.py d.py')]
+        result = widen(files, selected, records)
+        self.assertEqual([entry['path'] for entry in result['added']],
+                         ['a.py', 'b.py', 'c.py', 'd.py'])
+        self.assertEqual(result['facts']['secrets_left_out'], 1)
+
+    def test_callers_past_the_cap_of_a_caller_list_are_reported(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        for index in range(3):
+            self.write_source('c%d.py' % index, 'from widget import build_filter\n\n\n'
+                                                'def go():\n'
+                              + '    build_filter()\n' * (MAX_CALLERS_PER_SYMBOL))
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-capped'))
+        self.check_selection(context)
+        self.assertEqual(context['selection']['callers_truncated'], 1)
+        self.assertIn('caller lists of 1 selected symbols were truncated',
+                      context['selection']['reason'])
+
+    def test_the_widening_is_one_round(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('middle.py', 'from widget import build_filter\n\n\n'
+                                       'def mid():\n    return build_filter()\n')
+        self.write_source('top.py', 'from middle import mid\n\n\n'
+                                    'def top():\n    return mid()\n')
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-round'))
+        selected = self.check_selection(context)
+        self.assertEqual(selected['middle.py']['widened_by']['via'], ['caller'])
+        self.assertNotIn('top.py', selected)
+        self.assertEqual(context['selection']['candidates'], 1)
+        # The relation of the widened file still shows its own caller.
+        mid = self.relation_of(context, 'middle.py', 'mid')
+        self.assertEqual([caller['file'] for caller in mid['callers']], ['top.py'])
+
+    def test_a_secret_is_never_widened(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('config/secrets.json', '{"token": "TOPSECRET-1"}')
+        self.write_source('server.key', 'build_filter()  TOPSECRET-2\n')
+        records = [self.record('d', component='config/secrets.json')]
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-secret'),
+                                    memory=records)
+        selected = self.check_selection(context)
+        self.assertNotIn('config/secrets.json', selected)
+        self.assertNotIn('server.key', selected)
+        self.assertEqual(context['selection']['secrets_left_out'], 1)
+        self.assertEqual(context['selection']['left_out'][0]['reason'],
+                         'the file name marks it as a secret')
+        text = json.dumps(context)
+        self.assertNotIn('TOPSECRET', text)
+
+    def test_a_path_widens_only_on_its_boundaries(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('pkg/store.py', 'def save():\n    return 2\n')
+        records = [self.record('a', component='pkg/store.py.bak'),
+                   self.record('b', component='xpkg/store.py')]
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-boundary'),
+                                    memory=records)
+        self.assertNotIn('pkg/store.py', self.check_selection(context))
+        self.assertEqual(context['selection']['candidates'], 0)
+
+    def test_the_attempt_sees_the_widening(self):
+        self.caller_workspace()
+        spec = self.widen_spec('widen-env')
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import os; from pathlib import Path; "
+                                  "Path('widen_seen.txt').write_text(os.environ.get("
+                                  "'OVERSEER_CODEBASE_SUMMARY','') + '\\n' + os.environ.get("
+                                  "'OVERSEER_CODEBASE_WIDENED',''))"]
+        spec['checks'] = [[sys.executable, '-c',
+                           "from pathlib import Path; text=Path('widen_seen.txt').read_text(); "
+                           "assert 'widened: calls build_filter' in text, text"]]
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        carried = (self.root / 'widen_seen.txt').read_text()
+        self.assertEqual(carried.splitlines()[-1], '1')
+        context = self.codebase_of(result)
+        manifest = self.manifest_of(result)
+        self.assertEqual(manifest['codebase']['selection'], context['selection'])
+        items = {item['path']: item for item in manifest['codebase']['selected']}
+        self.assertEqual(items['app.py']['widened_by'],
+                         self.check_selection(context)['app.py']['widened_by'])
+        supplied = {item['item']: item for item in manifest['supplied']}
+        self.assertIn('1 of the selected files widened',
+                      supplied['relevant_code_and_interfaces']['source'])
+
+    def test_the_widening_is_pure_and_deterministic(self):
+        from overseer.codemap import widen
+        files = [{'path': 'widget.py', 'kind': 'source'}, {'path': 'app.py', 'kind': 'source'},
+                 {'path': 'pkg/store.py', 'kind': 'source'}]
+        selected = [{'path': 'widget.py', 'relations': [
+            {'symbol': 'build_filter',
+             'callers': [{'file': 'app.py', 'line': 4, 'kind': 'call', 'how': 'parsed'}],
+             'tests': []}]}]
+        records = [self.record('d', component='pkg/store.py')]
+        first = widen(files, selected, records)
+        second = widen(list(files), [dict(entry) for entry in selected], list(records))
+        self.assertEqual(json.dumps(first, sort_keys=True), json.dumps(second, sort_keys=True))
+        self.assertEqual([entry['path'] for entry in first['added']], ['pkg/store.py', 'app.py'])
+        self.caller_workspace()
+        spec = self.widen_spec('widen-pure')
+        one = assemble_codebase(str(self.root), spec)
+        two = assemble_codebase(str(self.root), spec)
+        self.assertEqual(json.dumps([one['selection'], one['selected']], sort_keys=True),
+                         json.dumps([two['selection'], two['selected']], sort_keys=True))
+
+    def test_only_the_component_and_entry_of_a_decision_widen(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('pkg/store.py', 'def save():\n    return 2\n')
+        record = self.record('d', component='the filter', entry='keep it')
+        record.update(source='pkg/store.py', invalidation_condition='pkg/store.py changes',
+                      reason='pkg/store.py is shared')
+        context = assemble_codebase(str(self.root), self.widen_spec('widen-fields'),
+                                    memory=[record])
+        self.assertNotIn('pkg/store.py', self.check_selection(context))
+        self.assertEqual(context['selection']['candidates'], 0)
+
+    def test_the_primary_excerpts_are_unchanged_by_the_widening(self):
+        # Four primary files nearly fill the excerpt budget, so a widened file
+        # that spent it first would cut the excerpt of a primary one.
+        line = '    value = "%s"\n' % ('x' * 120)
+        for name in ('widget_a.py', 'widget_b.py', 'widget_c.py', 'widget_d.py'):
+            symbol = 'build_' + name[7]
+            self.write_source(name, 'def %s():\n' % symbol + line * 70 + '    return 1\n')
+        spec = self.widen_spec('widen-excerpt')
+        before = assemble_codebase(str(self.root), spec)
+        self.write_source('app.py', 'from widget_a import build_a\n\n\n'
+                                    'def run():\n' + line * 70 + '    return build_a()\n')
+        after = assemble_codebase(str(self.root), spec)
+        first = {entry['path']: entry for entry in before['selected']}
+        second = self.check_selection(after)
+        self.assertGreater(before['excerpt_bytes'], MAX_EXCERPT_TOTAL_BYTES - MAX_EXCERPT_BYTES)
+        for name in first:
+            self.assertEqual(first[name]['excerpt'], second[name]['excerpt'], name)
+        self.assertEqual(second['app.py']['widened_by']['via'], ['caller'])
+        self.assertLessEqual(after['excerpt_bytes'], MAX_EXCERPT_TOTAL_BYTES)
+        self.assertEqual(after['excerpt_bytes'],
+                         before['excerpt_bytes']
+                         + (second['app.py'].get('excerpt') or {}).get('bytes', 0))
+
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""
 

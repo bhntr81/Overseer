@@ -96,7 +96,22 @@ past attempt are attached but marked not usable, and the digest prints
 file, 160 characters of each entry, and 6 memory lines per file in the digest;
 a record that names nothing selected stays in the recall and is counted as
 unattached. `OVERSEER_CODEBASE_MEMORY` carries the number of attached records.
-An attached decision is supplied to the attempt; nothing enforces it.
+An attached decision is supplied to the attempt; nothing enforces it. The
+selection is then widened, one round only: a file whose path a current
+decision names in its affected component or entry, and a file that holds a
+caller of a symbol of the task's own selection, are added even when the task
+terms do not match them. At most 4 files are added, never past the bound of
+12 and never in place of a file the task selected, and the task's own files
+spend the excerpt budget first. A test file is not added as a caller, a secret
+is never added, and a verified fact, a superseded decision, a hypothesis, and
+a past attempt never widen. Each added file says why it was added and by what,
+the candidates the bounds left out are recorded with the reason, and
+`OVERSEER_CODEBASE_WIDENED` carries the number of added files. The callers
+come from the caller lists of the relation, which hold at most 20 per symbol,
+so a file holding only callers past that cap is not considered, and the
+selection says how many caller lists were cut. A widened file
+was found by a static reference or a textual path match; that does not prove
+it is relevant.
 A command-mode task must carry a `contract` block that states the
 role, risk tier, external effects, protected paths, approval requirements,
 acceptance identifiers, required capabilities, project constraints, measured

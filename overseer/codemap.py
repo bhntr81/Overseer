@@ -56,6 +56,12 @@ MAX_MEMORY_RECORDS_PER_FILE = 5
 MAX_MEMORY_ENTRY_CHARS = 160
 MAX_UNATTACHED_MEMORY_RECORDS = 32
 MAX_SUMMARY_MEMORY_LINES = 6
+# The bounds of the widening: the files it may add to the selection, and the
+# left-out candidates it lists.
+MAX_WIDENED_FILES = 4
+MAX_WIDEN_LEFT_OUT = 20
+MAX_WIDEN_RECORD_IDS = 5
+MAX_WIDEN_SYMBOLS = 6
 # A file whose name marks it as a secret is never read for its content.
 SECRET_SUFFIXES = ('.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.ppk',
                     '.asc', '.gpg', '.kdbx')
@@ -534,7 +540,7 @@ def _relation_of(symbol, path, references, searched_files):
     if test_total > len(tests):
         reasons.append('the test list is truncated at %d of %d references'
                        % (len(tests), test_total))
-    return {'symbol': name, 'callers': callers, 'tests': tests,
+    return {'symbol': name, 'callers': callers, 'tests': tests, 'caller_total': caller_total,
             'reason': '; '.join(reasons) or None}
 
 
@@ -889,11 +895,175 @@ def select(files, terms, named, root):
     return chosen[:MAX_SELECTED]
 
 
+def _widening_decision(record):
+    """Return whether a recalled record may widen the selection."""
+    return (record.get('kind') == 'decision' and record.get('status') == 'current'
+            and record.get('informs_decision') is True)
+
+
+def widen(files, selected, records):
+    """Return the files to add to the selection, and the facts of the widening.
+
+    A file widens the selection when a current decision names its path in the
+    record's affected component or entry, by a textual match on path
+    boundaries, or when it holds a caller of a symbol of the task's own
+    selection, by a static reference. A decision that names a symbol but no
+    path does not widen, because the map cannot know the symbols of a file it
+    has not read. A verified fact, a superseded decision, a hypothesis, and a
+    historical attempt never widen: the decisions are what the attempt is to
+    respect, and a fact is evidence about code already in view. A test file
+    never widens as a caller; it is the test relation. The widening is one
+    round: what a widened file calls or is named by does not widen further.
+    It never displaces a file of the task's own selection, adds at most
+    MAX_WIDENED_FILES, and records every candidate the bounds left out.
+    """
+    selected_paths = {entry['path'] for entry in selected}
+    known = {entry['path'] for entry in files}
+    candidates = {}
+    order = []
+    for record in records or []:
+        if not _widening_decision(record):
+            continue
+        texts = [str(record.get('affected_component') or ''), str(record.get('entry') or '')]
+        # The paths one record names are taken in path order, so the order
+        # of the file tree never decides which one the bound keeps.
+        for entry in sorted(files, key=lambda item: item['path']):
+            path = entry['path']
+            if path in selected_paths:
+                continue
+            if not any(_path_pattern(path).search(text) for text in texts):
+                continue
+            if path not in candidates:
+                candidates[path] = {'path': path, 'decision': [], 'symbols': set(),
+                                    'references': 0, 'how': set(), 'named': False}
+                order.append(path)
+            record_id = record.get('record_id')
+            if record_id is not None and record_id not in candidates[path]['decision']:
+                candidates[path]['decision'].append(record_id)
+            candidates[path]['named'] = True
+    capped = 0
+    for entry in selected:
+        for relation in entry.get('relations') or []:
+            if (relation.get('caller_total') or 0) > len(relation.get('callers') or []):
+                capped += 1
+            for caller in relation.get('callers') or []:
+                path = caller.get('file')
+                if path in selected_paths or path not in known or is_test_file(path):
+                    continue
+                if path not in candidates:
+                    candidates[path] = {'path': path, 'decision': [], 'symbols': set(),
+                                        'references': 0, 'how': set(), 'named': False}
+                found = candidates[path]
+                found['symbols'].add(relation.get('symbol'))
+                found['references'] += 1
+                found['how'].add(caller.get('how'))
+    decided = [candidates[path] for path in order]
+    called = sorted((found for found in candidates.values() if not found['named']),
+                    key=lambda found: (-found['references'], found['path']))
+    ranked = decided + called
+    room = max(0, min(MAX_WIDENED_FILES, MAX_SELECTED - len(selected)))
+    added = []
+    left_out = []
+    secrets = 0
+    by_decision = 0
+    by_caller = 0
+    for found in ranked:
+        via = (['decision'] if found['named'] else []) + (['caller'] if found['references'] else [])
+        if is_secret(found['path']):
+            secrets += 1
+            left_out.append({'path': found['path'], 'via': via,
+                             'reason': 'the file name marks it as a secret'})
+            continue
+        if len(added) >= room:
+            # The reason names the bound that applied: the room the selection
+            # bound left, or the widening bound when it is the smaller.
+            if MAX_SELECTED - len(selected) <= 0:
+                reason = ('the selection bound of %d was reached by the task\'s own selection'
+                          % MAX_SELECTED)
+            elif MAX_SELECTED - len(selected) < MAX_WIDENED_FILES:
+                reason = ('the selection bound of %d was reached after %d widened files'
+                          % (MAX_SELECTED, len(added)))
+            else:
+                reason = 'the widening bound of %d was reached' % MAX_WIDENED_FILES
+            left_out.append({'path': found['path'], 'via': via, 'reason': reason})
+            continue
+        parts = []
+        if found['named']:
+            parts.append('a current decision names this file by a textual path match')
+        if found['references']:
+            parts.append('it holds %d static references to selected symbols'
+                         % found['references'])
+        item = dict(next(entry for entry in files if entry['path'] == found['path']))
+        item.update({
+            'score': 0,
+            'reason': ('a current decision names this file' if found['named']
+                       else 'the file calls a selected symbol'),
+            'widened_by': {
+                'via': via,
+                'record_ids': found['decision'][:MAX_WIDEN_RECORD_IDS],
+                'symbols': sorted(found['symbols'])[:MAX_WIDEN_SYMBOLS],
+                'references': found['references'],
+                'how': sorted(set(found['how']) | ({'textual'} if found['named'] else set())),
+                'reason': '; '.join(parts),
+            },
+        })
+        added.append(item)
+        if found['named']:
+            by_decision += 1
+        else:
+            by_caller += 1
+    reasons = []
+    for item in left_out:
+        if item['reason'] not in reasons:
+            reasons.append(item['reason'])
+    if capped:
+        # A file that holds only callers past the cap of a caller list is not
+        # seen, so it is neither a candidate nor counted as left out.
+        reasons.append('the caller lists of %d selected symbols were truncated at %d, and a '
+                       'file holding only callers past that cap is not a candidate'
+                       % (capped, MAX_CALLERS_PER_SYMBOL))
+    reason = '; '.join(reasons) or None
+    facts = {
+        'primary': len(selected),
+        'widened': len(added),
+        'widened_by_decision': by_decision,
+        'widened_by_caller': by_caller,
+        'candidates': len(ranked),
+        'left_out': left_out[:MAX_WIDEN_LEFT_OUT],
+        'left_out_count': len(left_out),
+        'left_out_truncated': len(left_out) > MAX_WIDEN_LEFT_OUT,
+        'secrets_left_out': secrets,
+        'callers_truncated': capped,
+        'reason': reason,
+    }
+    return {'added': added, 'facts': facts}
+
+
+def _detail(entry, root, budget):
+    """Return a selected entry with its structure and its excerpt, and the bytes spent."""
+    item = dict(entry)
+    found = structure(root / entry['path'])
+    item['symbols'] = found['symbols']
+    item['structure_kind'] = found['kind']
+    if found.get('reason'):
+        item['structure_reason'] = found['reason']
+    piece = excerpt(root / entry['path'], found['symbols'], budget)
+    spent = 0
+    if piece is not None:
+        item['excerpt'] = piece
+        spent = piece['bytes']
+    return item, spent
+
+
 def assemble(workspace, spec, memory=None):
     """Assemble the codebase context of a task attempt.
 
     The memory is the list of recalled records, as plain dicts. When it is
     given, each record is attached to the selected symbols and files it names.
+    The task's own selection is detailed first and spends the excerpt budget
+    first; the files the widening adds are detailed from what is left, and
+    their relations come from the same, single relation search. The caller and
+    test counts include the widened files' symbols.
     """
     if not workspace:
         return {'version': 1, 'assembled': False, 'reason': 'the task names no workspace',
@@ -913,17 +1083,10 @@ def assemble(workspace, spec, memory=None):
     budget = MAX_EXCERPT_TOTAL_BYTES
     excerpt_bytes = 0
     for entry in selected:
-        item = dict(entry)
-        found = structure(root / entry['path'])
-        item['symbols'] = found['symbols']
-        item['structure_kind'] = found['kind']
-        if found.get('reason'):
-            item['structure_reason'] = found['reason']
-        piece = excerpt(root / entry['path'], found['symbols'], budget)
-        if piece is not None:
-            item['excerpt'] = piece
-            excerpt_bytes += piece['bytes']
-            budget -= piece['bytes']
+        item, spent = _detail(entry, root, budget)
+        item['widened_by'] = None
+        excerpt_bytes += spent
+        budget -= spent
         detailed.append(item)
     # The relation search relates each selected symbol to the code that calls
     # it and the test files that cover it. It is a static reference, not a
@@ -933,9 +1096,17 @@ def assemble(workspace, spec, memory=None):
     caller_count = 0
     test_count = 0
     for item in detailed:
-        relations = symbol_relations(item, references, search['facts']['searched_files'])
-        item['relations'] = relations
-        for relation in relations:
+        item['relations'] = symbol_relations(item, references, search['facts']['searched_files'])
+    # One round of widening, over the relations of the task's own selection.
+    widening = widen(files, detailed, memory)
+    for entry in widening['added']:
+        item, spent = _detail(entry, root, budget)
+        excerpt_bytes += spent
+        budget -= spent
+        item['relations'] = symbol_relations(item, references, search['facts']['searched_files'])
+        detailed.append(item)
+    for item in detailed:
+        for relation in item['relations']:
             caller_count += len(relation['callers'])
             test_count += len(relation['tests'])
     facts = search['facts']
@@ -963,6 +1134,7 @@ def assemble(workspace, spec, memory=None):
         'excerpt_bytes': excerpt_bytes,
         'relations': facts,
         'memory': attached,
+        'selection': widening['facts'],
         'limits': {'max_files': MAX_FILES, 'max_depth': MAX_DEPTH,
                    'max_file_bytes': MAX_FILE_BYTES, 'max_selected': MAX_SELECTED,
                    'max_symbols': MAX_SYMBOLS,
@@ -979,7 +1151,9 @@ def assemble(workspace, spec, memory=None):
                    'max_memory_records_per_file': MAX_MEMORY_RECORDS_PER_FILE,
                    'max_memory_entry_chars': MAX_MEMORY_ENTRY_CHARS,
                    'max_unattached_memory_records': MAX_UNATTACHED_MEMORY_RECORDS,
-                   'max_summary_memory_lines': MAX_SUMMARY_MEMORY_LINES},
+                   'max_summary_memory_lines': MAX_SUMMARY_MEMORY_LINES,
+                   'max_widened_files': MAX_WIDENED_FILES,
+                   'max_widen_left_out': MAX_WIDEN_LEFT_OUT},
     }
 
 
@@ -987,17 +1161,24 @@ def summary(context, limit=SUMMARY_LIMIT):
     """Return a bounded digest of the assembled codebase context."""
     searched = (context.get('relations') or {}).get('searched_files') or 0
     unattached = (context.get('memory') or {}).get('unattached_count') or 0
-    tail = ('memory: %d recalled records name no selected symbol; see '
-            'OVERSEER_RECALL_SUMMARY' % unattached) if unattached else ''
+    selection = context.get('selection') or {}
+    tails = []
+    if selection.get('left_out_count'):
+        tails.append('selection: %d files widened, %d candidates left out (%s)' % (
+            selection.get('widened') or 0, selection['left_out_count'],
+            selection.get('reason')))
+    if unattached:
+        tails.append('memory: %d recalled records name no selected symbol; see '
+                     'OVERSEER_RECALL_SUMMARY' % unattached)
     # The tail keeps its own room, and never more room than the digest has.
-    tail = tail[:limit]
+    tail = '\n'.join(tails)[:limit]
     if tail:
         limit = max(0, limit - len(tail) - 1)
     blocks = []
     for entry in context.get('selected') or []:
         names = ', '.join(symbol['name'] for symbol in entry.get('symbols') or [])
         lines = ['%s (%s, score %s): %s' % (
-            entry['path'], entry.get('reason'), entry.get('score'), names or 'no symbol')]
+            entry['path'], _selection_reason(entry), entry.get('score'), names or 'no symbol')]
         relations = entry.get('relations') or []
         total = len(entry.get('memory') or []) + sum(
             len(relation.get('memory') or []) for relation in relations)
@@ -1046,6 +1227,21 @@ def summary(context, limit=SUMMARY_LIMIT):
     elif tail:
         text = text + '\n' + tail if text else tail
     return text
+
+
+def _selection_reason(entry):
+    """Return why a file is in the digest: the task's own reason, or its widening."""
+    widened = entry.get('widened_by')
+    if not widened:
+        return entry.get('reason')
+    parts = []
+    if 'decision' in widened.get('via', []):
+        ids = ', '.join(str(record_id)[:8] for record_id in widened.get('record_ids') or [])
+        parts.append('a current decision %s names this file' % ids)
+    if 'caller' in widened.get('via', []):
+        parts.append('calls %s (%d references)' % (', '.join(widened.get('symbols') or []),
+                                                   widened.get('references') or 0))
+    return 'widened: ' + '; '.join(parts)
 
 
 def _shown_memory(entry, relations):

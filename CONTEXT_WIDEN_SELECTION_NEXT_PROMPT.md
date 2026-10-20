@@ -6,7 +6,7 @@ writing it is not completion.
 
 Its file and line references describe the repository at the starting commit
 below. The increment will move lines of `overseer/codemap.py`,
-`overseer/factory.py`, and `tests/test_factory.py`. Three review lessons are
+`overseer/factory.py`, and `tests/test_factory.py`. Four review lessons are
 carried forward and are part of the acceptance:
 
 1. **Line citations drift.** The references here are not updated after the
@@ -20,16 +20,27 @@ carried forward and are part of the acceptance:
 3. **Counts describe what is shown.** A count of widened files is the number
    of widened files in `selected`, not the number of candidates; what a bound
    left out is counted apart, with its reason.
+4. **Evidence counts only inside the scope it belongs to.** The last review
+   of the monitor found stops overridden by a report of an earlier turn and by
+   a quoted report. The same discipline applies here: a file widens only on
+   evidence of **this** attempt — a record of this attempt's recall whose
+   status is `current` now, read from its `affected_component` or `entry`
+   only (never `source`, `invalidation_condition`, or `reason`), and a caller
+   from this assembly's own relation search. No earlier `codebase.json`, no
+   earlier selection, and no widened file's own relations ever widen.
 
 This prompt files exactly one increment against the **CONTEXT** row of the
 harness pillar map (`docs/HARNESS_FRAMEWORK.md:32`). It does not plan work for
 the CONTRACT, TOOLS, POLICY, STATE, PERMISSIONS, or EVIDENCE rows.
 
-Order: `WRITER_LOOP_NEXT_PROMPT.md` takes priority and runs first. If it has
-landed, re-run the two baseline commands before starting and use their counts
-in place of the 250 / 138 below, and re-derive the `docs/HARNESS_FRAMEWORK.md`,
-`README.md`, and `WORK_LOG.md` line references here, which that increment
-moves.
+This prompt was refreshed after `WRITER_LOOP_NEXT_PROMPT.md` landed
+(`f6102c4`). That increment changed only the monitor (`overseer/policy.py`,
+`overseer/scheduler.py`, `overseer/__main__.py`, `config.json`) and the docs;
+`overseer/codemap.py`, `overseer/factory.py`, and `tests/test_factory.py` are
+byte-identical to `4a133d2`, so their line references below were re-checked
+and still hold. The CONTEXT row now also carries the monitor's
+`overseer/policy.py` citations; this increment does not move them, and they
+stay as they are.
 
 ## Outcome
 
@@ -46,8 +57,8 @@ manifest. What the bound left out is recorded with the reason.
 
 - Repository: `/home/kali/Programming/Projects/Overseer` (git root, branch
   `main`).
-- Starting commit: `4a133d21f74ea702f83819acf10de1de180832c8`
-  ("Attach the recalled memory records to the symbols they name").
+- Starting commit: `f6102c403a6c6a6483cb78a13c542f4699470186`
+  ("Hand a finished step to the prompt writer instead of stopping").
 - Working tree clean at the time of writing.
 - Python 3 standard library only. No new dependency. Nothing is installed.
 
@@ -78,11 +89,11 @@ manifest. What the bound left out is recorded with the reason.
 | `tests/test_factory.py:1889` | `test_the_selection_is_bounded` (20 term-matched files fill 12) |
 | `tests/test_factory.py:2253` | `test_the_attempt_sees_the_relation`, the environment-carrying example |
 | `tests/test_factory.py:2336` | the memory attachment tests; `record(...)`, the plain-dict helper, at 2573 |
-| `README.md:57` | the manifest, recall, and codebase paragraph (to line 99) |
+| `README.md:57` | the manifest, recall, and codebase paragraph (to line 99; line 99 is "An attached decision is supplied to the attempt; nothing enforces it.") |
 | `docs/HARNESS_FRAMEWORK.md:32` | the CONTEXT row |
-| `docs/HARNESS_FRAMEWORK.md:41` | the process-order CONTEXT sentences |
-| `docs/HARNESS_FRAMEWORK.md:103` | the context-manifest bullet under "What this framework does not claim" |
-| `WORK_LOG.md:2288` | the last entry; the new entry goes after the end of the file (line 2336) |
+| `docs/HARNESS_FRAMEWORK.md:41` | the process-order CONTEXT sentences (to line 48; they cite `overseer/codemap.py:892` and `:687`) |
+| `docs/HARNESS_FRAMEWORK.md:103` | the context-manifest bullet under "What this framework does not claim" (to line 110; the writer-handoff bullet at 111 is not touched) |
+| `WORK_LOG.md:2429` | the last entry (the writer-loop review correction); the new entry goes after the end of the file (line 2476) |
 
 Existing example to follow: `attach_memory` and `search_references` — pure
 functions, module constants for every bound, counts that describe what is
@@ -289,7 +300,10 @@ helper.
 10. **Pure and deterministic.** `widen(...)` called directly with hand-built
     entries and plain dicts twice gives equal output; `assemble` twice gives
     equal `selection` and `selected`.
-11. **The primary excerpts are unchanged.** With and without a caller file in
+11. **Only the two fields of a current record widen.** A current decision
+    whose path appears only in `source`, `invalidation_condition`, or `reason`
+    does not widen that file and is not a candidate.
+12. **The primary excerpts are unchanged.** With and without a caller file in
     the workspace, the primary file's `excerpt` and the primary excerpt bytes
     are identical.
 
@@ -308,7 +322,11 @@ Mutations to apply one at a time, each of which must make the suite fail
 - M9 widened files are processed before primary ones (excerpt budget);
 - M10 path matched by substring instead of `_path_pattern`;
 - M11 a secret-named file is admitted as a candidate;
-- M12 widened files get no relations or no memory attachment.
+- M12 widened files get no relations or no memory attachment;
+- M13 a decision's `source`, `invalidation_condition`, or `reason` field is
+  searched for paths (lesson 4);
+- M14 a widened file's own callers are fed back as candidates in the same
+  pass (a hidden second round, distinct from M5's explicit loop).
 
 ### 9. The documentation
 
@@ -335,21 +353,21 @@ proves the line exists.
   that it is relevant.
 - `README.md:57`–`99` — the codebase paragraph: the widening, its bounds, and
   `OVERSEER_CODEBASE_WIDENED`.
-- `WORK_LOG.md` — a new `###` section after line 2336: what was asked, the
+- `WORK_LOG.md` — a new `###` section after line 2476: what was asked, the
   commands and results, the new test count, the widening rules and bounds,
   the honest limits, any existing test made more specific (section 7), the
-  mutation results (M1–M12, the failing test for each), and that every citation
+  mutation results (M1–M14, the failing test for each), and that every citation
   was re-derived. It records that the prompt was written by the dedicated
   prompt-writing agent and executed by the primary agent.
 
 ## Acceptance criteria (observable)
 
-1. `python3 scripts/check` passes: 250 existing tests pass (none loosened or
+1. `python3 scripts/check` passes: 278 existing tests pass (none loosened or
    deleted; any made more specific is listed), new tests pass (expected at
-   least 261). The new count is reported.
+   least 290). The new count is reported.
 2. `python3 scripts/check-doc-references` reports every reference resolving,
-   at least 138.
-3. Each of M1–M12 makes the suite fail; the failing test is named for each in
+   at least 147.
+3. Each of M1–M14 makes the suite fail; the failing test is named for each in
    the WORK_LOG.
 4. A caller file and a current-decision-named file are selected with
    `widened_by` stating `via`, `how`, and the evidence; test files, secret
@@ -386,8 +404,8 @@ proves the line exists.
 Reported to the prompt-writing agent by the primary agent at the starting
 commit (the writer did not rerun them):
 
-- `python3 scripts/check` — **250 tests, OK**.
-- `python3 scripts/check-doc-references` — **138 references resolve**.
+- `python3 scripts/check` — **278 tests, OK**.
+- `python3 scripts/check-doc-references` — **147 references resolve**.
 
 No failure is known at the baseline.
 
@@ -411,9 +429,12 @@ line moves broke); `README.md`; `WORK_LOG.md`.
 
 Stop after this one increment: the selection is widened by current decisions
 and callers within the bounds, never displacing the task's own selection, the
-counts describe what is shown, the attempt sees the widening, M1–M12 each fail
+counts describe what is shown, the attempt sees the widening, M1–M14 each fail
 the suite, the documentation is current with re-derived citations, and the
 verification commands pass. Report the diff summary, the command outputs, the
 new test and reference counts, the mutation results, and the limits that
-remain. Do not start the next increment. If the same failure recurs twice with
-no new evidence, stop and report it instead of retrying.
+remain. Do not start the next increment. This stopping condition ends this
+prompt, not the user's objective: report `step_done` with the new "Next
+increment" of the CONTEXT row in `remaining`, so the monitor hands the results
+to the prompt writer. If the same failure recurs twice with no new evidence,
+stop and report it instead of retrying.

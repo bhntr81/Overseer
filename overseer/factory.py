@@ -1031,6 +1031,8 @@ class Factory:
             (relations.get('caller_count') or 0) + (relations.get('test_count') or 0))
         env['OVERSEER_CODEBASE_MEMORY'] = str(
             (context.get('memory') or {}).get('attached') or 0)
+        env['OVERSEER_CODEBASE_WIDENED'] = str(
+            (context.get('selection') or {}).get('widened') or 0)
         return env
 
     def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
@@ -1057,6 +1059,7 @@ class Factory:
         caller_count = relations.get('caller_count') or 0
         test_count = relations.get('test_count') or 0
         attached = assembled.get('memory') or {}
+        widening = assembled.get('selection') or {}
         attached_ids = set()
         for entry in selected:
             for attachment in entry.get('memory') or []:
@@ -1092,10 +1095,11 @@ class Factory:
              'source': ('the workspace file tree: %d files, %d selected for this task with '
                         '%d structural symbols, %d bytes of code excerpt, and %d caller and '
                         '%d test references, and %d recalled memory records attached by a '
-                        'textual match to the symbols or files they name'
+                        'textual match to the symbols or files they name, and %d of the '
+                        'selected files widened from a current decision or a caller'
                         % (assembled.get('file_count') or 0, len(selected), symbol_count,
                            assembled.get('excerpt_bytes') or 0, caller_count, test_count,
-                           attached.get('attached') or 0))
+                           attached.get('attached') or 0, widening.get('widened') or 0))
                        if assembled.get('assembled') else None,
              'why': ('the repository map names the files, the symbols, the line ranges '
                      'of the code the attempt can read, and the callers and the tests '
@@ -1172,8 +1176,10 @@ class Factory:
                               'excerpt_lines': (entry.get('excerpt') or {}).get('lines') or [],
                               'excerpt_bytes': (entry.get('excerpt') or {}).get('bytes') or 0,
                               'excerpt_truncated': bool((entry.get('excerpt') or {}).get('truncated')),
-                              'excerpt_skipped': (entry.get('excerpt') or {}).get('skipped')}
+                              'excerpt_skipped': (entry.get('excerpt') or {}).get('skipped'),
+                              'widened_by': entry.get('widened_by')}
                              for entry in selected],
+                'selection': widening,
                 'symbol_count': symbol_count,
                 'relations': {
                     'candidate_files': relations.get('candidate_files') or 0,
