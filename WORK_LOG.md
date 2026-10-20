@@ -1528,3 +1528,147 @@ references checked in HARNESS_FRAMEWORK.md`; `git diff --check` exited 0. No
 test was added or changed, because the change is documentation only. Token
 usage and monetary cost were not supplied by the runtime and remain
 unavailable.
+
+### The context manifest and the four memory record kinds
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. The increment is filed against exactly one pillar row, the
+CONTEXT row of `docs/HARNESS_FRAMEWORK.md`, whose next increment named
+exactly this step: write a context manifest per attempt into the run evidence
+directory and introduce the blueprint's memory record kinds beside it.
+
+Every completed attempt now writes a `context.json` manifest into its run
+evidence directory, next to `task.json`, `results.json`, and `summary.json`.
+The manifest has a closed field set: the version, the job, run, and attempt
+identity, the spec hash, the mode, the objective, the workspace, the
+repository identity, the acceptance identifiers and where they came from, the
+commands that were actually launched with their exit codes and timeouts, the
+environment facts the runner already holds, the supplied list, the memory
+summary, and the unmeasured list. The manifest records what the controller
+supplied and why. It holds no terminal history, no conversation text, no
+command output, no source excerpt, and no number the controller did not
+measure: tokens and cost stay null and are named as unmeasured.
+
+The repository identity is observed read-only, with argument vectors and a
+short timeout, and any failure falls to an honest marker that names the real
+cause: the workspace is not inside a Git working tree, git is not available,
+or git failed. No commit, root, or branch is ever invented.
+
+The four memory kinds are stored in a new `memory_records` ledger table,
+created in both places the other tables are created so a ledger from before
+this increment still opens and still restores. A verified fact must bind to a
+revision and an environment and reads back as verified and current; a decision
+must name an owner and a reason, may name a superseding decision, and reads
+back with the reverse link and with `current` false once it is superseded; a
+hypothesis is stored unverified and cannot be marked verified; a historical
+attempt is preserved as a result and never as current state. Every record
+carries a source, a timestamp, an affected component, and an invalidation
+condition.
+
+These records are stored and queryable, and nothing reads them. No code path
+consults a memory record when it prepares an attempt, dispatches a task, or
+accepts a result, and the manifest says so in its own memory summary. The
+increment adds the record, not the intelligence.
+
+```text
+python3 -m unittest discover -s tests -p 'test_factory.py' -v
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --check
+```
+
+Results, copied from the run: the factory suite ran 86 tests in 12.123
+seconds, OK; the full suite ran 172 tests in 23.691 seconds, OK; the document
+reference checker reported `109 references checked in HARNESS_FRAMEWORK.md`;
+`git diff --check` exited 0. The factory suite grew from 68 to 86 tests. The
+only lines removed from `tests/test_factory.py` are the two lines of the
+import block, which was extended with the new names; no existing test was
+weakened, skipped, deleted, or renamed. Token usage and monetary cost were
+not supplied by the runtime and remain unavailable.
+
+Files changed: `overseer/factory.py` (the memory kinds constant, the
+`memory_records` table in both schema scripts, the `record_memory` and
+`memory` methods, the memory key in the inspect result, the read-only git
+probe, the context manifest builder, and the manifest write with its ledger
+event and digest), `tests/test_factory.py` (a new `ContextTests` class),
+`docs/HARNESS_FRAMEWORK.md` (the CONTEXT row, the two STATE clauses that
+became false, one claims bullet, one process-order clause, and every
+re-cited line), `README.md` (one paragraph), and this log.
+
+Acceptance checks and the test that proves each one:
+
+1. a manifest is written into the run evidence directory —
+   `test_a_context_manifest_is_written_into_the_run_evidence_directory`
+2. the manifest names the objective, the spec hash, the job, the run, and the
+   mode — `test_the_context_manifest_names_the_objective_and_the_spec_hash`
+3. the manifest lists the commands actually run, and for a failing run only
+   the commands up to the failure —
+   `test_the_context_manifest_lists_the_commands_actually_run`
+4. a workspace that is not a repository is marked honestly, with the real
+   cause and no root and no commit, and the git-not-available cause is
+   covered — `test_the_context_manifest_marks_a_non_repository_workspace_honestly`
+5. a workspace inside a Git repository names the root and the base commit —
+   `test_the_context_manifest_names_the_repository_root_and_base_commit`
+6. the acceptance identifiers come from the contract block, or are absent —
+   `test_the_context_manifest_records_the_contract_acceptance_ids`
+7. the supplied list holds the six blueprint context items in order, and says
+   why an item was not available —
+   `test_the_context_manifest_records_what_it_supplied_and_why`
+8. unmeasured values stay unmeasured and no output is carried —
+   `test_the_context_manifest_marks_unmeasured_values_as_unmeasured`
+9. all four kinds are stored and read back per job and per kind —
+   `test_memory_records_of_the_four_kinds_are_stored_and_queryable`
+10. a hypothesis reads back unverified and uncurrent —
+    `test_a_hypothesis_is_stored_and_read_back_as_unverified`
+11. a decision names its superseding decision and is superseded in return —
+    `test_a_decision_can_name_a_superseding_decision`
+12. every record carries its source, timestamp, component, and invalidation
+    condition — `test_every_memory_record_carries_its_source_timestamp_component_and_invalidation`
+13. a verified fact must bind to a revision and an environment —
+    `test_a_verified_fact_must_bind_to_a_revision_and_an_environment`
+14. unknown kinds, unknown jobs, empty text, and a bad supersedes are
+    rejected — `test_memory_record_validation_rejects_bad_input`
+15. the ledger records the manifest path and digest, and the summary carries
+    the same pair — `test_the_ledger_records_the_manifest_path_and_digest`
+16. the manifest and the memory records survive a backup and restore —
+    `test_the_manifest_and_memory_records_survive_a_backup_and_restore`
+17. the acceptance path, the lease rules, the restore fence, and the approval
+    gate still pass —
+    `test_the_existing_acceptance_lease_restore_and_approval_paths_still_pass`
+18. a ledger without the memory table opens and restores —
+    `test_a_ledger_without_the_memory_table_opens_and_restores`
+
+Disagreements and limits, kept visible:
+
+- The blueprint's section 13 describes a context builder and a handoff list
+  that includes recent verified failures, applicable decisions, and remaining
+  budget. This controller can observe only part of that. The manifest records
+  the objective, the repository identity, the acceptance identifiers, the
+  commands actually run, and the environment facts the runner already holds;
+  the rest is named as unmeasured, and the supplied list says plainly that no
+  context builder exists.
+- The blueprint binds a verified fact to a revision and an environment. The
+  ledger enforces that binding, and the record names both, but the runner
+  still measures no environment digest and no cost.
+- The blueprint's handoff list expects a candidate revision and an acceptance
+  decision. The factory's candidate revision is not observable in this
+  increment, so it is named as unmeasured.
+- Restore replaces the ledger with the backup wholesale, so a memory record
+  written after a backup is lost. That is the existing restore semantics, not
+  a defect of this increment, and the durability test asserts the state that
+  existed before the backup.
+
+The STATE row needed two corrections, because the increment made them false:
+its verdict said "recall and memory are absent", and memory records now exist
+in the ledger although recall is still absent because nothing reads them, and
+its next-increment cell named the CONTEXT increment that this step completes.
+Both clauses were corrected to the minimum truthful wording and the rest of
+the row is unchanged. The CONTRACT, TOOLS, PERMISSIONS, and EVIDENCE rows kept
+their verdicts and next-increment text; only their citations moved. Every
+`path:line` citation in the file was re-cited and re-read by content, and the
+reference checker reports 109 references checked.
+
+Not touched: the live tmux server and every pane, the running monitor service,
+the live factory ledger, `config.json`, the monitor's own modules,
+`docs/FACTORY_EXECUTION.md`, `factory/tasks/overseer-checks.json`, and
+`factory/routing-policy.json`.

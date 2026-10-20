@@ -83,6 +83,10 @@ ENVELOPE_MODES = frozenset({
 })
 DECISIONS = frozenset({'granted', 'refused'})
 
+# The four memory record kinds. They are stored and queryable, and nothing
+# reads them to change a decision.
+MEMORY_KINDS = ('verified_fact', 'decision', 'hypothesis', 'historical_attempt')
+
 # Code counterpart for factory/routing-policy.json:9 required_inputs. The JSON
 # file is not read at run time; the test suite proves the two agree.
 REQUEST_INPUT_FIELDS = {
@@ -297,6 +301,35 @@ def validate_envelope(envelope, spec):
     return envelope
 
 
+def _run_git(workspace, *arguments):
+    """Read one git fact without writing to the workspace."""
+    try:
+        result = subprocess.run(['git', '-C', workspace, *arguments],
+                                capture_output=True, text=True, timeout=10)
+    except FileNotFoundError:
+        return None, 'git is not available on this machine'
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, 'git failed: ' + str(error)
+    if result.returncode:
+        lines = (result.stderr or '').strip().splitlines()
+        return None, lines[0] if lines else f'git exited with status {result.returncode}'
+    return result.stdout.strip(), None
+
+
+def repository_identity(workspace):
+    """Report the repository identity of a workspace, or the real reason there is none."""
+    if not workspace:
+        return {'present': False, 'reason': 'the task specification names no workspace'}
+    root, problem = _run_git(workspace, 'rev-parse', '--show-toplevel')
+    if root is None:
+        return {'present': False, 'reason': problem}
+    commit, problem = _run_git(workspace, 'rev-parse', 'HEAD')
+    if commit is None:
+        return {'present': False, 'reason': problem}
+    return {'present': True, 'root': root, 'base_commit': commit,
+            'base_commit_source': 'git rev-parse HEAD observed at attempt start'}
+
+
 def validate(spec):
     if not isinstance(spec, dict):
         raise ValueError('invalid task object')
@@ -393,6 +426,13 @@ class Factory:
                 job_id TEXT PRIMARY KEY NOT NULL,
                 decision TEXT NOT NULL, decider TEXT NOT NULL,
                 at REAL NOT NULL, note TEXT NOT NULL, spec_hash TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS memory_records (
+                record_id TEXT PRIMARY KEY NOT NULL,
+                job_id TEXT NOT NULL, kind TEXT NOT NULL, entry TEXT NOT NULL,
+                source TEXT NOT NULL, at REAL NOT NULL,
+                affected_component TEXT NOT NULL, invalidation_condition TEXT NOT NULL,
+                revision TEXT, environment TEXT, owner TEXT, reason TEXT,
+                supersedes TEXT, verified INTEGER NOT NULL);
         ''')
         self._lock_depth = 0
 
@@ -477,6 +517,7 @@ class Factory:
                 'SELECT * FROM attempts WHERE job_id=? ORDER BY lease_generation', (job_id,))]
         result['contract'] = result['spec'].get('contract')
         result['envelope'] = result['spec'].get('envelope')
+        result['memory'] = self.memory(job_id)
         approval_row = self.db.execute('SELECT * FROM approvals WHERE job_id=?', (job_id,)).fetchone()
         result['approval'] = dict(approval_row) if approval_row else None
         result['events'] = [dict(r) for r in self.db.execute('SELECT * FROM events WHERE job_id=? ORDER BY seq', (job_id,))]
@@ -759,6 +800,179 @@ class Factory:
                                 (state, job_detail, job_id))
                 self.event(job_id, event, detail)
         return self.inspect(job_id)
+
+    def record_memory(self, job_id, kind, entry, source, affected_component,
+                      invalidation_condition, **specific):
+        """Store one memory record for a job.
+
+        The records are stored and queryable. Nothing reads them to change a
+        decision, and a hypothesis stays unverified until something measures
+        it.
+        """
+        if kind not in MEMORY_KINDS:
+            raise ValueError('memory kind must be one of: ' + ', '.join(MEMORY_KINDS))
+        if self.db.execute('SELECT id FROM jobs WHERE id=?', (job_id,)).fetchone() is None:
+            raise ValueError('unknown job')
+        for name, value in (('entry', entry), ('source', source),
+                            ('affected_component', affected_component),
+                            ('invalidation_condition', invalidation_condition)):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f'memory {name} must be nonempty text')
+            if len(value) > 2000 or '\0' in value or any(ord(char) < 32 for char in value):
+                raise ValueError(f'memory {name} must be short text without control characters')
+        revision = specific.get('revision')
+        environment = specific.get('environment')
+        owner = specific.get('owner')
+        reason = specific.get('reason')
+        supersedes = specific.get('supersedes')
+        if kind == 'verified_fact':
+            if not isinstance(revision, str) or not revision.strip():
+                raise ValueError('a verified fact must bind to a revision')
+            if not isinstance(environment, str) or not environment.strip():
+                raise ValueError('a verified fact must bind to an environment')
+        if kind == 'decision':
+            if not isinstance(owner, str) or not owner.strip():
+                raise ValueError('a decision must name an owner')
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError('a decision must record a reason')
+            if supersedes is not None:
+                target = self.db.execute(
+                    'SELECT kind FROM memory_records WHERE record_id=? AND job_id=?',
+                    (supersedes, job_id)).fetchone()
+                if target is None or target['kind'] != 'decision':
+                    raise ValueError(
+                        'a superseding decision must name a decision of the same job')
+        record_id = uuid.uuid4().hex
+        with self.db:
+            self.db.execute(
+                'INSERT INTO memory_records(record_id,job_id,kind,entry,source,at,'
+                'affected_component,invalidation_condition,revision,environment,owner,reason,'
+                'supersedes,verified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (record_id, job_id, kind, entry, source, time.time(), affected_component,
+                 invalidation_condition, revision, environment, owner, reason, supersedes,
+                 1 if kind == 'verified_fact' else 0))
+        return self._memory_record(record_id)
+
+    def memory(self, job_id, kind=None):
+        """Return a job's memory records, optionally only one kind.
+
+        The records are stored and queryable. Nothing consumes them.
+        """
+        if kind is not None and kind not in MEMORY_KINDS:
+            raise ValueError('memory kind must be one of: ' + ', '.join(MEMORY_KINDS))
+        rows = self.db.execute(
+            'SELECT * FROM memory_records WHERE job_id=? ORDER BY at, record_id',
+            (job_id,)).fetchall()
+        records = [self._memory_record(row['record_id']) for row in rows]
+        superseded_by = {}
+        for record in records:
+            if record['kind'] == 'decision' and record.get('supersedes'):
+                superseded_by[record['supersedes']] = record['record_id']
+        for record in records:
+            if record['kind'] == 'decision':
+                record['superseded_by'] = superseded_by.get(record['record_id'])
+                record['current'] = record['superseded_by'] is None
+        if kind is None:
+            return records
+        return [record for record in records if record['kind'] == kind]
+
+    def _memory_record(self, record_id):
+        row = self.db.execute(
+            'SELECT * FROM memory_records WHERE record_id=?', (record_id,)).fetchone()
+        if row is None:
+            raise ValueError('unknown memory record')
+        record = dict(row)
+        if record['kind'] == 'verified_fact':
+            record['verified'] = True
+            record['current'] = True
+        elif record['kind'] == 'decision':
+            record['verified'] = None
+            record['current'] = True
+        else:
+            record['verified'] = False
+            record['current'] = False
+        return record
+
+    def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch):
+        """Record what the controller supplied for this attempt, and why."""
+        contract = spec.get('contract') or {}
+        acceptance_ids = list(contract.get('acceptance_ids') or [])
+        workspace = spec.get('workspace')
+        attempt = self.db.execute(
+            'SELECT attempt_id, lease_generation, epoch FROM attempts WHERE job_id=?'
+            ' ORDER BY lease_generation DESC LIMIT 1', (job_id,)).fetchone()
+        counts = {kind: 0 for kind in MEMORY_KINDS}
+        for row in self.db.execute('SELECT kind FROM memory_records WHERE job_id=?', (job_id,)):
+            if row['kind'] in counts:
+                counts[row['kind']] += 1
+        commands = []
+        for result in results:
+            if 'argv' not in result:
+                continue
+            commands.append({
+                'stage': result.get('stage'),
+                'argv': list(result['argv']),
+                'exit_code': result.get('exit_code'),
+                'timed_out': bool(result.get('timed_out')),
+                'elapsed_seconds': result.get('elapsed_seconds'),
+                'log': result.get('log'),
+            })
+        acceptance_source = 'contract' if acceptance_ids else 'absent'
+        supplied = [
+            {'item': 'objective',
+             'source': "task specification field 'objective'",
+             'why': 'the objective is the purpose this attempt is judged against'},
+            {'item': 'required_behavior',
+             'source': ("the contract block's acceptance identifiers and the submitted "
+                        'acceptance commands') if acceptance_ids else
+                       "the task specification's acceptance commands",
+             'why': 'the acceptance commands define the required behaviour of the attempt'},
+            {'item': 'relevant_code_and_interfaces',
+             'source': None,
+             'why': 'no context builder exists: nothing is assembled from a codebase, '
+                    'and no file or interface was read into this manifest'},
+            {'item': 'recent_verified_failures',
+             'source': None,
+             'why': 'no failure history is assembled for this attempt'},
+            {'item': 'applicable_decisions',
+             'source': None,
+             'why': 'memory records are stored and queryable, but no decision record was '
+                    'consulted when this attempt was prepared'},
+            {'item': 'deeper_evidence',
+             'source': 'the run evidence directory and the recorded events',
+             'why': 'the evidence directory holds the task, the results, the summary, '
+                    'and this manifest'},
+        ]
+        return {
+            'version': 1,
+            'job_id': job_id,
+            'run_id': run_id,
+            'attempt_id': attempt['attempt_id'] if attempt else None,
+            'lease_generation': attempt['lease_generation'] if attempt else None,
+            'epoch': attempt['epoch'] if attempt else epoch,
+            'spec_hash': spec_hash,
+            'mode': spec.get('mode') or 'command',
+            'objective': spec.get('objective'),
+            'workspace': workspace,
+            'repository': repository_identity(workspace),
+            'acceptance_ids': acceptance_ids,
+            'acceptance_ids_source': acceptance_source,
+            'commands_actually_run': commands,
+            'environment': {
+                'timeout_seconds': spec.get('timeout_seconds'),
+                'tokens': None,
+                'cost_usd': None,
+            },
+            'supplied': supplied,
+            'memory': {
+                'kinds': list(MEMORY_KINDS),
+                'records_for_job': counts,
+                'consumed': False,
+                'note': 'no memory record was consulted: nothing reads the memory kinds',
+            },
+            'unmeasured': ['tokens', 'cost_usd', 'candidate_revision', 'remaining_budget',
+                           'unresolved_effects', 'environment_digest'],
+        }
 
     def cancel(self, job_id):
         with self.db:
@@ -1250,6 +1464,13 @@ class Factory:
                 job_id TEXT PRIMARY KEY NOT NULL,
                 decision TEXT NOT NULL, decider TEXT NOT NULL,
                 at REAL NOT NULL, note TEXT NOT NULL, spec_hash TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS memory_records (
+                record_id TEXT PRIMARY KEY NOT NULL,
+                job_id TEXT NOT NULL, kind TEXT NOT NULL, entry TEXT NOT NULL,
+                source TEXT NOT NULL, at REAL NOT NULL,
+                affected_component TEXT NOT NULL, invalidation_condition TEXT NOT NULL,
+                revision TEXT, environment TEXT, owner TEXT, reason TEXT,
+                supersedes TEXT, verified INTEGER NOT NULL);
         ''')
 
     def _mark_restored_invalid(self, job, problem):
@@ -1476,8 +1697,22 @@ class Factory:
                 summary['fixture_verification'] = fixture_verification
             if fake_verification is not None:
                 summary['fake_provider_verification'] = fake_verification
+            # The context manifest records what the controller supplied for
+            # this attempt. Its path and digest go into the ledger with the
+            # final state change, in one transaction.
+            epoch, _ = self._controller_values()
+            manifest = self._context_manifest(
+                job_id, run_id, spec, row['spec_hash'], results, epoch)
+            manifest_path = evidence / 'context.json'
+            manifest_path.write_text(json.dumps(manifest, indent=2))
+            manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            summary['context_manifest'] = {'path': str(manifest_path),
+                                           'sha256': manifest_digest}
             (evidence/'summary.json').write_text(json.dumps(summary, indent=2))
-            self.transition(job_id, final, detail)
+            with self.db:
+                self.event(job_id, 'context_manifest',
+                           f'context.json sha256={manifest_digest}')
+                self.transition(job_id, final, detail)
             with self.db:
                 self.db.execute('UPDATE jobs SET finished=? WHERE id=?', (time.time(), job_id))
             return self.inspect(job_id)

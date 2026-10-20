@@ -12,8 +12,9 @@ import unittest
 from unittest.mock import patch
 
 from overseer.factory import (
-    CONTRACT_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID, PROVIDER_NAMES,
-    REQUEST_INPUT_FIELDS, Factory, canonical, fixture_candidate_path, validate,
+    CONTRACT_FIELDS, ENVELOPE_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID,
+    MEMORY_KINDS, PROVIDER_NAMES, REQUEST_INPUT_FIELDS, Factory, canonical,
+    fixture_candidate_path, repository_identity, validate,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1209,3 +1210,334 @@ class EnvelopeTests(unittest.TestCase):
         row = [r for r in rows if r['id'] == 'status-detail'][0]
         self.assertEqual(row['detail'], self.f.inspect('status-detail')['detail'])
         self.assertIn('granted', row['detail'])
+
+
+class ContextTests(unittest.TestCase):
+    """The context manifest and the four memory record kinds."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / 'state' / 'jobs.sqlite3'
+        self.f = Factory(self.db)
+        self.addCleanup(self.f.close)
+
+    def command_spec(self, name='one', contract=None, checks=None, envelope=None):
+        spec = {
+            'id': name, 'objective': 'write and independently verify result',
+            'workspace': str(self.root), 'timeout_seconds': 5,
+            'implementation': [sys.executable, '-c',
+                               "from pathlib import Path; Path('marker').write_text('ok')"],
+            'checks': checks or [[sys.executable, '-c',
+                                  "from pathlib import Path; assert Path('marker').read_text() == 'ok'"]],
+        }
+        if contract is not None:
+            spec['contract'] = contract
+        if envelope is not None:
+            spec['envelope'] = envelope
+        return spec
+
+    def envelope(self, **overrides):
+        block = {
+            'mode': 'draft_change',
+            'scope': ['src/'],
+            'requires_decision': True,
+            'decider': 'operator',
+        }
+        block.update(overrides)
+        return block
+
+    def contract(self, **overrides):
+        block = {
+            'role': 'implementation',
+            'risk_tier': 'medium',
+            'external_effects': [],
+            'protected_paths': [],
+            'approval_requirements': [],
+            'acceptance_ids': ['A1'],
+            'required_capabilities': [],
+            'project_constraints': [],
+            'measured_evidence': None,
+            'provider_availability': None,
+            'budget': {
+                'wall_time_seconds': 600, 'token_limit': None, 'cost_limit_usd': None,
+                'resource_limits': None, 'repair_allowance': 0,
+            },
+        }
+        block.update(overrides)
+        return block
+
+    def manifest_of(self, result):
+        return json.loads((Path(result['evidence']) / 'context.json').read_text())
+
+    def git(self, *arguments, cwd=None):
+        return subprocess.run(['git', *arguments], cwd=cwd, capture_output=True, text=True,
+                              timeout=60)
+
+    def test_a_context_manifest_is_written_into_the_run_evidence_directory(self):
+        self.assertTrue(self.f.submit(self.command_spec('manifest')))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        self.assertTrue((Path(result['evidence']) / 'context.json').is_file())
+
+    def test_the_context_manifest_names_the_objective_and_the_spec_hash(self):
+        spec = self.command_spec('named')
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        manifest = self.manifest_of(result)
+        self.assertEqual(manifest['version'], 1)
+        self.assertEqual(manifest['job_id'], 'named')
+        self.assertEqual(manifest['run_id'], result['run_id'])
+        self.assertEqual(manifest['objective'], spec['objective'])
+        self.assertEqual(manifest['spec_hash'], result['spec_hash'])
+        self.assertEqual(manifest['mode'], 'command')
+
+    def test_the_context_manifest_lists_the_commands_actually_run(self):
+        self.assertTrue(self.f.submit(self.command_spec('commands')))
+        result = self.f.run_one()
+        commands = self.manifest_of(result)['commands_actually_run']
+        self.assertEqual([c['stage'] for c in commands], ['implementation', 'acceptance'])
+        self.assertEqual(commands[0]['argv'], self.command_spec('commands')['implementation'])
+        self.assertEqual(commands[1]['argv'], self.command_spec('commands')['checks'][0])
+        self.assertEqual(commands[0]['exit_code'], 0)
+        self.assertFalse(commands[0]['timed_out'])
+        failing = self.command_spec('failing')
+        failing['checks'] = [[sys.executable, '-c', 'raise SystemExit(3)']]
+        self.assertTrue(self.f.submit(failing))
+        failed = self.f.run_one()
+        self.assertEqual(failed['state'], 'failed')
+        stopped = self.manifest_of(failed)['commands_actually_run']
+        self.assertEqual([c['stage'] for c in stopped], ['implementation', 'acceptance'])
+        self.assertEqual(stopped[-1]['exit_code'], 3)
+
+    def test_the_context_manifest_marks_a_non_repository_workspace_honestly(self):
+        workspace = self.root / 'plain'
+        workspace.mkdir()
+        spec = self.command_spec('plain')
+        spec['workspace'] = str(workspace)
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        repository = self.manifest_of(result)['repository']
+        probe = self.git('-C', str(workspace), 'rev-parse', '--show-toplevel')
+        if probe.returncode == 0:
+            self.assertTrue(repository['present'])
+        else:
+            self.assertFalse(repository['present'])
+            self.assertTrue(repository['reason'])
+            self.assertNotIn('root', repository)
+            self.assertNotIn('base_commit', repository)
+        with patch.dict(os.environ, {'PATH': str(self.root / 'empty-bin')}):
+            (self.root / 'empty-bin').mkdir(exist_ok=True)
+            identity = repository_identity(str(workspace))
+        self.assertFalse(identity['present'])
+        self.assertIn('git', identity['reason'])
+
+    def test_the_context_manifest_names_the_repository_root_and_base_commit(self):
+        workspace = self.root / 'repo'
+        workspace.mkdir()
+        self.git('init', '--quiet', str(workspace))
+        (workspace / 'file.txt').write_text('content\n')
+        self.git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test',
+                'add', 'file.txt', cwd=str(workspace))
+        self.git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test',
+                'commit', '--quiet', '-m', 'initial', cwd=str(workspace))
+        head = self.git('-C', str(workspace), 'rev-parse', 'HEAD').stdout.strip()
+        spec = self.command_spec('repo')
+        spec['workspace'] = str(workspace)
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        repository = self.manifest_of(result)['repository']
+        self.assertTrue(repository['present'])
+        self.assertEqual(repository['base_commit'], head)
+        self.assertEqual(Path(repository['root']).resolve(), workspace.resolve())
+        self.assertIn('rev-parse', repository['base_commit_source'])
+
+    def test_the_context_manifest_records_the_contract_acceptance_ids(self):
+        self.assertTrue(self.f.submit(self.command_spec('with-contract', self.contract())))
+        with_contract = self.manifest_of(self.f.run_one())
+        self.assertEqual(with_contract['acceptance_ids'], ['A1'])
+        self.assertEqual(with_contract['acceptance_ids_source'], 'contract')
+        self.assertTrue(self.f.submit(self.command_spec('without-contract')))
+        without = self.manifest_of(self.f.run_one())
+        self.assertEqual(without['acceptance_ids'], [])
+        self.assertEqual(without['acceptance_ids_source'], 'absent')
+
+    def test_the_context_manifest_records_what_it_supplied_and_why(self):
+        self.assertTrue(self.f.submit(self.command_spec('supplied')))
+        manifest = self.manifest_of(self.f.run_one())
+        items = [entry['item'] for entry in manifest['supplied']]
+        self.assertEqual(items, ['objective', 'required_behavior', 'relevant_code_and_interfaces',
+                                  'recent_verified_failures', 'applicable_decisions',
+                                  'deeper_evidence'])
+        for entry in manifest['supplied']:
+            self.assertTrue(entry['why'])
+            if entry['source'] is None:
+                self.assertTrue(entry['why'])
+
+    def test_the_context_manifest_marks_unmeasured_values_as_unmeasured(self):
+        self.assertTrue(self.f.submit(self.command_spec('unmeasured')))
+        manifest = self.manifest_of(self.f.run_one())
+        self.assertIsNone(manifest['environment']['tokens'])
+        self.assertIsNone(manifest['environment']['cost_usd'])
+        for name in ('tokens', 'cost_usd', 'candidate_revision', 'remaining_budget'):
+            self.assertIn(name, manifest['unmeasured'])
+        text = json.dumps(manifest)
+        self.assertNotIn('output_truncated', text)
+        self.assertNotIn('stdout', text)
+        self.assertNotIn('stderr', text)
+        self.assertFalse(manifest['memory']['consumed'])
+
+    def test_memory_records_of_the_four_kinds_are_stored_and_queryable(self):
+        self.assertTrue(self.f.submit(self.command_spec('memory')))
+        self.assertTrue(self.f.submit(self.command_spec('other')))
+        self.f.record_memory('memory', 'verified_fact', 'the package passed the test',
+                             'the acceptance command', 'the package', 'a new release',
+                             revision='abc123', environment='linux')
+        self.f.record_memory('memory', 'decision', 'keep the filter semantics',
+                             'the operator', 'the filter', 'a new requirement',
+                             owner='operator', reason='compatibility')
+        self.f.record_memory('memory', 'hypothesis', 'a new import flow may reduce effort',
+                             'a note', 'the importer', 'a measurement')
+        self.f.record_memory('memory', 'historical_attempt', 'the earlier OCR change failed',
+                             'an old run', 'the OCR tool', 'a new fixture')
+        records = self.f.memory('memory')
+        self.assertEqual(len(records), 4)
+        self.assertEqual({record['kind'] for record in records}, set(MEMORY_KINDS))
+        self.assertEqual(len(self.f.memory('memory', kind='decision')), 1)
+        self.assertEqual(self.f.memory('memory', kind='decision')[0]['kind'], 'decision')
+        self.assertEqual(self.f.memory('other'), [])
+        self.assertEqual(len(self.f.inspect('memory')['memory']), 4)
+
+    def test_a_hypothesis_is_stored_and_read_back_as_unverified(self):
+        self.assertTrue(self.f.submit(self.command_spec('hypothesis')))
+        record = self.f.record_memory('hypothesis', 'hypothesis', 'the flow may be faster',
+                                      'a note', 'the importer', 'a measurement')
+        self.assertFalse(record['verified'])
+        self.assertFalse(record['current'])
+        self.assertFalse(self.f.memory('hypothesis')[0]['verified'])
+
+    def test_a_decision_can_name_a_superseding_decision(self):
+        self.assertTrue(self.f.submit(self.command_spec('decisions')))
+        first = self.f.record_memory('decisions', 'decision', 'keep the old behaviour',
+                                     'the operator', 'the filter', 'a new requirement',
+                                     owner='operator', reason='compatibility')
+        second = self.f.record_memory('decisions', 'decision', 'replace the old behaviour',
+                                      'the operator', 'the filter', 'a new requirement',
+                                      owner='operator', reason='measured', supersedes=first['record_id'])
+        self.assertEqual(second['supersedes'], first['record_id'])
+        records = {record['record_id']: record for record in self.f.memory('decisions')}
+        self.assertEqual(records[first['record_id']]['superseded_by'], second['record_id'])
+        self.assertFalse(records[first['record_id']]['current'])
+        self.assertTrue(records[second['record_id']]['current'])
+        self.assertIsNone(records[second['record_id']]['verified'])
+
+    def test_every_memory_record_carries_its_source_timestamp_component_and_invalidation(self):
+        self.assertTrue(self.f.submit(self.command_spec('fields')))
+        record = self.f.record_memory('fields', 'historical_attempt', 'it failed',
+                                      'an old run', 'the tool', 'a new fixture')
+        self.assertTrue(record['source'])
+        self.assertTrue(record['affected_component'])
+        self.assertTrue(record['invalidation_condition'])
+        self.assertGreater(record['at'], 0)
+        for missing in ('source', 'affected_component', 'invalidation_condition'):
+            with self.subTest(missing=missing):
+                arguments = {'entry': 'it failed', 'source': 'an old run',
+                             'affected_component': 'the tool',
+                             'invalidation_condition': 'a new fixture'}
+                arguments[missing] = ''
+                with self.assertRaises(ValueError):
+                    self.f.record_memory('fields', 'historical_attempt', **arguments)
+
+    def test_a_verified_fact_must_bind_to_a_revision_and_an_environment(self):
+        self.assertTrue(self.f.submit(self.command_spec('fact')))
+        with self.assertRaises(ValueError):
+            self.f.record_memory('fact', 'verified_fact', 'it passed', 'a run',
+                                 'the package', 'a new release', revision='abc')
+        with self.assertRaises(ValueError):
+            self.f.record_memory('fact', 'verified_fact', 'it passed', 'a run',
+                                 'the package', 'a new release', environment='linux')
+        record = self.f.record_memory('fact', 'verified_fact', 'it passed', 'a run',
+                                      'the package', 'a new release',
+                                      revision='abc123', environment='linux')
+        self.assertTrue(record['verified'])
+        self.assertTrue(record['current'])
+
+    def test_memory_record_validation_rejects_bad_input(self):
+        self.assertTrue(self.f.submit(self.command_spec('invalid')))
+        with self.assertRaises(ValueError):
+            self.f.record_memory('invalid', 'not_a_kind', 'entry', 'source', 'component', 'condition')
+        with self.assertRaises(ValueError):
+            self.f.record_memory('missing-job', 'hypothesis', 'entry', 'source',
+                                 'component', 'condition')
+        with self.assertRaises(ValueError):
+            self.f.record_memory('invalid', 'hypothesis', '', 'source', 'component', 'condition')
+        with self.assertRaises(ValueError):
+            self.f.record_memory('invalid', 'decision', 'entry', 'source', 'component',
+                                 'condition', owner='operator', reason='why',
+                                 supersedes='no-such-record')
+        with self.assertRaises(ValueError):
+            self.f.record_memory('invalid', 'decision', 'entry', 'source', 'component',
+                                 'condition', reason='why')
+
+    def test_the_ledger_records_the_manifest_path_and_digest(self):
+        self.assertTrue(self.f.submit(self.command_spec('ledger')))
+        result = self.f.run_one()
+        manifest_path = Path(result['evidence']) / 'context.json'
+        digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        summary = json.loads((Path(result['evidence']) / 'summary.json').read_text())
+        self.assertEqual(summary['context_manifest']['path'], str(manifest_path))
+        self.assertEqual(summary['context_manifest']['sha256'], digest)
+        events = [event for event in self.f.inspect('ledger')['events']
+                  if event['state'] == 'context_manifest']
+        self.assertEqual(len(events), 1)
+        self.assertIn(digest, events[0]['detail'])
+
+    def test_the_manifest_and_memory_records_survive_a_backup_and_restore(self):
+        self.assertTrue(self.f.submit(self.command_spec('durable')))
+        self.f.record_memory('durable', 'verified_fact', 'it passed', 'a run',
+                             'the package', 'a new release',
+                             revision='abc123', environment='linux')
+        result = self.f.run_one()
+        manifest_path = Path(result['evidence']) / 'context.json'
+        digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        destination = self.root / 'backup.sqlite3'
+        self.f.backup(destination)
+        self.f.restore(destination)
+        records = self.f.memory('durable')
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]['entry'], 'it passed')
+        events = [event for event in self.f.inspect('durable')['events']
+                  if event['state'] == 'context_manifest']
+        self.assertIn(digest, events[0]['detail'])
+        self.assertTrue(manifest_path.is_file())
+
+    def test_the_existing_acceptance_lease_restore_and_approval_paths_still_pass(self):
+        self.assertTrue(self.f.submit(self.command_spec('acceptance')))
+        accepted = self.f.run_one()
+        self.assertEqual(accepted['state'], 'passed')
+        self.assertTrue(self.f.submit(self.command_spec('lease', envelope=self.envelope())))
+        self.assertEqual(self.f.inspect('lease')['state'], 'awaiting_approval')
+        self.f.decide('lease', 'granted', 'operator', 'note')
+        self.assertEqual(self.f.inspect('lease')['state'], 'queued')
+        destination = self.root / 'backup.sqlite3'
+        self.f.backup(destination)
+        self.f.restore(destination)
+        self.assertEqual(self.f.inspect('acceptance')['state'], 'passed')
+
+    def test_a_ledger_without_the_memory_table_opens_and_restores(self):
+        legacy = self.root / 'legacy.sqlite3'
+        connection = sqlite3.connect(legacy)
+        connection.execute('CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,'
+                           ' spec TEXT NOT NULL, spec_hash TEXT NOT NULL, state TEXT NOT NULL,'
+                           ' created REAL NOT NULL, started REAL, finished REAL, run_id TEXT,'
+                           ' evidence TEXT, detail TEXT, child_group INTEGER)')
+        connection.commit()
+        connection.close()
+        factory = Factory(legacy)
+        self.addCleanup(factory.close)
+        self.assertTrue(self.f.submit(self.command_spec('legacy-job')))
+        destination = self.root / 'legacy-backup.sqlite3'
+        self.f.backup(destination)
+        self.f.restore(destination)
+        self.assertEqual(len(self.f.memory('legacy-job')), 0)
