@@ -178,5 +178,50 @@
     "access": "opened",
     "type": "empirical",
     "scope_and_limitations": "Specific randomized study; not evidence about all developers or current model rankings."
+  },
+  {
+    "id": "F21",
+    "title": "Karpathy LLM Wiki idea",
+    "url": "https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f",
+    "retrieved": "2026-10-19",
+    "access": "opened",
+    "type": "primary",
+    "scope_and_limitations": "Author's design proposal; not a finished product or measured performance evaluation."
+  },
+  {
+    "id": "F22",
+    "title": "Claude Code memory",
+    "url": "https://code.claude.com/docs/en/memory",
+    "retrieved": "2026-10-19",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Official Claude Code behavior; instructions guide model behavior and do not enforce correctness."
+  },
+  {
+    "id": "F23",
+    "title": "Obsidian file storage",
+    "url": "https://obsidian.md/help/Files%2Band%2Bfolders/How%2BObsidian%2Bstores%2Bdata",
+    "retrieved": "2026-10-19",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Official description of local Markdown note storage; no performance claim."
+  },
+  {
+    "id": "F24",
+    "title": "Obsidian internal links",
+    "url": "https://obsidian.md/help/Linking%2Bnotes%2Band%2Bfiles/Internal%2Blinks",
+    "retrieved": "2026-10-19",
+    "access": "opened",
+    "type": "official",
+    "scope_and_limitations": "Official link syntax guidance, including Markdown links; no performance claim."
+  },
+  {
+    "id": "F25",
+    "title": "Bober_smart Claude second-brain folder workflow",
+    "url": "https://www.maxed.wiki/posts/claude-second-brain-folder-workflow-the-complete-guide/",
+    "retrieved": "2026-10-19",
+    "access": "opened",
+    "type": "secondary",
+    "scope_and_limitations": "Secondary workflow guide; reported accuracy or performance claims are not independently verified."
   }
 ]

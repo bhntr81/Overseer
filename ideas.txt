@@ -1,0 +1,95 @@
+IDEA: EVIDENCE-VERIFIED AGENT WORKERS WITH AN OBSIDIAN VAULT
+
+Idea summary
+Coordinate a pool of agents to research separate company profiles. Each worker
+returns claims with source links and exact supporting passages. A separate
+review step checks that each claim follows from its cited source. Only accepted
+claims are written to Markdown notes in an Obsidian vault. The post that prompted
+this idea says 300 Claude agents, roughly 100 ms verification, three passes over
+100 profiles, and zero remaining errors; it provides no source or measurements,
+so those figures are unverified and are not project targets.
+
+What Overseer supports today
+Overseer has two distinct local systems. The terminal monitor watches opted-in
+Codex or Claude tmux panes and can continue recognized routine work. It is not
+an API worker pool. The software factory runs explicitly submitted local command
+tasks behind a single-worker lock. This project now also has closed built-in
+fixture scenarios with controller-owned verification, candidate hashes, and
+receipts; that verifies the fixture contract, not arbitrary research claims.
+The provider routing file marks every provider disabled and labels the policy as
+a proposal. The factory does not launch Claude Code workers, enforce the proposed
+routing policy, manage a swarm, or integrate with Obsidian. See `README.md`,
+`overseer/tmux.py`, `overseer/factory.py`, `factory/routing-policy.json`,
+`docs/FACTORY_EXECUTION.md`, and `docs/FACTORY_SKILLS.md`.
+
+Possible design and unverified claims
+A future version could start with a very small worker pool, one isolated
+workspace per task, explicit provider/model allowlists, per-run budgets, and a
+shared dispatch limit. Workers would return structured claims with source URL,
+retrieval date, quoted evidence, and a precise locator. Deterministic checks
+could validate the output schema, source availability, and quote-to-source
+match; a separate model could flag unsupported inferences, with human review for
+uncertain or high-impact claims. Only accepted records would be exported as
+Markdown with source metadata and verification status. None of this is currently
+implemented. More agents or a cheaper verifier do not by themselves establish
+accuracy, speed, or savings. The post's performance claims require an original
+source and a reproducible evaluation.
+
+Small measurable prototype
+After the factory's provider and isolation prerequisites are met, use a small
+set of public company profiles and a frozen list of facts to extract. Begin with
+one worker and one independent verifier; do not start with 300 agents. Compare
+each output with source-backed human labels. Record accepted facts, false
+acceptances, missed facts, citation correctness, rework, wall-clock time, human
+review time, observed model identity, actual usage/cost where available, and
+provider-capacity errors. Export only verified records to a disposable test
+vault. If that path is reliable, test a small concurrency increase and measure
+whether throughput improves without lowering accuracy or exceeding quotas.
+
+Constraints and risks
+Provider quotas, billing, and capacity limits can erase parallel speed gains.
+Workers can duplicate or conflict on edits, while verification and human review
+can become the bottleneck. A verifier can repeat the worker's mistake; citations
+must be checked against source material, not accepted because another model agrees.
+Workspace isolation and stale-candidate rejection are not yet complete factory
+capabilities. A vault can retain stale, private, or weakly sourced claims, so
+notes need source dates, provenance, review status, and a removal/update process.
+The current routing proposal is not runtime enforcement, and no unattended
+provider dispatch should be inferred from it.
+
+Additional inspiration: a file-based second brain
+The linked Bober_smart article, “Claude Second Brain & Folder Workflow,”
+proposes a plain-Markdown knowledge base with a short root map, semantic folders
+for notes, people, and projects, and separate memory, learnings, and decision
+files. It recommends one topic per file, descriptive lowercase-hyphen names,
+citations where possible, and an explicit rule to say “not found” rather than
+guess when the answer is absent. Its troubleshooting table connects missed
+retrieval to a missing map entry, vague answers to overloaded notes, guesses to
+missing source-only rules, and duplicates to unclear categorization. Obsidian is
+an optional viewer for the files, not a required storage format.
+
+For an Overseer research pilot, keep source material immutable and separate
+from generated notes. Use a short model-neutral index that routes to a small
+number of folders, then create one company/profile note per entity. Each fact
+should point to its source and locator; if a fact is missing, conflicting, or
+stale, mark that state instead of filling the gap. Update an existing entity
+note when new evidence arrives, preserve the source history, and check links and
+duplicates before exporting to an Obsidian-compatible Markdown folder. The
+article describes CLAUDE.md as Claude Code's map; for other runtimes, verify
+their instruction-file loading rules or explicitly load a shared INDEX.md.
+
+Additional inspiration: task-specific skills
+The second Bober_smart post lists ten skill areas: Frontend Design, Algorithmic
+Art, Systematic Debugging, Canvas Design, Theme Factory, Web Artifacts Builder,
+Superpowers, File Search, Context Optimization, and Skill Creator. For
+Overseer, the highest-fit candidates are systematic debugging, code search,
+review, context/state handoff, and skill evaluation. Visual design skills could
+be optional capabilities for artifact tasks. Treat the list as a set of leads,
+not a vetted installation list: check each source, license, runtime compatibility,
+permissions, and behavior in realistic and near-miss evaluations before adoption.
+The post's reported iteration-speed and revenue gains are unverified and are
+not project targets. The existing Phase 2 skill sample is a starting evaluation
+pattern, not proof that these additional skills work for our setup.
+
+The two source posts and the downloaded article images are recorded in
+`ideas/SOURCES.md`; the image files are stored under `ideas/`.
