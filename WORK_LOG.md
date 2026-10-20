@@ -839,3 +839,39 @@ holds the FIFO reservation on `%3` and logged `queue holds %3: delivery or
 completion remains unconfirmed; inspect this pane` at 22:55:22. Operator
 action is required to release that reservation. No pane was enrolled,
 unwatched, or messaged by hand.
+
+### Release the held FIFO reservation on pane %3
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. The monitor had dispatched to `%3` after the `»` composer
+fix, but that Codex client answered with a provider error, so no completion
+marker appeared and the FIFO slot stayed held. One operator action released
+it; no state file was edited.
+
+```text
+python3 -m overseer unwatch %3
+```
+
+Before: `Active reservation: %3:1236021:6100232` and a journal warning
+`queue holds %3: delivery or completion remains unconfirmed; inspect this
+pane`. After: the monitor's own poll cycle logged `queue releases vanished,
+replaced, or excluded client %3:1236021:6100232` at 23:00:23, and
+`python3 -m overseer status` shows `Active reservation: none`, `%3 OFF`, `%2`
+and `%4` still WATCHED. No new `queue holds` or `queue observation failed`
+lines appeared and the service was not restarted, so the same PID 3274976
+kept polling. Every tmux session, pane PID, reptyr bridge, and target PID is
+unchanged apart from %3's `@overseer` value. `python3 scripts/check` still
+reports 93 tests passed.
+
+Model finding, investigated read-only and not changed: the live `%3` session
+is pinned to the older `gpt-6-astra` family (footer `GPT-6-Astra ultra`)
+while `~/.codex/config.toml` now sets `model = "gpt-6-luna"` with
+`model_reasoning_effort = "max"`, and `~/.codex/auth.json` has
+`auth_mode: chatgpt`. The client rejected the turn with
+`The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT
+account.`. Re-enabling `%3` needs the operator to switch that session to a
+supported model or start a fresh session that inherits the current config,
+then run `python3 -m overseer watch %3`. No Codex configuration, auth file,
+client session, or pane content was changed. Remaining open work: `%0`'s
+bridged client is still dead and unwatched, and the factory still has no real
+provider adapter.
