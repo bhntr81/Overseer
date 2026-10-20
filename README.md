@@ -59,6 +59,18 @@ role, risk tier, external effects, protected paths, approval requirements,
 acceptance identifiers, required capabilities, project constraints, measured
 evidence, provider availability, and budget limits. The block is validated and
 stored with the task; it records those statements and enforces none of them.
+A command-mode task may also carry an optional `envelope` block that names one
+of the four capability modes, its declared scope, whether a fresh decision is
+required, and the decider it names. The mode, the scope, and the decider
+identity are recorded, not authorized. The one enforced part is the gate: a
+task that declares it needs a decision waits in `awaiting_approval` and is not
+dispatched until a decision is recorded in the ledger, and that record names
+who decided. Give the decision with the runner's own command:
+
+```sh
+python3 -m overseer.factory decide <task-id> --decision granted --decider operator
+```
+
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 

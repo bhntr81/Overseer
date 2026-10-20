@@ -75,6 +75,14 @@ PROVIDER_NAMES = frozenset({'codex', 'claude', 'cursor', 'grok_build', 'grok_bot
 IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}')
 EVIDENCE_IDENTIFIER = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}')
 
+# The closed envelope block. The mode, scope, and decider are recorded, never
+# enforced; the only enforced part is the gate that keeps a task waiting.
+ENVELOPE_FIELDS = ('mode', 'scope', 'requires_decision', 'decider')
+ENVELOPE_MODES = frozenset({
+    'investigation', 'draft_change', 'bounded_maintenance', 'release',
+})
+DECISIONS = frozenset({'granted', 'refused'})
+
 # Code counterpart for factory/routing-policy.json:9 required_inputs. The JSON
 # file is not read at run time; the test suite proves the two agree.
 REQUEST_INPUT_FIELDS = {
@@ -253,6 +261,42 @@ def validate_contract(contract, spec):
     return contract
 
 
+def validate_envelope(envelope, spec):
+    """Validate the optional envelope block of a command-mode task spec.
+
+    The block names one of the blueprint's four capability modes, its declared
+    scope, whether a fresh decision is required, and the decider named by the
+    submitter. The mode, the scope, and the decider identity are recorded, not
+    authorized: no roster is checked and nothing compares the commands with
+    the declared scope.
+    """
+    if not isinstance(envelope, dict):
+        raise ValueError('envelope must be an object')
+    if set(envelope) != set(ENVELOPE_FIELDS):
+        raise ValueError('envelope must have exactly: ' + ', '.join(ENVELOPE_FIELDS))
+    mode = envelope['mode']
+    if not isinstance(mode, str) or mode not in ENVELOPE_MODES:
+        raise ValueError('envelope mode must be one of: ' + ', '.join(sorted(ENVELOPE_MODES)))
+    scope = envelope['scope']
+    if not isinstance(scope, list):
+        raise ValueError('envelope scope must be a list')
+    if not 1 <= len(scope) <= 16:
+        raise ValueError('envelope scope must hold between one and sixteen entries')
+    for item in scope:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError('envelope scope entries must be nonempty text')
+        if len(item) > 200 or '\0' in item or any(ord(char) < 32 for char in item):
+            raise ValueError('envelope scope entries must be short text without control characters')
+    if type(envelope['requires_decision']) is not bool:
+        raise ValueError('envelope requires_decision must be a boolean')
+    decider = envelope['decider']
+    if not isinstance(decider, str) or not decider.strip():
+        raise ValueError('envelope decider must be nonempty text')
+    if len(decider) > 80 or '\0' in decider or any(ord(char) < 32 for char in decider):
+        raise ValueError('envelope decider must be short text without control characters')
+    return envelope
+
+
 def validate(spec):
     if not isinstance(spec, dict):
         raise ValueError('invalid task object')
@@ -281,7 +325,8 @@ def validate(spec):
         return spec
 
     if 'mode' in spec or 'fixture' in spec or 'scenario' in spec or set(spec) - {
-        'id', 'objective', 'workspace', 'implementation', 'checks', 'timeout_seconds', 'contract'
+        'id', 'objective', 'workspace', 'implementation', 'checks', 'timeout_seconds',
+        'contract', 'envelope'
     }:
         raise ValueError('unknown task fields or invalid task object')
     if not isinstance(spec.get('workspace'), str) or not Path(spec['workspace']).is_absolute() or not Path(spec['workspace']).is_dir():
@@ -295,6 +340,8 @@ def validate(spec):
             raise ValueError('commands must be nonempty argument arrays; no implicit shell')
     if 'contract' in spec:
         validate_contract(spec['contract'], spec)
+    if 'envelope' in spec:
+        validate_envelope(spec['envelope'], spec)
     return spec
 
 
@@ -342,6 +389,10 @@ class Factory:
                 candidate_sha256 TEXT NOT NULL, final_candidate_sha256 TEXT NOT NULL,
                 verifier_id TEXT NOT NULL, verifier_passed INTEGER NOT NULL,
                 accepted INTEGER NOT NULL, detail TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS approvals (
+                job_id TEXT PRIMARY KEY NOT NULL,
+                decision TEXT NOT NULL, decider TEXT NOT NULL,
+                at REAL NOT NULL, note TEXT NOT NULL, spec_hash TEXT NOT NULL);
         ''')
         self._lock_depth = 0
 
@@ -356,15 +407,24 @@ class Factory:
         validate(spec)
         data = canonical(spec)
         digest = hashlib.sha256(data.encode()).hexdigest()
+        envelope = spec.get('envelope')
+        waiting = bool(envelope) and envelope.get('requires_decision') is True
         with self.db:
             old = self.db.execute('SELECT spec_hash FROM jobs WHERE id=?', (spec['id'],)).fetchone()
             if old:
                 if old['spec_hash'] != digest:
                     raise ValueError('task ID already exists with a different immutable specification')
                 return False
-            self.db.execute('INSERT INTO jobs(id,spec,spec_hash,state,created) VALUES(?,?,?,?,?)',
-                            (spec['id'], data, digest, 'queued', time.time()))
-            self.event(spec['id'], 'queued', 'explicit submission')
+            if waiting:
+                detail = ('waiting for a recorded decision before dispatch; envelope mode '
+                          + envelope['mode'] + '; decider named in the envelope: ' + envelope['decider'])
+                self.db.execute('INSERT INTO jobs(id,spec,spec_hash,state,created,detail) VALUES(?,?,?,?,?,?)',
+                                (spec['id'], data, digest, 'awaiting_approval', time.time(), detail))
+                self.event(spec['id'], 'awaiting_approval', detail)
+            else:
+                self.db.execute('INSERT INTO jobs(id,spec,spec_hash,state,created) VALUES(?,?,?,?,?)',
+                                (spec['id'], data, digest, 'queued', time.time()))
+                self.event(spec['id'], 'queued', 'explicit submission')
         return True
 
     def inspect(self, job_id):
@@ -416,6 +476,9 @@ class Factory:
             result['attempts'] = [dict(r) for r in self.db.execute(
                 'SELECT * FROM attempts WHERE job_id=? ORDER BY lease_generation', (job_id,))]
         result['contract'] = result['spec'].get('contract')
+        result['envelope'] = result['spec'].get('envelope')
+        approval_row = self.db.execute('SELECT * FROM approvals WHERE job_id=?', (job_id,)).fetchone()
+        result['approval'] = dict(approval_row) if approval_row else None
         result['events'] = [dict(r) for r in self.db.execute('SELECT * FROM events WHERE job_id=? ORDER BY seq', (job_id,))]
         return result
 
@@ -649,12 +712,58 @@ class Factory:
                     raise RuntimeError('recorded child process group still exists; inspect before resolution')
             self.transition(job_id, 'failed', 'operator reconciled, no automatic retry: ' + note)
 
+    def decide(self, job_id, decision, decider, note=''):
+        """Record the operator's decision for a task that is waiting.
+
+        The decider name is recorded, not authorized: it is not compared with
+        the envelope's decider and against no roster.
+        """
+        if not isinstance(decision, str) or decision not in DECISIONS:
+            raise ValueError('decision must be one of: ' + ', '.join(sorted(DECISIONS)))
+        if not isinstance(decider, str) or not decider.strip():
+            raise ValueError('a named decider is required')
+        if not isinstance(note, str):
+            raise ValueError('the decision note must be text')
+        with self.worker_lock():
+            row = self.inspect(job_id)
+            if row['state'] != 'awaiting_approval':
+                raise ValueError('only a task awaiting approval can be decided')
+            envelope = row['spec'].get('envelope') or {}
+            detail = ('decision ' + decision + ' by ' + decider.strip()
+                      + '; envelope mode ' + str(envelope.get('mode'))
+                      + '; note: ' + note)
+            with self.db:
+                try:
+                    self.db.execute(
+                        'INSERT INTO approvals(job_id,decision,decider,at,note,spec_hash)'
+                        ' VALUES(?,?,?,?,?,?)',
+                        (job_id, decision, decider.strip(), time.time(), note, row['spec_hash']),
+                    )
+                except sqlite3.IntegrityError:
+                    raise ValueError('a decision was already recorded for this task') from None
+                if decision == 'granted':
+                    self.db.execute('UPDATE jobs SET state=? WHERE id=?', ('queued', job_id))
+                    self.event(job_id, 'approval_granted', detail)
+                else:
+                    self.db.execute('UPDATE jobs SET state=? WHERE id=?', ('refused', job_id))
+                    self.event(job_id, 'approval_refused', detail)
+        return self.inspect(job_id)
+
     def cancel(self, job_id):
         with self.db:
-            cur = self.db.execute("UPDATE jobs SET state='cancelled' WHERE id=? AND state='queued'", (job_id,))
-            if cur.rowcount != 1:
-                raise ValueError('only a queued job can be cancelled here')
-            self.event(job_id, 'cancelled', 'operator cancelled queued task')
+            row = self.db.execute('SELECT state FROM jobs WHERE id=?', (job_id,)).fetchone()
+            if row is None:
+                raise ValueError('unknown job')
+            if row['state'] not in ('queued', 'awaiting_approval'):
+                raise ValueError('only a queued or waiting job can be cancelled here')
+            self.db.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (job_id,))
+            if row['state'] == 'awaiting_approval':
+                detail = ('operator cancelled a waiting task: the runner dispatched no command, '
+                          'started no child process, and recorded no external effect')
+                self.db.execute('UPDATE jobs SET detail=? WHERE id=?', (detail, job_id))
+                self.event(job_id, 'cancelled', detail)
+            else:
+                self.event(job_id, 'cancelled', 'operator cancelled queued task')
 
     def execute(self, job_id, argv, cwd, timeout, log):
         started = time.monotonic()
@@ -1121,6 +1230,10 @@ class Factory:
                 candidate_sha256 TEXT NOT NULL, final_candidate_sha256 TEXT NOT NULL,
                 verifier_id TEXT NOT NULL, verifier_passed INTEGER NOT NULL,
                 accepted INTEGER NOT NULL, detail TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS approvals (
+                job_id TEXT PRIMARY KEY NOT NULL,
+                decision TEXT NOT NULL, decider TEXT NOT NULL,
+                at REAL NOT NULL, note TEXT NOT NULL, spec_hash TEXT NOT NULL);
         ''')
 
     def _mark_restored_invalid(self, job, problem):
@@ -1264,12 +1377,31 @@ class Factory:
             if self.db.execute("SELECT 1 FROM jobs WHERE state IN ('running','checking','needs_reconciliation')").fetchone():
                 self.db.rollback()
                 raise RuntimeError('unresolved prior run; reconcile/inspect it before dispatch')
-            row = self.db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY seq LIMIT 1").fetchone()
-            if row is None:
-                self.db.commit()
-                return None
+            row = None
+            while True:
+                row = self.db.execute(
+                    "SELECT * FROM jobs WHERE state='queued' ORDER BY seq LIMIT 1").fetchone()
+                if row is None:
+                    self.db.commit()
+                    return None
+                spec = json.loads(row['spec'])
+                envelope = spec.get('envelope')
+                if not (envelope and envelope.get('requires_decision') is True):
+                    break
+                # A task that declares it needs a decision runs only with a
+                # recorded grant. The state and the record are written in one
+                # transaction, so this re-check is the second lock on the gate.
+                grant = self.db.execute(
+                    "SELECT 1 FROM approvals WHERE job_id=? AND decision='granted'",
+                    (row['id'],)).fetchone()
+                if grant:
+                    break
+                detail = ('dispatch refused: the task declares it needs a fresh decision '
+                          'and no grant is recorded in the ledger')
+                self.db.execute('UPDATE jobs SET state=?,detail=? WHERE id=?',
+                                ('awaiting_approval', detail, row['id']))
+                self.event(row['id'], 'awaiting_approval', detail)
             job_id = row['id']
-            spec = json.loads(row['spec'])
             run_id = uuid.uuid4().hex
             evidence = self.path.parent/'runs'/run_id
             evidence.mkdir(parents=True, mode=0o700)
@@ -1349,6 +1481,11 @@ def main():
         child.add_argument('id')
         if action == 'resolve':
             child.add_argument('--note', required=True)
+    decide = sub.add_parser('decide')
+    decide.add_argument('id')
+    decide.add_argument('--decision', required=True, choices=sorted(DECISIONS))
+    decide.add_argument('--decider', required=True)
+    decide.add_argument('--note', default='')
     args = parser.parse_args()
     os.umask(0o077)
     factory = Factory(args.db)
@@ -1367,8 +1504,18 @@ def main():
         elif args.action == 'cancel':
             factory.cancel(args.id)
             result = factory.inspect(args.id)
+        elif args.action == 'decide':
+            result = factory.decide(args.id, args.decision, args.decider, args.note)
         else:
-            result = [dict(r) for r in factory.db.execute('SELECT id,state,run_id,detail,evidence FROM jobs ORDER BY seq')]
+            result = []
+            for row in factory.db.execute(
+                    'SELECT id,state,run_id,detail,evidence FROM jobs ORDER BY seq'):
+                item = dict(row)
+                approval = factory.db.execute(
+                    'SELECT decision,decider,at,note,spec_hash FROM approvals WHERE job_id=?',
+                    (row['id'],)).fetchone()
+                item['approval'] = dict(approval) if approval else None
+                result.append(item)
         print(json.dumps(result, indent=2))
         return 1 if args.action == 'run-one' and result and result['state'] != 'passed' else 0
     except (ValueError, OSError, RuntimeError, sqlite3.Error) as error:

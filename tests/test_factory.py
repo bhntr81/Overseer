@@ -885,3 +885,269 @@ class ContractTests(unittest.TestCase):
         result = self.f.run_one()
         self.assertEqual(result['state'], 'passed')
         self.assertIsNone(self.f.inspect('legacy')['contract'])
+
+
+class EnvelopeTests(unittest.TestCase):
+    """The envelope block and the awaiting-approval gate."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / 'state' / 'jobs.sqlite3'
+        self.f = Factory(self.db)
+        self.addCleanup(self.f.close)
+
+    def envelope(self, **overrides):
+        block = {
+            'mode': 'draft_change',
+            'scope': ['src/', 'tests/'],
+            'requires_decision': True,
+            'decider': 'operator',
+        }
+        block.update(overrides)
+        return block
+
+    def command_spec(self, name='one', envelope=None, checks=None):
+        spec = {
+            'id': name, 'objective': 'write and independently verify result',
+            'workspace': str(self.root), 'timeout_seconds': 5,
+            'implementation': [sys.executable, '-c',
+                               "from pathlib import Path; Path('marker').write_text('ok')"],
+            'checks': checks or [[sys.executable, '-c',
+                                  "from pathlib import Path; assert Path('marker').read_text() == 'ok'"]],
+        }
+        if envelope is not None:
+            spec['envelope'] = envelope
+        return spec
+
+    def envelope_spec(self, name='one', envelope=None):
+        return self.command_spec(name, self.envelope() if envelope is None else envelope)
+
+    def run_cli(self, *arguments, expect=0):
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        result = subprocess.run(
+            [sys.executable, '-m', 'overseer.factory', '--db',
+             str(self.root / 'cli' / 'jobs.sqlite3'), *arguments],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env)
+        self.assertEqual(result.returncode, expect, result.stderr)
+        return result
+
+    def test_valid_envelope_is_accepted_and_recorded(self):
+        spec = self.envelope_spec('env-one')
+        self.assertTrue(self.f.submit(spec))
+        saved = self.f.inspect('env-one')
+        self.assertEqual(saved['envelope'], spec['envelope'])
+        self.assertEqual(saved['spec']['envelope'], spec['envelope'])
+        self.assertIsNone(saved['approval'])
+        self.f.decide('env-one', 'granted', 'operator', 'note')
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        recorded = json.loads((Path(result['evidence']) / 'task.json').read_text())
+        self.assertEqual(recorded['envelope'], spec['envelope'])
+
+    def test_envelope_field_validation_is_strict(self):
+        cases = (
+            ('mode', 'not-a-mode'),
+            ('scope', 'not a list'),
+            ('scope', []),
+            ('scope', ['']),
+            ('scope', [123]),
+            ('scope', ['x' * 201]),
+            ('requires_decision', 'yes'),
+            ('decider', ''),
+            ('decider', '   '),
+            ('decider', 12),
+            ('decider', 'x' * 81),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                block = self.envelope()
+                block[field] = value
+                with self.assertRaises(ValueError) as caught:
+                    self.f.submit(self.envelope_spec('invalid', block))
+                self.assertIn(field, str(caught.exception))
+        for field in ('mode', 'scope', 'requires_decision', 'decider'):
+            with self.subTest(missing=field):
+                block = self.envelope()
+                del block[field]
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.envelope_spec('invalid', block))
+        with self.subTest(unknown='verifier'):
+            block = self.envelope()
+            block['verifier'] = 'anything'
+            with self.assertRaises(ValueError):
+                self.f.submit(self.envelope_spec('invalid', block))
+
+    def test_unhashable_envelope_values_are_validation_errors(self):
+        cases = (
+            ('mode', ['draft_change']),
+            ('mode', {'mode': 'draft_change'}),
+            ('scope', {'scope': ['src/']}),
+            ('requires_decision', []),
+            ('decider', {'decider': 'operator'}),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                block = self.envelope()
+                block[field] = value
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.envelope_spec('unhashable', block))
+
+    def test_requires_decision_accepts_only_real_booleans(self):
+        for value in (1, 0, 'true', None):
+            with self.subTest(value=value):
+                block = self.envelope(requires_decision=value)
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.envelope_spec('boolean', block))
+        for value in (True, False):
+            with self.subTest(value=value):
+                block = self.envelope(requires_decision=value)
+                self.assertTrue(self.f.submit(self.envelope_spec('boolean-' + str(value), block)))
+
+    def test_controller_modes_reject_an_envelope_and_keep_their_key_sets(self):
+        specs = (
+            ({'id': 'f', 'objective': 'o', 'mode': 'fixture', 'fixture': 'known_good'},
+             {'id', 'objective', 'mode', 'fixture'}),
+            ({'id': 'p', 'objective': 'o', 'mode': 'fake_provider', 'scenario': 'success'},
+             {'id', 'objective', 'mode', 'scenario'}),
+            ({'id': 'i', 'objective': 'o', 'mode': 'isolation_probe'},
+             {'id', 'objective', 'mode'}),
+        )
+        for spec, accepted in specs:
+            with self.subTest(spec=spec):
+                with self.assertRaises(ValueError):
+                    self.f.submit({**spec, 'envelope': self.envelope()})
+                with self.assertRaises(ValueError):
+                    self.f.submit({**spec, 'contract': {}})
+                source = dict(spec)
+                source['id'] = source['id'] + '-plain'
+                self.assertTrue(self.f.submit(source))
+                stored = json.loads(self.f.db.execute(
+                    'SELECT spec FROM jobs WHERE id=?', (source['id'],)).fetchone()['spec'])
+                self.assertEqual(set(stored), accepted)
+
+    def test_envelope_is_covered_by_the_frozen_spec_hash(self):
+        spec = self.envelope_spec('frozen')
+        self.assertTrue(self.f.submit(spec))
+        changed = self.envelope_spec('frozen')
+        changed['envelope']['mode'] = 'release'
+        with self.assertRaisesRegex(ValueError, 'immutable'):
+            self.f.submit(changed)
+        self.assertFalse(self.f.submit(self.envelope_spec('frozen')))
+
+    def test_a_waiting_task_is_not_dispatched(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('waiting')))
+        self.assertEqual(self.f.inspect('waiting')['state'], 'awaiting_approval')
+        self.assertIsNone(self.f.run_one())
+        self.assertFalse((self.root / 'marker').exists())
+        self.assertEqual(self.f.inspect('waiting')['state'], 'awaiting_approval')
+        self.assertEqual(self.f.db.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE id='waiting' AND run_id IS NOT NULL").fetchone()['n'], 0)
+        runs = self.root / 'state' / 'runs'
+        self.assertFalse(runs.exists() and any(runs.iterdir()))
+
+    def test_a_waiting_task_does_not_starve_queued_work(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('waiting')))
+        self.assertTrue(self.f.submit(self.command_spec('ordinary')))
+        result = self.f.run_one()
+        self.assertEqual(result['id'], 'ordinary')
+        self.assertTrue((self.root / 'marker').exists())
+        self.assertEqual(self.f.inspect('waiting')['state'], 'awaiting_approval')
+
+    def test_a_grant_queues_the_task_and_records_the_decider(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('granted')))
+        decided = self.f.decide('granted', 'granted', 'operator', 'a note')
+        self.assertEqual(decided['state'], 'queued')
+        record = self.f.inspect('granted')['approval']
+        self.assertEqual(record['decision'], 'granted')
+        self.assertEqual(record['decider'], 'operator')
+        self.assertEqual(record['note'], 'a note')
+        self.assertGreater(record['at'], 0)
+        self.assertEqual(record['spec_hash'], self.f.inspect('granted')['spec_hash'])
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        self.assertTrue((self.root / 'marker').exists())
+
+    def test_a_refusal_is_terminal_and_records_no_run(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('refused')))
+        decided = self.f.decide('refused', 'refused', 'operator', 'not now')
+        self.assertEqual(decided['state'], 'refused')
+        self.assertEqual(self.f.inspect('refused')['approval']['decision'], 'refused')
+        self.assertIsNone(self.f.run_one())
+        self.assertFalse((self.root / 'marker').exists())
+
+    def test_decisions_fail_closed(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('closed')))
+        with self.assertRaises(ValueError):
+            self.f.decide('unknown-job', 'granted', 'operator')
+        with self.assertRaises(ValueError):
+            self.f.decide('closed', 'maybe', 'operator')
+        with self.assertRaises(ValueError):
+            self.f.decide('closed', 'granted', '   ')
+        self.f.decide('closed', 'granted', 'operator', 'first')
+        with self.assertRaises(ValueError):
+            self.f.decide('closed', 'refused', 'operator', 'second')
+        record = self.f.inspect('closed')['approval']
+        self.assertEqual(record['decision'], 'granted')
+        self.assertEqual(record['note'], 'first')
+        self.f.db.execute("UPDATE jobs SET state='running' WHERE id='closed'")
+        with self.assertRaises(ValueError):
+            self.f.decide('closed', 'refused', 'operator')
+
+    def test_the_decider_identity_is_recorded_not_authorized(self):
+        block = self.envelope(decider='factory-director')
+        self.assertTrue(self.f.submit(self.envelope_spec('identity', block)))
+        self.f.decide('identity', 'granted', 'someone-else', 'note')
+        saved = self.f.inspect('identity')
+        self.assertEqual(saved['envelope']['decider'], 'factory-director')
+        self.assertEqual(saved['approval']['decider'], 'someone-else')
+
+    def test_the_decision_survives_a_backup_and_restore(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('restored')))
+        self.f.decide('restored', 'granted', 'operator', 'note')
+        before = self.f.inspect('restored')['approval']
+        destination = self.root / 'backup.sqlite3'
+        self.f.backup(destination)
+        self.f.restore(destination)
+        after = self.f.inspect('restored')
+        self.assertEqual(after['approval'], before)
+        self.assertEqual(after['state'], 'queued')
+
+    def test_cancelling_a_waiting_task_records_that_nothing_ran(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('cancelled')))
+        self.f.cancel('cancelled')
+        saved = self.f.inspect('cancelled')
+        self.assertEqual(saved['state'], 'cancelled')
+        self.assertIn('dispatched no command', saved['detail'])
+        self.assertIn('no external effect', saved['detail'])
+        self.assertIsNone(saved['approval'])
+        self.assertEqual(self.f.db.execute(
+            "SELECT COUNT(*) AS n FROM approvals WHERE job_id='cancelled'").fetchone()['n'], 0)
+        with self.assertRaises(ValueError):
+            self.f.decide('cancelled', 'granted', 'operator')
+        with self.assertRaises(ValueError):
+            self.f.cancel('cancelled')
+
+    def test_dispatch_is_refused_without_a_recorded_grant(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('forced')))
+        self.f.db.execute("UPDATE jobs SET state='queued' WHERE id='forced'")
+        self.f.db.commit()
+        self.assertIsNone(self.f.run_one())
+        self.assertEqual(self.f.inspect('forced')['state'], 'awaiting_approval')
+        self.assertFalse((self.root / 'marker').exists())
+
+    def test_the_decide_command_reports_errors_as_json(self):
+        spec = self.envelope_spec('cli')
+        path = self.root / 'cli.json'
+        path.write_text(json.dumps(spec))
+        self.run_cli('submit', str(path))
+        granted = self.run_cli('decide', 'cli', '--decision', 'granted', '--decider', 'operator')
+        self.assertEqual(json.loads(granted.stdout)['state'], 'queued')
+        failed = self.run_cli('decide', 'missing', '--decision', 'granted', '--decider', 'operator', expect=1)
+        self.assertIn('error', json.loads(failed.stdout))
+        self.assertNotIn('Traceback', failed.stderr)
+        status = self.run_cli('status')
+        rows = json.loads(status.stdout)
+        self.assertEqual(rows[0]['approval']['decider'], 'operator')
+        self.assertEqual(rows[0]['id'], 'cli')

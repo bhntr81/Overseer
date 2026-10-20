@@ -1184,3 +1184,143 @@ A few citations in the pillar map point at blank lines
 `overseer/modelchoice.py:292`, `docs/FACTORY_EXECUTION.md:97`). They predate
 this increment, they were not touched here, and they remain as a separate
 housekeeping item.
+
+### The capability envelope, the awaiting-approval state, and the decision record
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. The increment is filed against exactly one pillar row, the
+PERMISSIONS row of `docs/HARNESS_FRAMEWORK.md`, whose next increment named
+exactly this step: carry an envelope mode on the task spec with an
+awaiting-approval state and an approval record in the ledger.
+
+A command-mode task may now carry an optional `envelope` block with exactly
+four keys: `mode`, one of the blueprint's four capability modes
+(`investigation`, `draft_change`, `bounded_maintenance`, `release`);
+`scope`, one to sixteen entries of text; `requires_decision`, a real boolean;
+and `decider`, the name the submitter says may decide. Every rejection is a
+`ValueError` whose message names the offending field, unhashable values
+included, so the runner's command line keeps its `{"error": ...}` contract
+instead of printing a traceback.
+
+The mode, the scope, and the decider identity are recorded, never enforced.
+There is no roster check, no scope check, and no policy engine: the code does
+not compare what the commands do with the declared scope, and the recorded
+decider is free text compared with nothing. The one enforced part is the gate.
+A task whose envelope declares that a fresh decision is required is submitted
+into the new durable state `awaiting_approval` and is not dispatched. It does
+not create an evidence directory, does not start a child process, and does
+not touch the workspace. A grant moves it to `queued`; a refusal moves it to
+the terminal state `refused`. The decision is written to a new `approvals`
+ledger table and to the event log, and the grant is written in the same
+transaction as the state change, so a crash cannot leave a task queued
+without a recorded decision. `run_one` re-checks the gate before dispatch and
+puts a task back to `awaiting_approval` if a grant is missing, so the gate
+holds under a crash as well.
+
+```text
+python3 -m unittest discover -s tests -p 'test_factory.py' -v
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --check
+```
+
+Results, copied from the final run: the factory suite ran 64 tests in 4.014
+seconds, OK; the full suite ran 150 tests in 15.059 seconds, OK; the document
+reference checker reported `97 references checked in HARNESS_FRAMEWORK.md`;
+`git diff --check` exited 0. The factory suite grew from 48 to 64 tests.
+Token usage and monetary cost were not supplied by the runtime and remain
+unavailable.
+
+Files changed: `overseer/factory.py` (the envelope constants, the envelope
+validation, the envelope in the command-mode key set, the `approvals` table in
+both schema scripts, the awaiting-approval submission, the `decide` method, the
+decision in the inspect result, the cancel path for a waiting task, the
+dispatch gate in `run_one`, the `decide` subcommand, and the decision column
+in `status`), `tests/test_factory.py` (a new `EnvelopeTests` class),
+`docs/HARNESS_FRAMEWORK.md` (the PERMISSIONS row, the process-order prose,
+two claims bullets, and every re-cited line), `README.md` (the envelope, the
+state, and the `decide` command), and this log.
+
+Acceptance checks and the test that proves each one:
+
+1. a valid envelope is accepted, recorded, and written into the run evidence
+   — `test_valid_envelope_is_accepted_and_recorded`
+2. strict field validation, including the missing and unknown key cases —
+   `test_envelope_field_validation_is_strict`
+3. unhashable values are `ValueError`, never `TypeError` —
+   `test_unhashable_envelope_values_are_validation_errors`
+4. `requires_decision` accepts only real booleans —
+   `test_requires_decision_accepts_only_real_booleans`
+5. the three controller-owned modes still reject the block and keep their
+   exact key sets — `test_controller_modes_reject_an_envelope_and_keep_their_key_sets`
+6. the envelope is covered by the frozen spec hash —
+   `test_envelope_is_covered_by_the_frozen_spec_hash`
+7. a waiting task is not dispatched and creates no evidence —
+   `test_a_waiting_task_is_not_dispatched`
+8. a waiting task does not starve queued work —
+   `test_a_waiting_task_does_not_starve_queued_work`
+9. a grant queues the task and records the decider, the decision, the time,
+   the note, and the spec hash —
+   `test_a_grant_queues_the_task_and_records_the_decider`
+10. a refusal is terminal and records no run —
+    `test_a_refusal_is_terminal_and_records_no_run`
+11. the fail-closed cases: unknown task, invalid decision word, empty decider,
+    a second decision, and a decision on a live task —
+    `test_decisions_fail_closed`
+12. a decider that differs from the envelope's decider is accepted and both
+    names are visible — `test_the_decider_identity_is_recorded_not_authorized`
+13. the decision survives a backup and restore round trip —
+    `test_the_decision_survives_a_backup_and_restore`
+14. cancelling a waiting task records that nothing ran and records no approval
+    — `test_cancelling_a_waiting_task_records_that_nothing_ran`
+15. dispatch is refused without a recorded grant, even if the state was forced
+    — `test_dispatch_is_refused_without_a_recorded_grant`
+16. the `decide` command line prints JSON, exits 1 with `{"error": ...}` and
+    no traceback for an unknown task, and the `status` rows carry the
+    decision — `test_the_decide_command_reports_errors_as_json`
+17. `inspect` carries the envelope and the approval record —
+    `test_valid_envelope_is_accepted_and_recorded` and
+    `test_the_decider_identity_is_recorded_not_authorized`
+
+Disagreements between the blueprint, the routing policy, and the code, kept
+visible rather than smoothed over:
+
+- The blueprint's envelope table gives each mode an authority boundary. The
+  code records the mode name and the scope text and enforces neither. The
+  gate is the only enforced part.
+- The blueprint asks for a fresh decision only when the action exceeds the
+  envelope, materially changes the product, or needs a delegation that was
+  not granted. That is a comparison between the action and the envelope, and
+  the code cannot make it, so the submitter's `requires_decision` flag is the
+  only trigger.
+- `factory/routing-policy.json` names
+  `approval_owner: factory_director_within_ceo_delegation`. No runtime code
+  reads that file and the recorded decider is free text, so no delegation is
+  checked.
+- The blueprint asks for pause-dispatch, inspect, cancel, reconcile,
+  retry-with-reason, and rollback controls. The factory now has a
+  pre-dispatch wait, inspect, cancel, reconcile, and the backup and restore
+  pair. It has no operator pause of running work and no retry-with-reason
+  path.
+- `docs/FACTORY_EXECUTION.md` documents the runner's command surface and does
+  not mention `decide`. That file is outside this increment's scope, so the
+  drift is recorded here as work for a later increment.
+
+Two sentences in `docs/HARNESS_FRAMEWORK.md` were false once the gate
+existed, and they were corrected with the change recorded here: the
+process-order paragraph said "There is still no general permission envelope",
+and the claims list said "There is no approval gate and no approver
+identity". They now state what exists, a recorded envelope and one
+pre-dispatch gate in the factory, and what still does not, an approver
+identity check, an enforced scope, a policy engine, and an operator pause of
+running work. Every other pillar row, including the CONTRACT row and its
+sentence that the monitor's request contract is still one free-text string,
+is unchanged. Every `path:line` citation in the file was re-cited to the line
+that now holds the claimed content and re-read by content, because the
+reference checker proves only that a path exists and a line is in range.
+
+Not touched: the live tmux server and every pane, the running monitor service
+(still PID 3550026, not restarted), the live factory ledger at
+`~/.local/state/overseer/factory`, `config.json`, the monitor's own modules,
+`docs/FACTORY_EXECUTION.md`, `factory/tasks/overseer-checks.json`, and
+`factory/routing-policy.json`.
