@@ -21,6 +21,14 @@ class MonitorTests(unittest.TestCase):
             data[field] = value
             self.assertFalse(Snapshot(**data).ready)
 
+    def test_composer_placeholder_variants(self):
+        for marker in ("›", "»"):
+            placeholder = f"{marker} Ask Codex to do anything"
+            self.assertTrue(Snapshot("%0", "codex", "123", "text", placeholder, "0", "0", 2).ready)
+            self.assertFalse(Snapshot("%0", "codex", "123", "text", placeholder, "0", "0", 3).ready)
+            self.assertFalse(Snapshot("%0", "codex", "123", "text", f"{marker} draft", "0", "0", 2).ready)
+            self.assertTrue(Snapshot("%0", "codex", "123", "text", marker, "0", "0").ready)
+
     def test_dry_run_never_sends(self):
         backend = Mock()
         backend.panes.return_value = ["%0"]

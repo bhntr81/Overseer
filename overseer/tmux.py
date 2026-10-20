@@ -27,10 +27,12 @@ class Snapshot:
 
     @property
     def ready(self):
+        # Codex renders the composer as "›" or "»" depending on the build.
         return (self.process in {"codex", "claude"}
                 and self.mode == "0" and self.dead == "0"
-                and (self.cursor_line.strip() in {">", "❯", "›"}
-                     or (self.cursor_line.strip() == "› Ask Codex to do anything"
+                and (self.cursor_line.strip() in {">", "❯", "›", "»"}
+                     or (self.cursor_line.strip() in {"› Ask Codex to do anything",
+                                                     "» Ask Codex to do anything"}
                          and self.cursor_x == 2)))
 
 

@@ -807,3 +807,35 @@ tests passed and `git diff --check` is clean; `git status --porcelain` is
 unchanged. No code, config, or documentation file was modified. Remaining
 open work: the `»` composer placeholder is still unaccepted by
 `Snapshot.ready`, and the stale-process fix is still uncommitted.
+
+### Codex composer placeholder, committed working tree, service verification
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. `Snapshot.ready` now accepts the Codex `»` composer marker
+alongside `>`, `❯`, and `›`, in both the bare-marker and the
+`Ask Codex to do anything` placeholder forms, keeping the `cursor_x == 2`
+guard. The working tree was committed as five ordered commits, and each commit
+was verified green by running that commit's own snapshot through
+`scripts/check`: 67, 92, 92, 92, and 93 tests. The `»` fix and its test
+landed in the last commit.
+
+```text
+python3 scripts/check
+systemctl --user restart overseer.service
+```
+
+Results: 93 tests passed in 7.457 seconds, `git diff --check` clean, `git
+status --porcelain` clean after the commits, and the service restarted to PID
+3274976 at 22:50:20 with 0 `queue observation failed` lines afterwards. The
+`»` fix took effect: at 22:53:21 the monitor logged `queue enqueued %3 at
+position 1` and at 22:53:22 `%3 dispatched from FIFO queue`, 181 seconds after
+the restart, which is the configured idle threshold. The prompt was typed and
+submitted; the transcript shows it as a submitted user message prefixed with
+`›`, so the turn-boundary detection in `scheduler.response` is unaffected by
+the `»` composer glyph. The `%3` client then returned
+`The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT
+account.`, so that session cannot run its configured model, and the monitor
+holds the FIFO reservation on `%3` and logged `queue holds %3: delivery or
+completion remains unconfirmed; inspect this pane` at 22:55:22. Operator
+action is required to release that reservation. No pane was enrolled,
+unwatched, or messaged by hand.
