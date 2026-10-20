@@ -69,12 +69,23 @@ the workspace file tree: it selects the files the task commands name or whose
 path matches the task terms, extracts their structural symbols, and writes the
 map to `codebase.json` in the run evidence, which the worker receives through
 `OVERSEER_CODEBASE_PATH`, `OVERSEER_CODEBASE_FILES`,
-`OVERSEER_CODEBASE_SELECTED`, and `OVERSEER_CODEBASE_SUMMARY`. The map names
+`OVERSEER_CODEBASE_SELECTED`, `OVERSEER_CODEBASE_SUMMARY`, and
+`OVERSEER_CODEBASE_RELATIONS`. The map names
 the files and the symbols and carries a bounded excerpt of their code: at
-most 8 KiB and 60 lines per file, and 32 KiB for the whole attempt. A file
+most 8 KiB and 60 lines per file, and 32 KiB for the whole attempt. It also
+relates each selected symbol to the code that calls it and to the test files
+that cover it. That relation is a static reference and not a proven call:
+Python is parsed, every other language is matched textually, and an attribute
+reference does not name the object it belongs to. The search is capped at 400
+files and 2 MiB, with 20 callers and 10 tests per symbol; the size of a file
+is checked before it is opened, so the bytes read never pass the bound. A
+symbol nothing references is recorded as such, with the number of files that
+were searched, and a corpus the cap truncated is recorded as truncated, with
+the reason that says so. A file
 whose name marks it as a secret is never read for its content, and a file that
 is binary, too large, or not text is left alone. The manifest records the
-excerpt's line ranges and byte counts.
+excerpt's line ranges and byte counts, and the relation counts and the
+per-symbol entries.
 A command-mode task must carry a `contract` block that states the
 role, risk tier, external effects, protected paths, approval requirements,
 acceptance identifiers, required capabilities, project constraints, measured

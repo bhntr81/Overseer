@@ -1025,6 +1025,9 @@ class Factory:
         env['OVERSEER_CODEBASE_FILES'] = str(context.get('file_count') or 0)
         env['OVERSEER_CODEBASE_SELECTED'] = str(len(context.get('selected') or []))
         env['OVERSEER_CODEBASE_SUMMARY'] = codebase_summary(context)
+        relations = context.get('relations') or {}
+        env['OVERSEER_CODEBASE_RELATIONS'] = str(
+            (relations.get('caller_count') or 0) + (relations.get('test_count') or 0))
         return env
 
     def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
@@ -1047,6 +1050,9 @@ class Factory:
         assembled = (codebase or {}).get('context') or {}
         selected = list(assembled.get('selected') or [])
         symbol_count = sum(len(entry.get('symbols') or []) for entry in selected)
+        relations = assembled.get('relations') or {}
+        caller_count = relations.get('caller_count') or 0
+        test_count = relations.get('test_count') or 0
         commands = []
         for result in results:
             if 'argv' not in result:
@@ -1071,12 +1077,14 @@ class Factory:
              'why': 'the acceptance commands define the required behaviour of the attempt'},
             {'item': 'relevant_code_and_interfaces',
              'source': ('the workspace file tree: %d files, %d selected for this task with '
-                        '%d structural symbols and %d bytes of code excerpt'
+                        '%d structural symbols, %d bytes of code excerpt, and %d caller and '
+                        '%d test references'
                         % (assembled.get('file_count') or 0, len(selected), symbol_count,
-                           assembled.get('excerpt_bytes') or 0))
+                           assembled.get('excerpt_bytes') or 0, caller_count, test_count))
                        if assembled.get('assembled') else None,
-             'why': ('the repository map names the files, the symbols, and the line ranges '
-                     'of the code the attempt can read'
+             'why': ('the repository map names the files, the symbols, the line ranges '
+                     'of the code the attempt can read, and the callers and the tests '
+                     'of those symbols'
                      if assembled.get('assembled') else
                      'no codebase context was assembled: %s' % (
                          assembled.get('reason') or 'the workspace holds no readable file'))},
@@ -1150,6 +1158,30 @@ class Factory:
                               'excerpt_skipped': (entry.get('excerpt') or {}).get('skipped')}
                              for entry in selected],
                 'symbol_count': symbol_count,
+                'relations': {
+                    'candidate_files': relations.get('candidate_files') or 0,
+                    'searched_files': relations.get('searched_files') or 0,
+                    'opened_files': relations.get('opened_files') or 0,
+                    'truncated': bool(relations.get('truncated')),
+                    'bytes_read': relations.get('bytes_read') or 0,
+                    'caller_count': caller_count,
+                    'test_count': test_count,
+                    'test_file_count': relations.get('test_file_count') or 0,
+                    'test_files': relations.get('test_files') or [],
+                    'test_files_truncated': bool(relations.get('test_files_truncated')),
+                    'secrets_excluded': relations.get('secrets_excluded') or 0,
+                    'skipped': relations.get('skipped') or [],
+                    'reason': relations.get('reason'),
+                    'symbols': [{'path': entry['path'],
+                                 'symbol': relation['symbol'],
+                                 'callers': [{'file': caller['file'], 'line': caller['line']}
+                                             for caller in relation['callers']],
+                                 'tests': [{'file': test['file'], 'line': test['line']}
+                                           for test in relation['tests']],
+                                 'reason': relation.get('reason')}
+                                for entry in selected
+                                for relation in entry.get('relations') or []],
+                },
                 'path': (codebase or {}).get('path'),
                 'sha256': (codebase or {}).get('sha256'),
             },

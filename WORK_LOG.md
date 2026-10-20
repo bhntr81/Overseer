@@ -2071,3 +2071,155 @@ pkg/.env -> structure_kind: secret
 The same run showed the bounds holding: a file with a four hundred line
 function was excerpted to sixty lines and 758 bytes with the truncation
 recorded, and the whole attempt was given 969 bytes of code.
+
+### Callers and tests in the codebase context
+
+The user asked for the last part of the CONTEXT pillar: the map must relate
+each selected symbol to the code that calls it and to the test files that
+cover it, not only name the files and the symbols. The prompt for this
+increment was written by the dedicated prompt-writing agent and executed by
+the primary agent, which is the standing workflow and not a deviation from
+it. The prompt is kept in `CONTEXT_CALLERS_TESTS_NEXT_PROMPT.md`.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+```
+
+The relation is a static reference and not a proven call, and the map says so
+wherever it reports one. Python is parsed with the standard library parser:
+a module level symbol is referenced by a name, a method by an attribute, and
+a reference that is the callee of a call is marked as a call. Every other
+language is matched textually with word boundaries, and a textual match is
+reported as a mention, because it may be a comment, a string, or an unrelated
+identifier. A reference inside the definition of the symbol is the
+definition, not a caller, and it is excluded. A method reference does not name
+the object it belongs to, and the entry says that it cannot.
+
+Every symbol of every selected file gets a relation, including the symbols
+nothing references. A symbol with no caller is recorded with an empty list and
+a reason that names the number of files that were searched, so the absence is
+a fact and not a gap. A file is a test file when its path names it so, and a
+reference in a test file is a test relation while any other reference is a
+caller relation. The map also records the inventory of the test files of the
+workspace, taken from the file tree alone.
+
+One limit is worth naming: a reference is a use of the symbol, so an import
+line is not one. A module that only imports a symbol and re-exports it
+therefore shows no caller, and the map says so rather than guessing.
+
+The bounds are explicit and are recorded with the map: at most 400 files
+opened for the search, 2 MiB read for it, 20 callers and 10 tests for one
+symbol, and 20 skipped-file records. The excerpt bounds are unchanged: 8 KiB
+and 60 lines and 12 ranges per file, and 32 KiB for the whole attempt. The
+relation has its own budget and adds no file content to the map; it adds
+paths and line numbers. A file whose name marks it as a secret is never
+opened, and the map records how many such files the workspace holds, whether
+or not the search would have reached them. A file that is binary, too large,
+or not text is left alone with the reason recorded. The relation block
+carries a reason of its own, so what could not be done is stated.
+
+The attempt sees the relation and not only the evidence file: the digest the
+worker receives names the caller and the test of a symbol, the manifest's
+`relevant_code_and_interfaces` source carries the counts, and the manifest's
+`codebase` block holds the per-symbol entries.
+
+The suite grew from 223 to 234 tests, all passing, and the document reference
+checker resolves all 134 citations. The CONTEXT row of the pillar map carries
+this increment, and the next CONTEXT increment is named: the map relates the
+symbols to their code, to their callers, and to their tests, but not to the
+recalled memory records that speak about them.
+
+A live run against a temporary ledger and a temporary workspace showed the
+relation working, and it showed that a secret named file that was never a
+candidate of the search was not counted as excluded. The count is now taken
+from the file tree alone, so every secret named file is counted and none of
+them is opened. The live run reports:
+
+```text
+state: passed
+
+--- relation block ---
+{
+  "candidate_files": 4,
+  "searched_files": 3,
+  "opened_files": 3,
+  "truncated": false,
+  "bytes_read": 340,
+  "test_file_count": 1,
+  "test_files": [
+    "tests/test_widget.py"
+  ],
+  "test_files_truncated": false,
+  "secrets_excluded": 2,
+  "skipped": [
+    {
+      "file": "pkg/secrets.py",
+      "reason": "the file name marks it as a secret"
+    }
+  ],
+  "reason": "one candidate file was left out of the search, and the relation it holds is not represented",
+  "caller_count": 3,
+  "test_count": 1
+}
+
+--- per symbol relation ---
+WidgetFilter         caller=[pkg/widget.py line 7 (call, parsed)] test=[]
+                     reason: no test file references the symbol in the 3 searched files
+WidgetFilter.apply   caller=[pkg/app.py line 5 (call, parsed)] test=[]
+                     reason: no test file references the symbol in the 3 searched files
+build_filter         caller=[pkg/app.py line 4 (call, parsed)] test=[tests/test_widget.py line 4 (call, parsed)]
+unused               caller=[]                                    test=[]
+                     reason: no reference to the symbol was found in the 3 searched files
+test_build           caller=[]                                    test=[]
+                     reason: no reference to the symbol was found in the 3 searched files
+
+--- supplied source ---
+the workspace file tree: 5 files, 2 selected for this task with 5 structural symbols, 206 bytes of code excerpt, and 3 caller and 1 test references
+--- secret content absent from the map --- True
+```
+
+### Review correction: the relation bounds did not hold, and the citations drifted
+
+A fresh reviewer read the increment against the prompt and the acceptance
+criteria. It found that two of the promises the increment made did not hold,
+and that the citations of the document drifted. The findings were checked by
+running them, not taken on trust, and they were true.
+
+The byte budget was checked after a file had been read, so the map reported
+2 MiB while 48 MiB was read, and the files that were read and thrown away did
+not count against the file cap either. The size of a file is now checked
+before it is opened, the number of files opened is counted and reported, the
+search stops when the budget is spent, and a corpus the cap cut short is
+recorded as truncated with the reason that says so. Two tests hold the bounds
+now, and they were checked against the defect: with the old check put back,
+the byte test reads 3,840,243 bytes against a bound of 2,097,152, and the
+file test opens 431 files against a bound of 400.
+
+The relation block carried no reason of its own, the inventory of the test
+files was cut at 400 without saying so, and the digest lost its truncation
+marker when the first selected file alone overflowed it. The block carries a
+reason now, the inventory says whether it was cut, and the marker is kept.
+
+A method that a file that is not Python refers to by its bare name was not
+found, while the same reference in a Python file was, so the map missed a
+caller in one language and found it in the other. The bare name is tried when
+the qualified name is not found, and the entry says that the map cannot
+resolve the object it belongs to.
+
+Eleven citations of `overseer/factory.py` had drifted, because the increment
+added lines to the factory and the document was not re-derived. Two of them
+were in the CONTEXT row itself, and one more had been wrong before this
+increment: the document pointed at a line of the restore path for the run of
+the factory. Every citation was re-derived by hand against the code it
+names, and the reference checker resolves all 134 of them.
+
+The tests were weak in three places and are not weak now: the caller and the
+test of a symbol are checked by their line, the attempt is checked against
+the relation in the digest and not against a file name that the digest also
+lists, and the workspace is checked to be untouched by the search.
+
+A Python file with a null byte past the first kilobyte raised a `ValueError`
+from the parser before Python 3.12, and the map could not read such a file
+at all. The parser call now treats that as the file it is, and the search
+leaves the file alone with the reason recorded.

@@ -1,9 +1,11 @@
 """A bounded map of the workspace and the structure of its relevant files.
 
-The map is assembled from the file tree alone. No command is run, no file
-content is carried into it, and every bound is explicit: the walk is capped,
-the files that are read for their structure are capped, and a file that is too
-large or not text is left alone.
+The map is assembled from the file tree alone. No command is run, and every
+bound is explicit: the walk is capped, the files that are read for their
+structure are capped, a file that is too large or not text is left alone, and
+the excerpt of a symbol and the relation of a symbol to its callers and its
+tests are each capped by their own budget. A file whose name marks it as a
+secret is never opened.
 """
 import ast
 import os
@@ -36,6 +38,16 @@ MAX_EXCERPT_BYTES = 8 * 1024
 MAX_EXCERPT_LINES = 60
 MAX_EXCERPT_RANGES = 12
 MAX_EXCERPT_TOTAL_BYTES = 32 * 1024
+# The bounds of the relation search: the files it may open, the bytes it may
+# read, and the relations it may record for one symbol. The search has its own
+# budget and adds no file content to the map.
+MAX_REFERENCE_FILES = 400
+MAX_REFERENCE_BYTES = 2 * 1024 * 1024
+MAX_CALLERS_PER_SYMBOL = 20
+MAX_TESTS_PER_SYMBOL = 10
+MAX_SKIPPED_REFERENCE_FILES = 20
+# The lines of one file's relations that the digest shows.
+MAX_SUMMARY_SYMBOL_LINES = 6
 # A file whose name marks it as a secret is never read for its content.
 SECRET_SUFFIXES = ('.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.ppk',
                     '.asc', '.gpg', '.kdbx')
@@ -45,6 +57,8 @@ SECRET_NAMES = frozenset({
 })
 WORD = re.compile(r'[a-z0-9]{3,}')
 PATH_LIKE = re.compile(r'[A-Za-z0-9_./-]*[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}')
+IDENTIFIER = re.compile(r'[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*')
+COMMENT_MARKERS = ('#', '//', '--', '/*', '*')
 DECLARATIONS = (
     ('type', re.compile(
         r'^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:public[ \t]+|private[ \t]+|'
@@ -209,9 +223,10 @@ def _python_symbols(text):
     """Return the module level classes and functions of a Python file."""
     try:
         tree = ast.parse(text)
-    except SyntaxError as error:
-        return [{'name': 'syntax error', 'kind': 'error', 'line': error.lineno or 0,
-                 'end': error.lineno or 0}]
+    except (SyntaxError, ValueError) as error:
+        # A source with a null byte raises a ValueError before Python 3.12.
+        line = getattr(error, 'lineno', None) or 0
+        return [{'name': 'syntax error', 'kind': 'error', 'line': line, 'end': line}]
     symbols = []
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
@@ -244,6 +259,296 @@ def _declared_symbols(text):
                 return symbols
     symbols.sort(key=lambda symbol: (symbol['line'], symbol['name']))
     return symbols[:MAX_SYMBOLS]
+
+
+def is_test_file(path):
+    """Report whether a path names a test file, by the path convention alone."""
+    for part in Path(path).parts:
+        if part in ('test', 'tests'):
+            return True
+    name = Path(path).name
+    if name.startswith('test_') or name.endswith('_test') or name.endswith('Test'):
+        return True
+    return '.test.' in name or '.spec.' in name
+
+
+def python_references(text):
+    """Return the references a Python file makes, by the name they use.
+
+    A module level symbol is referenced by a name, a method by an attribute.
+    The map cannot resolve the object an attribute belongs to, so the kind of
+    a method reference says so.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError) as error:
+        # A source with a null byte raises a ValueError before Python 3.12.
+        return None
+    called = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            called.add(id(node.func))
+    names = {}
+    attributes = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            kind = 'call' if id(node) in called else 'name'
+            names.setdefault(node.id, []).append({'line': node.lineno, 'kind': kind})
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            kind = 'call' if id(node) in called else 'attribute'
+            attributes.setdefault(node.attr, []).append({'line': node.lineno, 'kind': kind})
+    return {'names': names, 'attributes': attributes}
+
+
+def textual_references(text):
+    """Return the identifiers a file that is not Python mentions.
+
+    A match is a mention, not a call: it may be a comment, a string, or an
+    unrelated identifier. The lines that are comments are left out.
+    """
+    mentions = {}
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.lstrip().startswith(COMMENT_MARKERS):
+            continue
+        for match in IDENTIFIER.finditer(line):
+            chain = match.group(0)
+            mentions.setdefault(chain, []).append({'line': number, 'kind': 'mention'})
+            if '.' in chain:
+                for part in chain.split('.')[1:]:
+                    mentions.setdefault(part, []).append({'line': number, 'kind': 'mention'})
+    return mentions
+
+
+def _file_references(path, text):
+    """Return the references of one file, and the way they were found."""
+    if path.suffix.lower() in {'.py', '.pyi'}:
+        parsed = python_references(text)
+        if parsed is not None:
+            return {'how': 'parsed', 'names': parsed['names'],
+                    'attributes': parsed['attributes'], 'chains': {}, 'fallback': None}
+        return {'how': 'textual', 'names': {}, 'attributes': {},
+                'chains': textual_references(text),
+                'fallback': ('the file does not parse as Python, so its references were '
+                             'matched textually')}
+    return {'how': 'textual', 'names': {}, 'attributes': {},
+            'chains': textual_references(text), 'fallback': None}
+
+
+def relation_corpus(files, selected_paths):
+    """Return the files the relation search may open, in a fixed order.
+
+    The selected files come first, then the test files of the workspace, then
+    the other source files. The order is the same on every run.
+    """
+    corpus = []
+    seen = set()
+    for path in selected_paths:
+        if path not in seen:
+            seen.add(path)
+            corpus.append(path)
+    tests = []
+    sources = []
+    for entry in files:
+        path = entry['path']
+        if path in seen:
+            continue
+        if is_test_file(path):
+            tests.append(path)
+        elif entry['kind'] == 'source':
+            sources.append(path)
+    return corpus + sorted(tests) + sorted(sources)
+
+
+def search_references(files, selected_paths, root):
+    """Search the workspace for the references to the selected symbols.
+
+    The search reads and does nothing else. A file whose name marks it as a
+    secret is never opened, and a file that is binary, too large, or not text
+    is left alone with the reason recorded. The byte budget is checked against
+    the size of a file before it is opened, so the bytes read never pass the
+    bound.
+    """
+    corpus = relation_corpus(files, selected_paths)
+    references = {}
+    skipped = []
+    left_out = 0
+    bytes_read = 0
+    opened = 0
+    searched = 0
+    truncated = False
+    # Every secret named file of the workspace is kept unopened. The count is
+    # taken from the file tree alone, so it holds whether or not the file was
+    # a candidate of the search.
+    secrets = sum(1 for entry in files if is_secret(entry['path']))
+    for path in corpus:
+        if opened >= MAX_REFERENCE_FILES or bytes_read >= MAX_REFERENCE_BYTES:
+            truncated = True
+            break
+        target = root / path
+        if is_secret(target):
+            left_out += 1
+            _record_skip(skipped, path, 'the file name marks it as a secret')
+            continue
+        try:
+            size = target.stat().st_size
+        except OSError as error:
+            left_out += 1
+            _record_skip(skipped, path, 'the file could not be read: %s' % error)
+            continue
+        if size > MAX_FILE_BYTES:
+            left_out += 1
+            _record_skip(skipped, path, 'the file is larger than %d bytes' % MAX_FILE_BYTES)
+            continue
+        if bytes_read + size > MAX_REFERENCE_BYTES:
+            # The size of the file is checked before it is opened, so the
+            # bytes read never pass the bound.
+            truncated = True
+            left_out += 1
+            _record_skip(skipped, path, 'the relation search reached its byte budget')
+            break
+        opened += 1
+        try:
+            text = target.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            left_out += 1
+            _record_skip(skipped, path, 'the file is not readable text')
+            continue
+        if '\0' in text:
+            left_out += 1
+            _record_skip(skipped, path, 'the file holds binary data')
+            continue
+        bytes_read += size
+        searched += 1
+        references[path] = _file_references(target, text)
+    inventory = sorted(entry['path'] for entry in files if is_test_file(entry['path']))
+    reason = None
+    if truncated:
+        reason = ('the search stopped after %d of the %d candidate files, and the '
+                  'relation outside the searched set is not represented'
+                  % (searched, len(corpus)))
+    elif left_out == 1:
+        reason = ('one candidate file was left out of the search, and the relation it '
+                  'holds is not represented')
+    elif left_out:
+        reason = ('%d candidate files were left out of the search, and the relation '
+                  'they hold is not represented' % left_out)
+    facts = {
+        'candidate_files': len(corpus),
+        'searched_files': searched,
+        'opened_files': opened,
+        'truncated': truncated,
+        'bytes_read': bytes_read,
+        'test_file_count': len(inventory),
+        'test_files': inventory[:MAX_REFERENCE_FILES],
+        'test_files_truncated': len(inventory) > MAX_REFERENCE_FILES,
+        'secrets_excluded': secrets,
+        'skipped': skipped,
+        'reason': reason,
+    }
+    return {'facts': facts, 'references': references}
+
+
+def _record_skip(skipped, path, reason):
+    """Keep one skipped file, up to the bound of the skipped records."""
+    if len(skipped) < MAX_SKIPPED_REFERENCE_FILES:
+        skipped.append({'file': path, 'reason': reason})
+
+
+def symbol_relations(entry, references, searched_files):
+    """Return the relation of every symbol of one selected file.
+
+    A relation is a static reference, not a proven call. Python is parsed;
+    every other language is matched textually and says so.
+    """
+    path = entry['path']
+    relations = []
+    for symbol in entry.get('symbols') or []:
+        relations.append(_relation_of(symbol, path, references, searched_files))
+    return relations
+
+
+def _relation_of(symbol, path, references, searched_files):
+    """Return the callers and the tests that reference one symbol."""
+    name = symbol.get('name') or ''
+    bare = name.rsplit('.', 1)[-1]
+    start = int(symbol.get('line') or 0)
+    end = int(symbol.get('end') or 0)
+    callers = []
+    tests = []
+    for other in references:
+        found = references[other]
+        how = found['how']
+        if how == 'parsed':
+            if '.' in name:
+                hits = found['attributes'].get(bare) or []
+            else:
+                hits = found['names'].get(name) or []
+            by_bare = False
+        else:
+            hits = found['chains'].get(name) or []
+            by_bare = False
+            if not hits and '.' in name:
+                # The qualified name was not found, so the bare name of the
+                # method is tried. The object it belongs to cannot be
+                # resolved, and the entry says so.
+                hits = found['chains'].get(bare) or []
+                by_bare = bool(hits)
+        for hit in hits:
+            line = hit['line']
+            # A reference inside the definition of the symbol is the
+            # definition, not a caller.
+            if other == path and start and start <= line <= end:
+                continue
+            record = {'file': other, 'line': line, 'kind': hit['kind'], 'how': how,
+                      'reason': _reference_reason(hit['kind'], how, found.get('fallback'),
+                                                 by_bare)}
+            if is_test_file(other):
+                tests.append(record)
+            else:
+                callers.append(record)
+    caller_total = len(callers)
+    test_total = len(tests)
+    callers = callers[:MAX_CALLERS_PER_SYMBOL]
+    tests = tests[:MAX_TESTS_PER_SYMBOL]
+    reasons = []
+    if not callers and not tests:
+        reasons.append('no reference to the symbol was found in the %d searched files'
+                       % searched_files)
+    elif not callers:
+        reasons.append('no caller outside the test files references the symbol in the '
+                       '%d searched files' % searched_files)
+    elif not tests:
+        reasons.append('no test file references the symbol in the %d searched files'
+                       % searched_files)
+    if caller_total > len(callers):
+        reasons.append('the caller list is truncated at %d of %d references'
+                       % (len(callers), caller_total))
+    if test_total > len(tests):
+        reasons.append('the test list is truncated at %d of %d references'
+                       % (len(tests), test_total))
+    return {'symbol': name, 'callers': callers, 'tests': tests,
+            'reason': '; '.join(reasons) or None}
+
+
+def _reference_reason(kind, how, fallback, by_bare=False):
+    """Return the reason that states what a reference is worth."""
+    parts = []
+    if fallback:
+        parts.append(fallback)
+    if kind == 'call':
+        parts.append('the reference is the callee of a call')
+    elif kind == 'attribute':
+        parts.append('the reference is to an attribute of that name, and the map '
+                     'cannot resolve the object it belongs to')
+    elif kind == 'name':
+        parts.append('the reference names the symbol, and it is not a call')
+    else:
+        parts.append('the match is textual, and it may be a comment, a string, or an '
+                     'unrelated identifier')
+    if by_bare:
+        parts.append('the match is by the bare name of the method, and the map cannot '
+                     'resolve the object it belongs to')
+    return '; '.join(parts)
 
 
 def task_terms(spec):
@@ -376,6 +681,22 @@ def assemble(workspace, spec):
             excerpt_bytes += piece['bytes']
             budget -= piece['bytes']
         detailed.append(item)
+    # The relation search relates each selected symbol to the code that calls
+    # it and the test files that cover it. It is a static reference, not a
+    # proven call, and it is bounded like every other part of the map.
+    search = search_references(files, [item['path'] for item in detailed], root)
+    references = search['references']
+    caller_count = 0
+    test_count = 0
+    for item in detailed:
+        relations = symbol_relations(item, references, search['facts']['searched_files'])
+        item['relations'] = relations
+        for relation in relations:
+            caller_count += len(relation['callers'])
+            test_count += len(relation['tests'])
+    facts = search['facts']
+    facts['caller_count'] = caller_count
+    facts['test_count'] = test_count
     return {
         'version': 1,
         'assembled': True,
@@ -386,24 +707,82 @@ def assemble(workspace, spec):
         'terms': sorted(terms),
         'selected': detailed,
         'excerpt_bytes': excerpt_bytes,
+        'relations': facts,
         'limits': {'max_files': MAX_FILES, 'max_depth': MAX_DEPTH,
                    'max_file_bytes': MAX_FILE_BYTES, 'max_selected': MAX_SELECTED,
                    'max_symbols': MAX_SYMBOLS,
                    'max_excerpt_bytes': MAX_EXCERPT_BYTES,
                    'max_excerpt_lines': MAX_EXCERPT_LINES,
                    'max_excerpt_ranges': MAX_EXCERPT_RANGES,
-                   'max_excerpt_total_bytes': MAX_EXCERPT_TOTAL_BYTES},
+                   'max_excerpt_total_bytes': MAX_EXCERPT_TOTAL_BYTES,
+                   'max_reference_files': MAX_REFERENCE_FILES,
+                   'max_reference_bytes': MAX_REFERENCE_BYTES,
+                   'max_callers_per_symbol': MAX_CALLERS_PER_SYMBOL,
+                   'max_tests_per_symbol': MAX_TESTS_PER_SYMBOL,
+                   'max_skipped_reference_files': MAX_SKIPPED_REFERENCE_FILES},
     }
 
 
 def summary(context, limit=SUMMARY_LIMIT):
     """Return a bounded digest of the assembled codebase context."""
-    lines = []
+    searched = (context.get('relations') or {}).get('searched_files') or 0
+    blocks = []
     for entry in context.get('selected') or []:
         names = ', '.join(symbol['name'] for symbol in entry.get('symbols') or [])
-        lines.append('%s (%s, score %s): %s' % (
-            entry['path'], entry.get('reason'), entry.get('score'), names or 'no symbol'))
-    text = '\n'.join(lines)
-    if len(text) > limit:
-        text = text[:limit] + '\n[truncated]'
+        lines = ['%s (%s, score %s): %s' % (
+            entry['path'], entry.get('reason'), entry.get('score'), names or 'no symbol')]
+        relations = entry.get('relations') or []
+        for relation in relations[:MAX_SUMMARY_SYMBOL_LINES]:
+            lines.append('  %s' % _relation_line(relation, searched))
+        if len(relations) > MAX_SUMMARY_SYMBOL_LINES:
+            lines.append('  (%d more symbols of this file are not shown)'
+                         % (len(relations) - MAX_SUMMARY_SYMBOL_LINES))
+        blocks.append(lines)
+    pieces = []
+    dropped = 0
+    used = 0
+    cut = False
+    for index, lines in enumerate(blocks):
+        piece = '\n'.join(lines)
+        if index == 0:
+            pieces.append(piece[:limit])
+            used = len(pieces[0])
+            cut = len(piece) > limit
+            continue
+        if used + 1 + len(piece) > limit:
+            dropped += 1
+            continue
+        pieces.append(piece)
+        used += 1 + len(piece)
+    text = '\n'.join(pieces)
+    if cut or dropped:
+        notes = []
+        if cut:
+            notes.append('the relations of the first file were cut')
+        if dropped:
+            notes.append("%d more files' relations were dropped" % dropped)
+        text += '\n[truncated] %s' % ' and '.join(notes)
     return text
+
+
+def _relation_line(relation, searched):
+    """Return the one line that carries a symbol's relation in the digest."""
+    parts = []
+    callers = relation.get('callers') or []
+    tests = relation.get('tests') or []
+    if callers:
+        first = callers[0]
+        parts.append('caller %s:%d (%s, %s)' % (first['file'], first['line'],
+                                                 first['kind'], first['how']))
+        if len(callers) > 1:
+            parts.append('%d more callers' % (len(callers) - 1))
+    if tests:
+        first = tests[0]
+        parts.append('test %s:%d (%s, %s)' % (first['file'], first['line'],
+                                               first['kind'], first['how']))
+        if len(tests) > 1:
+            parts.append('%d more tests' % (len(tests) - 1))
+    if not parts:
+        return '%s <- no caller and no test found in the %d searched files' % (
+            relation.get('symbol'), searched)
+    return '%s <- %s' % (relation.get('symbol'), ', '.join(parts))

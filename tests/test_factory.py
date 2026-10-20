@@ -13,6 +13,8 @@ from unittest.mock import patch
 
 from overseer.codemap import (
     MAX_EXCERPT_BYTES, MAX_EXCERPT_LINES, MAX_EXCERPT_TOTAL_BYTES,
+    MAX_CALLERS_PER_SYMBOL, MAX_REFERENCE_BYTES, MAX_REFERENCE_FILES,
+    MAX_TESTS_PER_SYMBOL, assemble as assemble_codebase,
 )
 from overseer.factory import (
     CONTRACT_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID,
@@ -2061,6 +2063,259 @@ class ContextTests(unittest.TestCase):
         result = self.f.run_one()
         self.assertEqual(result['state'], 'passed')
         self.assertIn('in the excerpt', (self.root / 'excerpt_seen.txt').read_text())
+
+    def relation_of(self, context, path, symbol):
+        """Return the relation of one symbol of one selected file."""
+        selected = {entry['path']: entry for entry in context['selected']}
+        for relation in selected[path].get('relations') or []:
+            if relation['symbol'] == symbol:
+                return relation
+        raise AssertionError('no relation for %s in %s' % (symbol, path))
+
+    def test_a_caller_is_found_and_related(self):
+        self.write_source('widget.py',
+                          'class WidgetFilter:\n'
+                          '    def apply(self, value):\n'
+                          '        return value\n')
+        self.write_source('app.py',
+                          'from widget import WidgetFilter\n'
+                          '\n'
+                          'def run():\n'
+                          '    return WidgetFilter().apply(3)\n')
+        spec = self.command_spec('caller')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        relation = self.relation_of(context, 'widget.py', 'WidgetFilter.apply')
+        callers = relation['callers']
+        self.assertTrue(any(caller['file'] == 'app.py' and caller['kind'] == 'call'
+                            and caller['how'] == 'parsed' for caller in callers), callers)
+        self.assertTrue(all(caller['reason'] for caller in callers), callers)
+        self.assertIn('app.py', [caller['file'] for caller in callers])
+        lines = {caller['file']: caller['line'] for caller in callers}
+        self.assertEqual(lines['app.py'], 4)
+
+    def test_a_test_file_is_identified_and_related(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('tests/test_widget.py',
+                          'from widget import build_filter\n'
+                          '\n'
+                          'def test_build():\n'
+                          '    assert build_filter() == 1\n')
+        spec = self.command_spec('test-relation')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        relation = self.relation_of(context, 'widget.py', 'build_filter')
+        self.assertTrue(any(test['file'] == 'tests/test_widget.py' for test in relation['tests']),
+                        relation['tests'])
+        self.assertEqual({test['file']: test['line'] for test in relation['tests']}
+                         ['tests/test_widget.py'], 4)
+        self.assertIn('tests/test_widget.py', context['relations']['test_files'])
+        self.assertEqual(context['relations']['test_file_count'], 1)
+
+    def test_a_symbol_nothing_references_is_recorded_as_a_fact(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        spec = self.command_spec('no-caller')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        relation = self.relation_of(context, 'widget.py', 'build_filter')
+        self.assertEqual(relation['callers'], [])
+        self.assertEqual(relation['tests'], [])
+        self.assertIn('no reference to the symbol was found', relation['reason'])
+        self.assertIn(str(context['relations']['searched_files']), relation['reason'])
+
+    def test_the_relation_search_is_bounded(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        for index in range(MAX_CALLERS_PER_SYMBOL + 5):
+            self.write_source('caller%02d.py' % index,
+                              'from widget import build_filter\n'
+                              '\n'
+                              'def run():\n'
+                              '    return build_filter()\n')
+        spec = self.command_spec('bounded-relation')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        limits = context['limits']
+        self.assertEqual(limits['max_reference_files'], MAX_REFERENCE_FILES)
+        self.assertEqual(limits['max_reference_bytes'], MAX_REFERENCE_BYTES)
+        self.assertEqual(limits['max_callers_per_symbol'], MAX_CALLERS_PER_SYMBOL)
+        self.assertEqual(limits['max_tests_per_symbol'], MAX_TESTS_PER_SYMBOL)
+        self.assertEqual(limits['max_excerpt_bytes'], MAX_EXCERPT_BYTES)
+        self.assertEqual(limits['max_excerpt_lines'], MAX_EXCERPT_LINES)
+        self.assertEqual(limits['max_excerpt_total_bytes'], MAX_EXCERPT_TOTAL_BYTES)
+        self.assertLessEqual(context['relations']['searched_files'], MAX_REFERENCE_FILES)
+        self.assertLessEqual(context['relations']['bytes_read'], MAX_REFERENCE_BYTES)
+        relation = self.relation_of(context, 'widget.py', 'build_filter')
+        self.assertLessEqual(len(relation['callers']), MAX_CALLERS_PER_SYMBOL)
+        self.assertIn('truncated', relation['reason'])
+
+    def test_the_relation_search_opens_no_more_files_than_its_bound(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        for index in range(MAX_REFERENCE_FILES + 30):
+            self.write_source('filler%03d.py' % index, 'def filler():\n    return 1\n')
+        spec = self.command_spec('file-cap')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        selected = {entry['path'] for entry in context['selected']}
+        counts = {}
+        real = Path.read_text
+
+        def counting(self, *args, **kwargs):
+            counts[str(self)] = counts.get(str(self), 0) + 1
+            return real(self, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', counting):
+            again = assemble_codebase(str(self.root), spec)
+        # A file the map selected is read for its structure and its excerpt
+        # as well, so only the files that were read once were opened by the
+        # relation search alone.
+        opened_once = sum(1 for path, count in counts.items() if count == 1)
+        self.assertLessEqual(opened_once + len(selected), MAX_REFERENCE_FILES)
+        self.assertLessEqual(again['relations']['opened_files'], MAX_REFERENCE_FILES)
+        self.assertTrue(again['relations']['truncated'])
+        self.assertIn('not represented', again['relations']['reason'])
+        self.assertGreater(again['relations']['candidate_files'], MAX_REFERENCE_FILES)
+
+    def test_the_relation_search_reads_no_more_bytes_than_its_bound(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        body = '    value_0 = 0\n'
+        for index in range(12):
+            self.write_source('wide%02d.py' % index,
+                              'def wide():\n' + body * 20000)
+        spec = self.command_spec('byte-cap')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        read = []
+        real = Path.read_text
+
+        def counting(self, *args, **kwargs):
+            text = real(self, *args, **kwargs)
+            read.append(len(text.encode('utf-8')))
+            return text
+
+        with patch.object(Path, 'read_text', counting):
+            again = assemble_codebase(str(self.root), spec)
+        # The selected file is read for its structure and its excerpt as
+        # well, so the slack is the size of the files the map selected.
+        slack = sum(path.stat().st_size for path in self.root.rglob('*.py')
+                    if path.name == 'widget.py') * 3
+        self.assertLessEqual(sum(read), MAX_REFERENCE_BYTES + slack)
+        self.assertLessEqual(again['relations']['bytes_read'], MAX_REFERENCE_BYTES)
+        self.assertTrue(again['relations']['truncated'])
+        self.assertIn('not represented', again['relations']['reason'])
+
+    def test_the_relation_search_leaves_the_workspace_alone(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('app.py',
+                          'from widget import build_filter\n'
+                          '\n'
+                          'def run():\n'
+                          '    return build_filter()\n')
+        before = {str(path): path.read_bytes()
+                  for path in sorted(self.root.rglob('*')) if path.is_file()}
+        spec = self.command_spec('read-only')
+        spec['objective'] = 'repair the widget filter'
+        assemble_codebase(str(self.root), spec)
+        after = {str(path): path.read_bytes()
+                 for path in sorted(self.root.rglob('*')) if path.is_file()}
+        self.assertEqual(before, after)
+
+    def test_a_secret_named_file_is_never_opened_for_the_relation(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('secrets.py', 'build_filter()\n')
+        self.write_source('secrets.json', '{"build_filter": true}\n')
+        spec = self.command_spec('secret-relation')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        relation = self.relation_of(context, 'widget.py', 'build_filter')
+        self.assertEqual(relation['callers'], [])
+        self.assertEqual(context['relations']['secrets_excluded'], 2)
+        skipped = {entry['file']: entry['reason'] for entry in context['relations']['skipped']}
+        self.assertIn('secrets.py', skipped)
+        self.assertIn('secret', skipped['secrets.py'])
+        self.assertNotIn('build_filter()', json.dumps(context['relations']))
+
+    def test_the_attempt_sees_the_relation(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('app.py',
+                          'from widget import build_filter\n'
+                          '\n'
+                          'def run():\n'
+                          '    return build_filter()\n')
+        self.write_source('tests/test_widget.py',
+                          'from widget import build_filter\n'
+                          '\n'
+                          'def test_build():\n'
+                          '    assert build_filter() == 1\n')
+        spec = self.command_spec('relation-env', checks=[[sys.executable, '-c',
+                   "from pathlib import Path; text=Path('relation_seen.txt').read_text(); "
+                   "assert 'app.py' in text, text"]])
+        spec['objective'] = 'repair the widget filter'
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import os; from pathlib import Path; "
+                                  "Path('relation_seen.txt').write_text(os.environ.get("
+                                  "'OVERSEER_CODEBASE_SUMMARY',''))"]
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        carried = (self.root / 'relation_seen.txt').read_text()
+        self.assertIn('caller app.py:', carried)
+        self.assertIn('test tests/test_widget.py:', carried)
+        manifest = self.manifest_of(result)
+        supplied = {item['item']: item for item in manifest['supplied']}
+        self.assertIn('caller', supplied['relevant_code_and_interfaces']['source'])
+        self.assertIn('test reference', supplied['relevant_code_and_interfaces']['source'])
+        relations = manifest['codebase']['relations']
+        self.assertGreater(relations['caller_count'], 0)
+        self.assertGreater(relations['test_count'], 0)
+        symbols = {entry['symbol']: entry for entry in relations['symbols']}
+        self.assertIn('build_filter', symbols)
+        self.assertTrue(symbols['build_filter']['callers'])
+        self.assertTrue(symbols['build_filter']['tests'])
+
+    def test_the_relation_is_deterministic(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        self.write_source('app.py',
+                          'from widget import build_filter\n'
+                          '\n'
+                          'def run():\n'
+                          '    return build_filter()\n')
+        spec = self.command_spec('deterministic')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        first = self.codebase_of(result)
+        second = assemble_codebase(str(self.root), spec)
+        self.assertEqual(first['relations'], second['relations'])
+        self.assertEqual(first['selected'], second['selected'])
+
+    def test_a_file_that_is_not_text_is_left_out_of_the_relation(self):
+        self.write_source('widget.py', 'def build_filter():\n    return 1\n')
+        (self.root / 'binary.py').write_bytes(b'\x00\x01\x02binary')
+        (self.root / 'blob.bin').write_bytes(b'\x00\x01\x02binary')
+        spec = self.command_spec('binary-relation')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        skipped = {entry['file']: entry['reason'] for entry in context['relations']['skipped']}
+        self.assertIn('binary.py', skipped)
+        self.assertIn('binary', skipped['binary.py'])
+        relation = self.relation_of(context, 'widget.py', 'build_filter')
+        self.assertEqual(relation['callers'], [])
 
 
 class RequiredContractTests(unittest.TestCase):
