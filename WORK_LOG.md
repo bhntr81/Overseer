@@ -2972,3 +2972,167 @@ shadow the module inside the method. The prompt's line references were
 measured at `9a88598` and were re-measured before anything was edited: all
 resolved, and three of them name the first line of a block rather than its
 first statement, which is correct.
+
+### The handoff record read back and reconciled against the ledger and the workspace
+
+The objective is the CONTEXT row's next increment, quoted: "read the persisted
+handoff record back and reconcile it against the ledger row and the workspace
+— the blueprint's 'the successor checks the ledger and workspace before
+trusting the summary; if they disagree, reconcile'
+(`docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt:299`) is still done by hand, and no
+code reads handoff.json". It is filed against CONTEXT, because the
+reconciliation is the successor's side of the context the handoff record
+carries; no other row's verdict changes. The prompt is
+`CONTEXT_HANDOFF_RECONCILE_NEXT_PROMPT.md`, which states that it was written by
+the dedicated prompt-writing agent; it is committed with this increment. It was
+executed in two sessions. The first, an OpenCode session, did Phase 0 and
+Phase 1 and wrote a first `overseer/reconcile.py`, and then the operator paused
+it. The second, a Claude Code session, resumed at Phase 2 from that session's
+handoff block, verified the tree against it (HEAD `fcf5586`, the test file's
+digest `491ff0f9…3c3121`), and did the rest. There is no `SPEC.md`; the blueprint
+sentence and the CONTEXT row are the ground truth, and both were re-read.
+
+The ten decisions were settled in the prompt and are kept. The module is
+`overseer/reconcile.py`; it imports only the standard library, reads no ledger,
+and starts no process, and the grep for `overseer.factory`, `overseer.codemap`,
+and `subprocess` in it prints nothing. The factory's surface is
+`Factory.reconcile_handoff(job_id)`, which holds the worker lock, and the CLI's
+is `reconcile-handoff <id>`, a name that cannot be confused with the existing
+`reconcile`. The ledger facts are the `jobs` row and the job's latest `handoff`
+event. The workspace facts come from `workdiff.snapshot(workspace,
+hold=False)`, the existing read-only snapshot. The disagreement list is closed
+at nine kinds, and every entry names both sides. The verdict is closed at
+three values: a disagreement outranks an unverifiable fact, and an
+unverifiable fact is never agreement. The result goes to three places and no
+fourth: `reconciliation.json`, a `reconciliation` key in `summary.json`, and one
+`reconciliation` event. The bounds are 64 KiB per record, 64 levels of
+nesting, 20 identifiers, and 32 disagreements.
+
+Two of the decisions depart from the brief's wording, each for a measured
+reason. The `jobs` table has no commit column (`overseer/factory.py:411`), so
+no attempt-start commit can be read back out of the ledger. The revisions are
+therefore anchored in the workspace: `candidate_revision_mismatch` when the
+record says HEAD moved and the workspace's HEAD is not that commit, and
+`base_revision_unanchored` when the workspace's HEAD is neither the record's
+base nor its candidate. The context manifest is not rewritten either. Its digest
+is already recorded in the `context_manifest` event and in `summary.json`, so
+rewriting it would leave the ledger claiming a digest the file no longer has.
+The report says so with `manifest_updated: False` and a `manifest_reason`.
+
+Smaller departures. The secret-name function is `is_secret`, not the prompt's
+`is_secret_path`, because the red test imports `is_secret`; a test holds it
+equal to `overseer.codemap.is_secret`, and the duplication is deliberate so
+that the module imports nothing from codemap. The module does not import `re`,
+because nothing in it needs it. The factory reads `summary.json` to add its
+one key; that is the only file besides the record that the reconciliation
+opens, and it opens it to add to it, not to compare it. The report carries four
+keys beyond the prompt's shape: `not_applicable` (a revision comparison that
+does not apply because the record carries no such revision), `disagreements_beyond_bound`,
+`written`, and `written_reason`. A `spec` column that is not JSON, or a
+contract that is not an object, makes the identifier check unverifiable rather
+than raising. A `handoff` event whose detail carries no digest is reported
+with that detail as the reason.
+
+The red-green separation, with its two returns to Phase 1. The first session
+ended Phase 1 with 21 new tests in `class HandoffReconciliationTests`, red as
+20 errors and 1 failure, and the test file at
+`491ff0f9012383a5576375838ef0255f0c22657130f97e7d63b9f554c63c3121`. In Phase 2,
+20 of 21 passed, and `test_the_reconciliation_never_writes_to_the_workspace_or_to_git`
+failed on the index file's `st_mtime_ns`. A probe outside the suite showed that
+`workdiff.snapshot()` leaves the index untouched, and that the test's own
+`git status --porcelain` rewrites it: that call runs without
+`GIT_OPTIONAL_LOCKS=0`, and git refreshes a racily clean index. In the test,
+that call ran before the index was stat'ed, so the test failed whatever the
+implementation did. Phase 1 was re-entered and the index assertion was moved
+ahead of the test's own git calls, with nothing else changed. The red check
+was re-run on a `git archive HEAD` export with only the new test file copied
+in: 21 tests, 20 errors and 1 failure, digest
+`def20136301fc877b9bd55c5c9bd3e0dfeb93847f97a6e86567526bb9418e2d1`. In Phase
+3, M11 survived. The only identifier test named an identifier outside the
+contract, and a subset comparison flags that too. Phase 1 was re-entered a
+second time to add one assertion to
+`test_acceptance_identifiers_that_do_not_match_the_stored_contract_are_a_disagreement`:
+a record whose lists are empty is a mismatch against a contract that names
+`A1`. The red check on a fresh export again gave 21 tests, 20 errors and 1
+failure. The final Phase 1 digest is
+`305bfddb872e2ac6542cfcb6f808c3bf4d82ade95b212d4489fb2bc440f1e779`, and the
+digest at the end of Phase 2, through Phase 3 and Phase 4, is the same
+`305bfddb…40f1e779`. No implementation file was written while `tests/` was
+open in either return.
+
+The first session's `overseer/reconcile.py` was 341 lines. It lacked the
+`workspace` entry in `unverifiable` that the not-a-git-repository test
+requires, so it was rewritten: the identity comparison is a table, the report
+blocks are built from key tuples, and the module is now 298 lines, under the
+300-line flag of `HARDENING_BLUEPRINT.md`. `overseer/factory.py` grew by 83
+lines, from 2304 to 2387, which is 3.6% and far below the 15% limit.
+
+The commands and their real output on the final tree:
+
+```text
+$ python3 scripts/check
+Ran 371 tests in 44.441s
+OK
+$ python3 scripts/check-doc-references
+204 references checked in HARNESS_FRAMEWORK.md
+$ grep -n "overseer.factory\|overseer.codemap\|subprocess" overseer/reconcile.py
+(no output, exit 1)
+$ python3 -m overseer.factory --db <scratch>/jobs.sqlite3 reconcile-handoff demo
+verdict agree, 0 disagreements, unverifiable [], written True; exit 0
+$ python3 -m overseer.factory --db <scratch>/jobs.sqlite3 reconcile-handoff nope
+{"error": "unknown job"}; exit 1
+```
+
+The test count went from 350 to 371, and the reference count from 189 to
+204.
+
+The mutations, one at a time on implementation code only, each run against the
+new class alone and restored byte for byte (the `sha256sum` of every
+`overseer/*.py` was checked after the set):
+
+- M1, the state comparison dropped: `test_a_ledger_state_changed_after_the_attempt_is_a_disagreement`,
+  `test_the_reconciliation_does_not_resolve_a_disagreement`, `test_the_record_itself_is_not_rewritten`.
+- M2, a disagreement verdict reported as `agree`: the same three tests.
+- M3, `unverifiable` reported as `agree`: the missing-record, JSON-array,
+  wrong-typed-field, not-a-git-repository, and git-unavailable tests.
+- M4, the digest check dropped: `test_a_tampered_record_whose_digest_differs_from_the_ledger_is_a_disagreement`.
+- M5, the identifiers compared against the record's own lists:
+  `test_acceptance_identifiers_that_do_not_match_the_stored_contract_are_a_disagreement`.
+- M6, `GIT_OPTIONAL_LOCKS` set to `1` in the workspace snapshot's git runner:
+  `test_the_reconciliation_never_writes_to_the_workspace_or_to_git`.
+- M7, a malformed record's reason not recorded as unverifiable: the
+  missing-record, JSON-array, and wrong-typed-field tests.
+- M8, the reconciliation calls `transition`: `test_the_reconciliation_never_changes_the_job_state`.
+- M9, the reconciliation rewrites `handoff.json`: the agree, tampered-digest,
+  and record-not-rewritten tests.
+- M10, the identifier lists compared in order: `test_the_identifier_lists_are_compared_as_sets`.
+- M11, the identifier comparison made a subset test:
+  `test_acceptance_identifiers_that_do_not_match_the_stored_contract_are_a_disagreement`,
+  after the second Phase 1 return; before it, M11 survived.
+- M12, a disagreement without its authority side: the job-id, run-id,
+  spec-hash, state, candidate-revision, identifier, and digest tests.
+- M13, the `unverifiable` list emptied in the report: the missing-record and
+  not-a-git-repository tests. The git-unavailable test asserts the reason
+  in the report's `workspace` block and not in the list, so it does not catch
+  M13.
+- M14, `ValueError` removed from the CLI's error handler: `test_the_cli_reports_an_unknown_job_as_a_json_error`.
+- M15, the reconciliation rewrites `summary.json`'s `state`:
+  `test_the_result_is_recorded_in_the_evidence_directory_the_summary_and_the_event`.
+
+The citations. Every `overseer/factory.py` citation in
+`docs/HARNESS_FRAMEWORK.md` was shifted by the measured hunks: +1 after the
+import, +81 after the two new methods, and +83 after the CLI lines. Each
+shifted line was then compared by content with the line it named at `fcf5586`.
+All 78 distinct citations matched, and no cited range straddles an
+insertion. The `tests/test_factory.py` citations all lie before the new class
+and did not move. The fifteen new citations were read by content.
+
+The limits that remain. The reconciliation reports a disagreement and nothing
+acts on it. It never re-reads the run's own results: the identifier lists are
+checked against the contract the ledger stored, not against the exit codes the
+commands produced, so a record that was written wrongly and digested
+faithfully is reported as agreeing. The ledger holds one evidence pointer per
+job, so only the latest run's record is reachable through it. Whether the
+worktree is dirty is reported and not compared. A workspace that moved on
+after the attempt is reported as an unanchored revision, which is not proof
+that the record is wrong.

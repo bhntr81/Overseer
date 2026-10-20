@@ -5,6 +5,7 @@ import fcntl
 from overseer.codemap import assemble as assemble_codebase
 from overseer.codemap import summary as codebase_summary
 from overseer import handoff
+from overseer import reconcile
 from overseer.isolation import run_isolation_probe
 from overseer.skills import provenance as skill_provenance
 from overseer.skills import unchecked as unchecked_provenance
@@ -1423,6 +1424,86 @@ class Factory:
                 self.event(job_id, 'handoff', 'no handoff record: %s' % info.get('reason'))
         return info
 
+    def _ledger_facts(self, row):
+        """Return the ledger row's facts for the reconciliation, and the stored spec."""
+        try:
+            spec = json.loads(row['spec'])
+        except (ValueError, RecursionError):
+            spec = None
+        spec = spec if isinstance(spec, dict) else {}
+        contract = spec.get('contract')
+        ids = contract.get('acceptance_ids') if isinstance(contract, dict) else None
+        facts = {key: row[key] for key in ('id', 'state', 'detail', 'spec_hash', 'run_id',
+                                           'evidence')}
+        facts.update(found=True, recorded_sha256=None, recorded_sha256_reason=None,
+                     acceptance_ids=ids if isinstance(ids, list) else None)
+        event = self.db.execute("SELECT detail FROM events WHERE job_id=? AND state='handoff' "
+                                'ORDER BY seq DESC LIMIT 1', (row['id'],)).fetchone()
+        match = re.fullmatch(r'handoff\.json sha256=([0-9a-f]{64})', event['detail'] or '') \
+            if event else None
+        if match:
+            facts['recorded_sha256'] = match.group(1)
+        else:
+            facts['recorded_sha256_reason'] = (
+                'the ledger records no digest for the handoff record'
+                + ('' if event is None else ': %s' % event['detail']))
+        return facts, spec
+
+    def reconcile_handoff(self, job_id):
+        """Read a job's handoff record back and reconcile it with the ledger and workspace.
+
+        The reconciliation is a report, never a gate: it writes
+        reconciliation.json, adds one key to summary.json, and records one
+        event. It never transitions the job and never rewrites handoff.json; a
+        write that fails is recorded with its reason.
+        """
+        with self.worker_lock():
+            row = self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+            if row is None:
+                raise ValueError('unknown job')
+            ledger, spec = self._ledger_facts(row)
+            evidence = Path(row['evidence']) if row['evidence'] else None
+            workspace = spec.get('workspace')
+            try:
+                snap = workdiff.snapshot(workspace, hold=False)
+            except Exception as error:  # the workspace is evidence, never a gate
+                snap = {'captured': False,
+                        'reason': 'the workspace could not be read: %s' % type(error).__name__}
+            facts = {'path': workspace, 'read': bool(snap.get('captured')),
+                     'reason': snap.get('reason'), 'root': snap.get('root'),
+                     'head': snap.get('head'), 'dirty': bool(snap.get('status'))}
+            report = reconcile.compare(
+                reconcile.read_record(evidence / 'handoff.json' if evidence else None),
+                ledger, facts)
+            report.update(written=evidence is not None, written_reason=None if evidence
+                          else 'the job has no run evidence directory')
+            detail = 'reconciliation verdict=%s disagreements=%d' % (
+                report['verdict'], report['disagreement_count'])
+            if evidence is not None:
+                try:
+                    path = evidence / 'reconciliation.json'
+                    path.write_text(json.dumps(report, indent=2))
+                    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                    detail += ' reconciliation.json sha256=%s' % digest
+                    summary_path = evidence / 'summary.json'
+                    summary = json.loads(summary_path.read_text())
+                    summary['reconciliation'] = {
+                        'path': str(path), 'sha256': digest, 'verdict': report['verdict'],
+                        'disagreement_count': report['disagreement_count'],
+                        'unverifiable_count': len(report['unverifiable'])}
+                    summary_path.write_text(json.dumps(summary, indent=2))
+                except Exception as error:  # the report is evidence, never a gate
+                    stage = 'summary.json' if 'sha256=' in detail else 'reconciliation.json'
+                    reason = '%s could not be written: %s' % (stage, type(error).__name__)
+                    report['written_reason'] = reason
+                    report['written'] = stage == 'summary.json'
+                    detail += '; ' + reason
+            else:
+                detail += '; ' + report['written_reason']
+            with self.db:
+                self.event(job_id, 'reconciliation', detail)
+            return report
+
     def cancel(self, job_id):
         with self.db:
             row = self.db.execute('SELECT state FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -2251,7 +2332,7 @@ def main():
     sub.add_parser('status')
     sub.add_parser('run-one')
     sub.add_parser('reconcile')
-    for action in ['inspect', 'cancel', 'resolve']:
+    for action in ['inspect', 'cancel', 'resolve', 'reconcile-handoff']:
         child = sub.add_parser(action)
         child.add_argument('id')
         if action == 'resolve':
@@ -2273,6 +2354,8 @@ def main():
             result = factory.inspect(args.id)
         elif args.action == 'reconcile':
             result = {'interrupted': factory.reconcile()}
+        elif args.action == 'reconcile-handoff':
+            result = factory.reconcile_handoff(args.id)
         elif args.action == 'resolve':
             factory.resolve(args.id, args.note)
             result = factory.inspect(args.id)

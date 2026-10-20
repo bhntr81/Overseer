@@ -3950,6 +3950,368 @@ class HandoffRecordTests(unittest.TestCase):
         self.assertIn(digest, events)
 
 
+class HandoffReconciliationTests(unittest.TestCase):
+    """A successor reads the handoff record back and reconciles it.
+
+    The reconciliation is a read-only report: it compares the record with the
+    ledger row and with the workspace, and it names both sides of every
+    disagreement it finds. It resolves nothing.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.repo = self.base / 'repo'
+        self.repo.mkdir()
+        self.git('init', '--quiet')
+        for name, data in {'keep.txt': b'a\nb\nc\n', 'pkg/mod.py': b'def f():\n    return 1\n'}.items():
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.commit('base')
+        self.f = Factory(self.base / 'state' / 'jobs.sqlite3')
+        self.addCleanup(self.f.close)
+
+    def git(self, *arguments, cwd=None):
+        result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
+                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                timeout=60)
+        return result
+
+    def commit(self, message):
+        self.git('add', '-A')
+        self.git('commit', '--quiet', '-m', message)
+
+    def spec(self, name, code='pass', checks=None, timeout=5, workspace=None, **overrides):
+        spec = {'id': name, 'objective': 'change the workspace',
+                'workspace': str(self.repo if workspace is None else workspace),
+                'timeout_seconds': timeout,
+                'implementation': [sys.executable, '-c', code],
+                'checks': checks if checks is not None else [[sys.executable, '-c', 'pass']]}
+        spec.update(overrides)
+        return attach_contract(spec)
+
+    def run_record(self, spec, factory=None):
+        """Run the spec and return the result, the record, and the evidence directory."""
+        factory = factory or self.f
+        self.assertTrue(factory.submit(spec))
+        result = factory.run_one()
+        evidence = Path(result['evidence'])
+        record = json.loads((evidence / 'handoff.json').read_text())
+        return result, record, evidence
+
+    def ledger_row(self, job_id):
+        return dict(self.f.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+
+    def recorded_digest(self, job_id):
+        """Return the digest the ledger recorded for the handoff record."""
+        detail = self.f.db.execute(
+            "SELECT detail FROM events WHERE job_id=? AND state='handoff'", (job_id,)).fetchone()
+        self.assertIsNotNone(detail)
+        return detail['detail'].rsplit('=', 1)[1]
+
+    def reseal_record(self, job_id, record):
+        """Write a mutated record back and reseal the digest the ledger recorded."""
+        evidence = Path(self.ledger_row(job_id)['evidence'])
+        path = evidence / 'handoff.json'
+        path.write_text(json.dumps(record, indent=2))
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.f.db.execute("UPDATE events SET detail=? WHERE job_id=? AND state='handoff'",
+                          ('handoff.json sha256=%s' % digest, job_id))
+        self.f.db.commit()
+        return digest
+
+    def kinds(self, report):
+        return sorted(entry['kind'] for entry in report['disagreements'])
+
+    def entry(self, report, kind):
+        for item in report['disagreements']:
+            if item['kind'] == kind:
+                return item
+        self.fail('no %s disagreement in %s' % (kind, self.kinds(report)))
+
+    def unverifiable_fact(self, report, fact):
+        for item in report['unverifiable']:
+            if item['fact'] == fact:
+                return item
+        self.fail('no %s in %s' % (fact, [item['fact'] for item in report['unverifiable']]))
+
+    def test_a_record_that_agrees_with_the_ledger_and_the_workspace_is_agree(self):
+        result, record, evidence = self.run_record(self.spec('agree'))
+        report = self.f.reconcile_handoff('agree')
+        self.assertEqual(report['kind'], 'handoff_reconciliation')
+        self.assertEqual(report['version'], 1)
+        self.assertEqual(report['verdict'], 'agree')
+        self.assertEqual(report['disagreements'], [])
+        self.assertEqual(report['unverifiable'], [])
+        self.assertEqual(report['job_id'], 'agree')
+        self.assertEqual(report['run_id'], result['run_id'])
+        self.assertEqual(report['record']['path'], str(evidence / 'handoff.json'))
+        self.assertEqual(report['record']['sha256'],
+                         hashlib.sha256((evidence / 'handoff.json').read_bytes()).hexdigest())
+        self.assertTrue(report['record']['read'])
+        row = self.ledger_row('agree')
+        self.assertEqual(report['ledger']['state'], row['state'])
+        self.assertEqual(report['ledger']['detail'], row['detail'])
+        self.assertEqual(report['ledger']['spec_hash'], row['spec_hash'])
+        self.assertEqual(report['ledger']['run_id'], row['run_id'])
+        self.assertEqual(report['ledger']['recorded_sha256'], self.recorded_digest('agree'))
+        self.assertTrue(report['workspace']['read'])
+        self.assertEqual(report['workspace']['head'],
+                         self.git('rev-parse', 'HEAD').stdout.decode().strip())
+        self.assertFalse(report['workspace']['dirty'])
+
+    def test_a_ledger_state_changed_after_the_attempt_is_a_disagreement(self):
+        self.run_record(self.spec('moved'))
+        self.f.db.execute("UPDATE jobs SET state='failed', detail='the operator changed it' "
+                          "WHERE id='moved'")
+        self.f.db.commit()
+        report = self.f.reconcile_handoff('moved')
+        self.assertEqual(report['verdict'], 'disagree')
+        entry = self.entry(report, 'state_mismatch')
+        self.assertEqual(entry['record'], 'passed')
+        self.assertEqual(entry['authority'], 'failed')
+        self.assertIn('state', entry['reason'])
+        self.assertEqual(self.entry(report, 'detail_mismatch')['record'],
+                         'implementation and all acceptance commands exited successfully; '
+                         'product review still required')
+
+    def test_a_spec_hash_mismatch_is_a_disagreement(self):
+        result, record, evidence = self.run_record(self.spec('hash'))
+        self.f.db.execute("UPDATE jobs SET spec_hash=? WHERE id='hash'", ('0' * 64,))
+        self.f.db.commit()
+        report = self.f.reconcile_handoff('hash')
+        entry = self.entry(report, 'spec_hash_mismatch')
+        self.assertEqual(entry['record'], record['spec_hash'])
+        self.assertEqual(entry['authority'], '0' * 64)
+
+    def test_a_run_id_mismatch_is_a_disagreement(self):
+        result, record, evidence = self.run_record(self.spec('run'))
+        self.f.db.execute("UPDATE jobs SET run_id='another-run' WHERE id='run'")
+        self.f.db.commit()
+        report = self.f.reconcile_handoff('run')
+        entry = self.entry(report, 'run_id_mismatch')
+        self.assertEqual(entry['record'], result['run_id'])
+        self.assertEqual(entry['authority'], 'another-run')
+
+    def test_a_job_id_mismatch_is_a_disagreement(self):
+        result, record, evidence = self.run_record(self.spec('who'))
+        record['job_id'] = 'somebody-else'
+        self.reseal_record('who', record)
+        report = self.f.reconcile_handoff('who')
+        entry = self.entry(report, 'job_id_mismatch')
+        self.assertEqual(entry['record'], 'somebody-else')
+        self.assertEqual(entry['authority'], 'who')
+
+    def test_a_candidate_revision_that_is_not_the_workspace_head_is_a_disagreement(self):
+        code = ("import subprocess; from pathlib import Path; Path('keep.txt').write_text('z\\n'); "
+                "subprocess.run(['git', '-c', 'user.email=t@e', '-c', 'user.name=t', 'commit', "
+                "'-qam', 'attempt'], check=True)")
+        result, record, evidence = self.run_record(self.spec('commit', code))
+        self.assertIsNotNone(record['candidate_revision']['value'])
+        (self.repo / 'keep.txt').write_text('later\n')
+        self.commit('later')
+        head = self.git('rev-parse', 'HEAD').stdout.decode().strip()
+        report = self.f.reconcile_handoff('commit')
+        entry = self.entry(report, 'candidate_revision_mismatch')
+        self.assertEqual(entry['record'], record['candidate_revision']['value'])
+        self.assertEqual(entry['authority'], head)
+        self.assertIn('base_revision_unanchored', self.kinds(report))
+
+    def test_acceptance_identifiers_that_do_not_match_the_stored_contract_are_a_disagreement(self):
+        result, record, evidence = self.run_record(self.spec('ids'))
+        record['completed_acceptance_ids']['value'] = ['A9']
+        self.reseal_record('ids', record)
+        report = self.f.reconcile_handoff('ids')
+        entry = self.entry(report, 'acceptance_ids_mismatch')
+        self.assertEqual(entry['record']['completed'], ['A9'])
+        self.assertEqual(entry['authority'], ['A1'])
+        # A record that names only some of the contract's identifiers is a
+        # mismatch too, never a partial agreement.
+        record['completed_acceptance_ids']['value'] = []
+        self.reseal_record('ids', record)
+        report = self.f.reconcile_handoff('ids')
+        entry = self.entry(report, 'acceptance_ids_mismatch')
+        self.assertEqual(entry['record'], {'completed': [], 'failing': [], 'not_run': []})
+        self.assertEqual(entry['authority'], ['A1'])
+
+    def test_the_identifier_lists_are_compared_as_sets(self):
+        checks = [[sys.executable, '-c', 'pass'], [sys.executable, '-c', 'pass'],
+                  [sys.executable, '-c', 'raise SystemExit(2)']]
+        result, record, evidence = self.run_record(self.spec('sets', checks=checks))
+        self.assertEqual(record['completed_acceptance_ids']['value'], ['A1', 'A2'])
+        self.assertEqual(record['failing_acceptance_ids']['value'], ['A3'])
+        record['completed_acceptance_ids']['value'] = ['A2', 'A1']
+        self.reseal_record('sets', record)
+        report = self.f.reconcile_handoff('sets')
+        self.assertEqual(report['verdict'], 'agree')
+        self.assertEqual(report['disagreements'], [])
+
+    def test_a_tampered_record_whose_digest_differs_from_the_ledger_is_a_disagreement(self):
+        result, record, evidence = self.run_record(self.spec('tampered'))
+        recorded = self.recorded_digest('tampered')
+        path = evidence / 'handoff.json'
+        path.write_text(json.dumps({**record, 'objective': 'a different objective'}, indent=2))
+        report = self.f.reconcile_handoff('tampered')
+        entry = self.entry(report, 'digest_mismatch')
+        self.assertEqual(entry['record'], hashlib.sha256(path.read_bytes()).hexdigest())
+        self.assertEqual(entry['authority'], recorded)
+        self.assertEqual(self.kinds(report), ['digest_mismatch'])
+
+    def test_a_missing_record_is_unverifiable_with_the_real_reason(self):
+        result, record, evidence = self.run_record(self.spec('missing'))
+        (evidence / 'handoff.json').unlink()
+        report = self.f.reconcile_handoff('missing')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertFalse(report['record']['read'])
+        self.assertIn('does not exist', report['record']['reason'])
+        self.assertIn('exist', self.unverifiable_fact(report, 'record')['reason'])
+        self.assertEqual(report['disagreements'], [])
+
+    def test_a_malformed_record_that_is_a_json_array_is_unverifiable_with_the_real_reason(self):
+        result, record, evidence = self.run_record(self.spec('array'))
+        (evidence / 'handoff.json').write_text('[]')
+        report = self.f.reconcile_handoff('array')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertIn('not a JSON object', report['record']['reason'])
+
+    def test_a_record_with_a_wrong_typed_field_is_unverifiable_with_the_real_reason(self):
+        result, record, evidence = self.run_record(self.spec('typed'))
+        broken = {'kind': 'handoff_record', 'state': 42, 'job_id': 'typed', 'run_id': 'x',
+                  'spec_hash': 'y', 'detail': 'z'}
+        (evidence / 'handoff.json').write_text(json.dumps(broken))
+        report = self.f.reconcile_handoff('typed')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertIn('state', report['record']['reason'])
+
+    def test_a_workspace_that_is_not_a_git_repository_is_unverifiable_with_the_reason(self):
+        plain = self.base / 'plain'
+        plain.mkdir()
+        result, record, evidence = self.run_record(self.spec('plain', workspace=plain))
+        report = self.f.reconcile_handoff('plain')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertFalse(report['workspace']['read'])
+        self.assertEqual(report['workspace']['reason'], 'the workspace is not a git work tree')
+        self.assertIn('workspace', [item['fact'] for item in report['unverifiable']])
+
+    def test_git_unavailable_is_unverifiable_with_the_reason(self):
+        self.run_record(self.spec('nogit'))
+        with patch('overseer.workdiff.subprocess.run', side_effect=FileNotFoundError):
+            report = self.f.reconcile_handoff('nogit')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertFalse(report['workspace']['read'])
+        self.assertEqual(report['workspace']['reason'], 'git is not available on this machine')
+
+    def test_the_reconciliation_never_changes_the_job_state(self):
+        self.run_record(self.spec('state'))
+        before = self.ledger_row('state')
+        events_before = self.f.db.execute(
+            'SELECT COUNT(*) AS n FROM events WHERE job_id=?', ('state',)).fetchone()['n']
+        self.f.reconcile_handoff('state')
+        after = self.ledger_row('state')
+        self.assertEqual(after['state'], before['state'])
+        self.assertEqual(after['detail'], before['detail'])
+        self.assertEqual(after['run_id'], before['run_id'])
+        self.assertEqual(after['spec_hash'], before['spec_hash'])
+        events_after = self.f.db.execute(
+            'SELECT COUNT(*) AS n FROM events WHERE job_id=?', ('state',)).fetchone()['n']
+        self.assertEqual(events_after, events_before + 1)
+        self.assertEqual(self.f.db.execute(
+            "SELECT state FROM events WHERE job_id=? ORDER BY seq DESC LIMIT 1",
+            ('state',)).fetchone()['state'], 'reconciliation')
+
+    def test_the_reconciliation_never_writes_to_the_workspace_or_to_git(self):
+        self.run_record(self.spec('readonly'))
+        head = self.git('rev-parse', 'HEAD').stdout.decode().strip()
+        status = self.git('status', '--porcelain').stdout
+        index = self.repo / '.git' / 'index'
+        before = (index.stat().st_size, index.stat().st_mtime_ns)
+        recorded = []
+        real_run = subprocess.run
+
+        def recording_run(arguments, **keywords):
+            recorded.append(list(arguments))
+            return real_run(arguments, **keywords)
+
+        with patch('overseer.workdiff.subprocess.run', side_effect=recording_run):
+            self.f.reconcile_handoff('readonly')
+        # The index is measured before this test's own git status, which may
+        # refresh a racily clean index itself.
+        self.assertEqual((index.stat().st_size, index.stat().st_mtime_ns), before)
+        self.assertEqual(self.git('rev-parse', 'HEAD').stdout.decode().strip(), head)
+        self.assertEqual(self.git('status', '--porcelain').stdout, status)
+        forbidden = {'add', 'commit', 'checkout', 'reset', 'stash', 'write-tree',
+                      'update-index', 'clean', 'fetch', 'pull', 'push', 'gc', 'apply'}
+        for arguments in recorded:
+            for argument in arguments:
+                self.assertNotIn(argument, forbidden, arguments)
+
+    def test_the_result_is_recorded_in_the_evidence_directory_the_summary_and_the_event(self):
+        result, record, evidence = self.run_record(self.spec('written'))
+        summary_path = evidence / 'summary.json'
+        manifest_path = evidence / 'context.json'
+        before = json.loads(summary_path.read_text())
+        manifest_before = manifest_path.read_bytes()
+        report = self.f.reconcile_handoff('written')
+        written = evidence / 'reconciliation.json'
+        self.assertTrue(written.is_file())
+        on_disk = json.loads(written.read_text())
+        self.assertEqual(on_disk['verdict'], report['verdict'])
+        digest = hashlib.sha256(written.read_bytes()).hexdigest()
+        after = json.loads(summary_path.read_text())
+        self.assertEqual(after['reconciliation'],
+                         {'path': str(written), 'sha256': digest, 'verdict': report['verdict'],
+                          'disagreement_count': report['disagreement_count'],
+                          'unverifiable_count': len(report['unverifiable'])})
+        for key, value in before.items():
+            self.assertEqual(after[key], value, key)
+        self.assertEqual(set(after) - set(before), {'reconciliation'})
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        detail = self.f.db.execute(
+            "SELECT detail FROM events WHERE job_id='written' AND state='reconciliation'"
+        ).fetchone()['detail']
+        self.assertIn(report['verdict'], detail)
+        self.assertIn(digest, detail)
+
+    def test_the_record_itself_is_not_rewritten(self):
+        result, record, evidence = self.run_record(self.spec('kept'))
+        self.f.db.execute("UPDATE jobs SET state='failed' WHERE id='kept'")
+        self.f.db.commit()
+        before = (evidence / 'handoff.json').read_bytes()
+        report = self.f.reconcile_handoff('kept')
+        self.assertEqual(report['verdict'], 'disagree')
+        self.assertEqual((evidence / 'handoff.json').read_bytes(), before)
+
+    def test_the_reconciliation_does_not_resolve_a_disagreement(self):
+        self.run_record(self.spec('open'))
+        self.f.db.execute("UPDATE jobs SET state='failed', detail='still open' WHERE id='open'")
+        self.f.db.commit()
+        report = self.f.reconcile_handoff('open')
+        self.assertEqual(report['verdict'], 'disagree')
+        row = self.ledger_row('open')
+        self.assertEqual(row['state'], 'failed')
+        self.assertEqual(row['detail'], 'still open')
+        self.assertIn('state_mismatch', self.kinds(report))
+
+    def test_the_cli_reports_an_unknown_job_as_a_json_error(self):
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        result = subprocess.run(
+            [sys.executable, '-m', 'overseer.factory', '--db',
+             str(self.base / 'cli' / 'jobs.sqlite3'), 'reconcile-handoff', 'no-such-job'],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('error', json.loads(result.stdout))
+        self.assertNotIn('Traceback', result.stderr)
+
+    def test_the_secret_name_rule_agrees_with_the_codemap_rule(self):
+        from overseer.codemap import is_secret as codemap_is_secret
+        from overseer.reconcile import is_secret
+        for name in ('.env', '.env.local', 'id_rsa', 'credentials.json', 'token.json',
+                     'server.pem', 'private.key', 'secrets.json', 'notes.txt', 'main.py'):
+            self.assertEqual(is_secret(name), codemap_is_secret(name), name)
+
+
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""
 
