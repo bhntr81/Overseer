@@ -70,8 +70,11 @@ path matches the task terms, extracts their structural symbols, and writes the
 map to `codebase.json` in the run evidence, which the worker receives through
 `OVERSEER_CODEBASE_PATH`, `OVERSEER_CODEBASE_FILES`,
 `OVERSEER_CODEBASE_SELECTED`, and `OVERSEER_CODEBASE_SUMMARY`. The map names
-files and symbols; it carries no file content, and every bound of the walk is
-explicit.
+the files and the symbols and carries a bounded excerpt of their code: at
+most 8 KiB and 60 lines per file, and 32 KiB for the whole attempt. A file
+whose name marks it as a secret is never read for its content, and a file that
+is binary, too large, or not text is left alone. The manifest records the
+excerpt's line ranges and byte counts.
 A command-mode task must carry a `contract` block that states the
 role, risk tier, external effects, protected paths, approval requirements,
 acceptance identifiers, required capabilities, project constraints, measured

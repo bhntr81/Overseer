@@ -2020,3 +2020,38 @@ pkg/widget.py (the path matches the task terms, score 1): WidgetFilter, WidgetFi
 
 The terms of that run were `filter, implementation, limit, repair, size,
 widget`, and only `pkg/widget.py` was selected.
+
+### Bounded code excerpts in the codebase context
+
+The user asked for the last part of the CONTEXT pillar: the selected files
+must carry safe, bounded code excerpts or line ranges for their relevant
+symbols, not only structural names, and the bounds must prevent token bloat
+and context flooding. This increment was written and executed by the primary
+agent without a separate prompt-writing agent, because another agent was
+committing to the same repository and one writer held the tree. That is a
+deviation from the standing workflow and is recorded here rather than
+papered over.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+```
+
+The excerpt of a file is the code of its symbols: the block of a Python
+function or class, taken from the standard library parser, and the declared
+line and the lines after it for other languages. The bounds are explicit and
+are recorded with the map: at most 8 KiB and 60 lines and 12 line ranges per
+file, and 32 KiB for the whole attempt, so a wide tree cannot flood a
+context. What the excerpt holds is named by its line ranges, so a reader can
+find the same code in the file itself.
+
+A file whose name marks it as a secret is never read for its content: the
+reason is recorded and the text is absent. A file that is binary, too large,
+or not text is left alone. The manifest records the excerpt's line ranges and
+byte counts per file, and the total, and the supplied source says how many
+bytes of code the attempt was given.
+
+The suite grew from 217 to 223 tests, all passing, and the document reference
+checker resolves all 127 citations. The CONTEXT row of the pillar map carries
+this increment, and the next CONTEXT increment is named: the map relates the
+symbols to their code, but not to their callers and their tests.

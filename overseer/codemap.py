@@ -29,6 +29,20 @@ MAX_FILE_BYTES = 512 * 1024
 MAX_SELECTED = 12
 MAX_SYMBOLS = 80
 SUMMARY_LIMIT = 4000
+# The bounds of the code an attempt is shown. They are what keeps a context
+# from flooding: bytes per file, lines per file, ranges per file, and bytes
+# for the whole attempt.
+MAX_EXCERPT_BYTES = 8 * 1024
+MAX_EXCERPT_LINES = 60
+MAX_EXCERPT_RANGES = 12
+MAX_EXCERPT_TOTAL_BYTES = 32 * 1024
+# A file whose name marks it as a secret is never read for its content.
+SECRET_SUFFIXES = ('.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.ppk',
+                    '.asc', '.gpg', '.kdbx')
+SECRET_NAMES = frozenset({
+    'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519', 'credentials', 'credentials.json',
+    'secrets.json', '.npmrc', '.pypirc', '.netrc', 'auth.json', 'token.json',
+})
 WORD = re.compile(r'[a-z0-9]{3,}')
 PATH_LIKE = re.compile(r'[A-Za-z0-9_./-]*[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,10}')
 DECLARATIONS = (
@@ -118,22 +132,98 @@ def structure(path):
     return {'kind': 'declarations', 'symbols': _declared_symbols(text), 'reason': None}
 
 
+def is_secret(path):
+    """Report whether a file's name marks it as a secret."""
+    name = Path(path).name.casefold()
+    if name in SECRET_NAMES or name.startswith('.env'):
+        return True
+    if any(name.endswith(suffix) for suffix in SECRET_SUFFIXES):
+        return True
+    return 'secret' in name or 'credential' in name or 'password' in name
+
+
+def excerpt(path, symbols, budget):
+    """Return a bounded excerpt of the code of a file's symbols.
+
+    The excerpt names the line ranges it holds, so a reader can find the code
+    in the file itself. A file whose name marks it as a secret is never read.
+    """
+    if not symbols:
+        return None
+    if is_secret(path):
+        return {'skipped': 'the file name marks it as a secret', 'lines': [], 'bytes': 0,
+                'text': '', 'truncated': False}
+    try:
+        text = path.read_text(encoding='utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
+    if '\0' in text[:8192]:
+        return None
+    all_lines = text.splitlines()
+    ranges = []
+    for symbol in symbols:
+        start = int(symbol.get('line') or 0)
+        if start < 1:
+            continue
+        end = int(symbol.get('end') or 0) or min(len(all_lines), start + 4)
+        end = max(start, min(end, len(all_lines)))
+        ranges.append((start, end))
+    if not ranges:
+        return None
+    ranges.sort()
+    merged = []
+    for start, end in ranges:
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    merged = merged[:MAX_EXCERPT_RANGES]
+    kept = []
+    lines = []
+    used = 0
+    truncated = False
+    for start, end in merged:
+        chunk = all_lines[start - 1:end]
+        if len(lines) + len(chunk) > MAX_EXCERPT_LINES:
+            chunk = chunk[:max(0, MAX_EXCERPT_LINES - len(lines))]
+            truncated = True
+        for line in chunk:
+            if used + len(line) + 1 > MAX_EXCERPT_BYTES or used + len(line) + 1 > budget:
+                truncated = True
+                break
+            lines.append(line)
+            used += len(line) + 1
+        if chunk:
+            kept.append([start, start + len(chunk) - 1])
+        if truncated:
+            break
+    if not lines:
+        return None
+    return {'lines': kept, 'bytes': used, 'text': '\n'.join(lines), 'truncated': truncated}
+
+
 def _python_symbols(text):
     """Return the module level classes and functions of a Python file."""
     try:
         tree = ast.parse(text)
     except SyntaxError as error:
-        return [{'name': 'syntax error', 'kind': 'error', 'line': error.lineno or 0}]
+        return [{'name': 'syntax error', 'kind': 'error', 'line': error.lineno or 0,
+                 'end': error.lineno or 0}]
     symbols = []
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
-            symbols.append({'name': node.name, 'kind': 'class', 'line': node.lineno})
+            end = getattr(node, 'end_lineno', None) or node.lineno
+            symbols.append({'name': node.name, 'kind': 'class', 'line': node.lineno,
+                            'end': end})
             for child in node.body:
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    child_end = getattr(child, 'end_lineno', None) or child.lineno
                     symbols.append({'name': '%s.%s' % (node.name, child.name),
-                                    'kind': 'method', 'line': child.lineno})
+                                    'kind': 'method', 'line': child.lineno, 'end': child_end})
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            symbols.append({'name': node.name, 'kind': 'function', 'line': node.lineno})
+            end = getattr(node, 'end_lineno', None) or node.lineno
+            symbols.append({'name': node.name, 'kind': 'function', 'line': node.lineno,
+                            'end': end})
     return symbols[:MAX_SYMBOLS]
 
 
@@ -145,8 +235,8 @@ def _declared_symbols(text):
             name = match.group(1)
             if not name:
                 continue
-            symbols.append({'name': name, 'kind': kind,
-                            'line': text.count('\n', 0, match.start()) + 1})
+            line = text.count('\n', 0, match.start()) + 1
+            symbols.append({'name': name, 'kind': kind, 'line': line, 'end': line + 3})
             if len(symbols) >= MAX_SYMBOLS:
                 return symbols
     symbols.sort(key=lambda symbol: (symbol['line'], symbol['name']))
@@ -255,19 +345,21 @@ def assemble(workspace, spec):
     """Assemble the codebase context of a task attempt."""
     if not workspace:
         return {'version': 1, 'assembled': False, 'reason': 'the task names no workspace',
-                'files': [], 'selected': [], 'file_count': 0}
+                'files': [], 'selected': [], 'file_count': 0, 'excerpt_bytes': 0}
     files, truncated, problem = scan(workspace)
     if problem:
         return {'version': 1, 'assembled': False, 'reason': problem, 'files': [],
-                'selected': [], 'file_count': 0}
+                'selected': [], 'file_count': 0, 'excerpt_bytes': 0}
     if not files:
         return {'version': 1, 'assembled': False, 'reason': 'the workspace holds no readable file',
-                'files': [], 'selected': [], 'file_count': 0}
+                'files': [], 'selected': [], 'file_count': 0, 'excerpt_bytes': 0}
     root = Path(workspace).resolve()
     terms = task_terms(spec)
     named = named_files(spec, workspace)
     selected = select(files, terms, named, root)
     detailed = []
+    budget = MAX_EXCERPT_TOTAL_BYTES
+    excerpt_bytes = 0
     for entry in selected:
         item = dict(entry)
         found = structure(root / entry['path'])
@@ -275,6 +367,11 @@ def assemble(workspace, spec):
         item['structure_kind'] = found['kind']
         if found.get('reason'):
             item['structure_reason'] = found['reason']
+        piece = excerpt(root / entry['path'], found['symbols'], budget)
+        if piece is not None:
+            item['excerpt'] = piece
+            excerpt_bytes += piece['bytes']
+            budget -= piece['bytes']
         detailed.append(item)
     return {
         'version': 1,
@@ -285,9 +382,14 @@ def assemble(workspace, spec):
         'truncated': truncated,
         'terms': sorted(terms),
         'selected': detailed,
+        'excerpt_bytes': excerpt_bytes,
         'limits': {'max_files': MAX_FILES, 'max_depth': MAX_DEPTH,
                    'max_file_bytes': MAX_FILE_BYTES, 'max_selected': MAX_SELECTED,
-                   'max_symbols': MAX_SYMBOLS},
+                   'max_symbols': MAX_SYMBOLS,
+                   'max_excerpt_bytes': MAX_EXCERPT_BYTES,
+                   'max_excerpt_lines': MAX_EXCERPT_LINES,
+                   'max_excerpt_ranges': MAX_EXCERPT_RANGES,
+                   'max_excerpt_total_bytes': MAX_EXCERPT_TOTAL_BYTES},
     }
 
 

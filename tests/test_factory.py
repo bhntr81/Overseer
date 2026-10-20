@@ -11,6 +11,9 @@ import time
 import unittest
 from unittest.mock import patch
 
+from overseer.codemap import (
+    MAX_EXCERPT_BYTES, MAX_EXCERPT_LINES, MAX_EXCERPT_TOTAL_BYTES,
+)
 from overseer.factory import (
     CONTRACT_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID,
     MEMORY_KINDS, PROVIDER_NAMES, REQUEST_INPUT_FIELDS, Factory, canonical,
@@ -1967,6 +1970,93 @@ class ContextTests(unittest.TestCase):
         names = {symbol['name']: symbol for symbol in selected['service.ts']['symbols']}
         self.assertEqual(names['Service']['kind'], 'type')
         self.assertEqual(names['startService']['kind'], 'function')
+
+    def test_the_excerpt_holds_the_code_of_a_symbol(self):
+        self.write_source('widget.py',
+                          'def build_filter(limit=10):\n'
+                          '    """Build the filter."""\n'
+                          '    return limit * 2\n')
+        spec = self.command_spec('excerpt')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        selected = {entry['path']: entry for entry in self.codebase_of(result)['selected']}
+        piece = selected['widget.py']['excerpt']
+        self.assertIn('def build_filter', piece['text'])
+        self.assertIn('return limit * 2', piece['text'])
+        self.assertEqual(piece['lines'], [[1, 3]])
+        self.assertGreater(piece['bytes'], 0)
+
+    def test_an_excerpt_is_bounded_by_lines_and_bytes(self):
+        body = ''.join('    value_%d = %d\n' % (index, index) for index in range(400))
+        self.write_source('long.py', 'def long():\n' + body)
+        spec = self.command_spec('bounded-excerpt')
+        spec['objective'] = 'shorten the long module'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        selected = {entry['path']: entry for entry in self.codebase_of(result)['selected']}
+        piece = selected['long.py']['excerpt']
+        self.assertLessEqual(len(piece['text'].splitlines()), MAX_EXCERPT_LINES)
+        self.assertLessEqual(piece['bytes'], MAX_EXCERPT_BYTES)
+        self.assertTrue(piece['truncated'])
+
+    def test_the_excerpt_budget_is_shared_across_the_selected_files(self):
+        body = ''.join('    value_%d = %d\n' % (index, index) for index in range(200))
+        for index in range(6):
+            self.write_source('gadget%d.py' % index, 'def gadget():\n' + body)
+        spec = self.command_spec('shared-budget')
+        spec['objective'] = 'repair every gadget module'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        self.assertLessEqual(context['excerpt_bytes'], MAX_EXCERPT_TOTAL_BYTES)
+        self.assertEqual(sum((entry.get('excerpt') or {}).get('bytes', 0)
+                              for entry in context['selected']), context['excerpt_bytes'])
+
+    def test_a_secret_named_file_is_never_excerpted(self):
+        self.write_source('credentials.json', '{"token": "s3cret-value"}\n')
+        spec = self.command_spec('secret')
+        spec['objective'] = 'read the credentials module'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        selected = {entry['path']: entry for entry in self.codebase_of(result)['selected']}
+        piece = selected.get('credentials.json', {}).get('excerpt')
+        if piece is not None:
+            self.assertEqual(piece['text'], '')
+            self.assertIn('secret', piece['skipped'])
+        self.assertNotIn('s3cret-value', json.dumps(self.codebase_of(result)))
+
+    def test_the_manifest_records_the_excerpt_line_ranges(self):
+        self.write_source('gadget.py', 'def gadget():\n    return 1\n')
+        spec = self.command_spec('excerpt-manifest')
+        spec['objective'] = 'repair the gadget module'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        manifest = self.manifest_of(result)
+        codebase = manifest['codebase']
+        self.assertGreater(codebase['excerpt_bytes'], 0)
+        entry = [item for item in codebase['selected'] if item['path'] == 'gadget.py'][0]
+        self.assertEqual(entry['excerpt_lines'], [[1, 2]])
+        self.assertGreater(entry['excerpt_bytes'], 0)
+        supplied = {item['item']: item for item in manifest['supplied']}
+        self.assertIn('code excerpt', supplied['relevant_code_and_interfaces']['source'])
+
+    def test_the_worker_can_read_the_excerpt_from_the_map(self):
+        self.write_source('gadget.py', 'def gadget():\n    return "in the excerpt"\n')
+        spec = self.command_spec('excerpt-env', checks=[[sys.executable, '-c',
+                   "from pathlib import Path; text=Path('excerpt_seen.txt').read_text(); "
+                   "assert 'in the excerpt' in text, text"]])
+        spec['objective'] = 'repair the gadget module'
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import json, os; from pathlib import Path; "
+                                  "map_data=json.loads(Path(os.environ['OVERSEER_CODEBASE_PATH']).read_text()); "
+                                  "text='\\n'.join((entry.get('excerpt') or {}).get('text','') "
+                                  "for entry in map_data['selected']); "
+                                  "Path('excerpt_seen.txt').write_text(text)"]
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        self.assertIn('in the excerpt', (self.root / 'excerpt_seen.txt').read_text())
 
 
 class RequiredContractTests(unittest.TestCase):

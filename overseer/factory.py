@@ -1071,10 +1071,12 @@ class Factory:
              'why': 'the acceptance commands define the required behaviour of the attempt'},
             {'item': 'relevant_code_and_interfaces',
              'source': ('the workspace file tree: %d files, %d selected for this task with '
-                        '%d structural symbols' % (assembled.get('file_count') or 0,
-                                                   len(selected), symbol_count))
+                        '%d structural symbols and %d bytes of code excerpt'
+                        % (assembled.get('file_count') or 0, len(selected), symbol_count,
+                           assembled.get('excerpt_bytes') or 0))
                        if assembled.get('assembled') else None,
-             'why': ('the repository map names the files and the symbols the attempt can read'
+             'why': ('the repository map names the files, the symbols, and the line ranges '
+                     'of the code the attempt can read'
                      if assembled.get('assembled') else
                      'no codebase context was assembled: %s' % (
                          assembled.get('reason') or 'the workspace holds no readable file'))},
@@ -1137,10 +1139,15 @@ class Factory:
                 'reason': assembled.get('reason'),
                 'file_count': assembled.get('file_count') or 0,
                 'truncated': bool(assembled.get('truncated')),
+                'excerpt_bytes': assembled.get('excerpt_bytes') or 0,
                 'selected': [{'path': entry['path'], 'score': entry.get('score'),
                               'reason': entry.get('reason'),
                               'symbols': [symbol['name']
-                                          for symbol in entry.get('symbols') or []]}
+                                          for symbol in entry.get('symbols') or []],
+                              'excerpt_lines': (entry.get('excerpt') or {}).get('lines') or [],
+                              'excerpt_bytes': (entry.get('excerpt') or {}).get('bytes') or 0,
+                              'excerpt_truncated': bool((entry.get('excerpt') or {}).get('truncated')),
+                              'excerpt_skipped': (entry.get('excerpt') or {}).get('skipped')}
                              for entry in selected],
                 'symbol_count': symbol_count,
                 'path': (codebase or {}).get('path'),
