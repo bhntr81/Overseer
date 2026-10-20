@@ -114,3 +114,27 @@ pane, and does not drive a client the account or provider cannot serve.
   and both still show `GPT-6-Astra medium`, which is not in the current Codex
   catalog either.
 - The factory still has no real provider adapter.
+
+## Resolved
+
+The operator chose to route the Crypto-Cooking work to OpenCode. The answer
+was applied with:
+
+```text
+python3 -m overseer model-select %3 --provider opencode
+```
+
+The route created the session `overseer-crypto-cooking-1236021-opencode`
+(pane `%7`) in `/home/kali/Projects/Crypto-Cooking`, enrolled it, and left
+`%3` watched, paused, and otherwise untouched: it still runs the Codex client
+on `gpt-6-astra` and still shows its original 400 error. The new session runs
+`MiniMax M3.1 Flash Free OpenCode`, its own configured default, and the
+monitor sent it the configured continuation 181 seconds after the route:
+
+```text
+Oct 20 00:13:36 INFO queue enqueued %7 at position 1
+Oct 20 00:13:37 INFO %7 dispatched the routed continuation
+```
+
+The work is running in the OpenCode session. The `gpt-6-luna` option was
+excluded by the operator's own instruction and is offered nowhere.

@@ -930,3 +930,11 @@ routed pane stays paused and the new session receives the configured
 continuation. The suite grew from 105 to 110 tests, all passing, and the
 document reference checker resolves all 83 citations. The six migrated
 sessions and their clients were not touched.
+
+The operator's answer for `%3` was applied: `python3 -m overseer model-select %3
+--provider opencode` created the session
+`overseer-crypto-cooking-1236021-opencode` (pane `%7`) in
+`/home/kali/Projects/Crypto-Cooking`, enrolled it, and left `%3` watched,
+paused, and otherwise untouched. The monitor sent the new session the
+configured continuation 181 seconds after the route, and the OpenCode session
+began the work on its own default model, `MiniMax M3.1 Flash Free OpenCode`.
