@@ -52,6 +52,9 @@ STOP_WORDS = frozenset({
     'should', 'would', 'could', 'must', 'one', 'two', 'use', 'using', 'used',
     'add', 'new', 'old', 'run', 'runs', 'make', 'made', 'get', 'set', 'let',
     'out', 'own', 'same', 'also', 'only', 'over', 'under', 'between', 'because',
+    # the words a command brings with it are not terms of the task
+    'import', 'pathlib', 'environ', 'python', 'usr', 'bin', 'lib', 'sys',
+    'json', 'none', 'true', 'false', 'str', 'int', 'bool', 'bytes', 'print',
 })
 
 
@@ -151,7 +154,11 @@ def _declared_symbols(text):
 
 
 def task_terms(spec):
-    """Return the terms of a task that a file can be relevant by."""
+    """Return the terms of a task that a file can be relevant by.
+
+    The terms are the task's own words: the objective and the contract. The
+    files the commands name are found by path, not by word.
+    """
     terms = set()
     objective = spec.get('objective')
     if isinstance(objective, str):
@@ -166,12 +173,6 @@ def task_terms(spec):
                 for item in value:
                     if isinstance(item, str):
                         terms.update(WORD.findall(item.casefold()))
-    for field in ('implementation', 'checks'):
-        argv = spec.get(field)
-        if isinstance(argv, list):
-            for argument in argv:
-                if isinstance(argument, str):
-                    terms.update(WORD.findall(argument.casefold()))
     return {term for term in terms if term not in STOP_WORDS}
 
 

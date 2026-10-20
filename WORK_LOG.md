@@ -2006,3 +2006,17 @@ The suite grew from 205 to 217 tests, all passing, and the document reference
 checker resolves all 127 citations. The CONTEXT row of the pillar map carries
 this increment, and the next CONTEXT increment is named: the map names the
 files but does not carry their code.
+
+A live run against a temporary ledger and a temporary workspace showed the map
+working, and showed two things worth tightening. The task terms at first
+carried the words of the command strings, so the terms are now the objective
+and the contract only, and the files the commands name are found by path
+instead. The run also showed that a file a command will create is not context
+yet, so a named file counts only when it already exists.
+
+```text
+pkg/widget.py (the path matches the task terms, score 1): WidgetFilter, WidgetFilter.apply, build_filter
+```
+
+The terms of that run were `filter, implementation, limit, repair, size,
+widget`, and only `pkg/widget.py` was selected.
