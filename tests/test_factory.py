@@ -14,7 +14,9 @@ from unittest.mock import patch
 from overseer.codemap import (
     MAX_EXCERPT_BYTES, MAX_EXCERPT_LINES, MAX_EXCERPT_TOTAL_BYTES,
     MAX_CALLERS_PER_SYMBOL, MAX_REFERENCE_BYTES, MAX_REFERENCE_FILES,
-    MAX_TESTS_PER_SYMBOL, assemble as assemble_codebase,
+    MAX_TESTS_PER_SYMBOL, MAX_MEMORY_ENTRY_CHARS, MAX_MEMORY_RECORDS_PER_FILE,
+    MAX_MEMORY_RECORDS_PER_SYMBOL, MAX_SUMMARY_MEMORY_LINES, MAX_UNATTACHED_MEMORY_RECORDS,
+    assemble as assemble_codebase, attach_memory, summary as codebase_summary,
 )
 from overseer.factory import (
     CONTRACT_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID,
@@ -2317,6 +2319,371 @@ class ContextTests(unittest.TestCase):
         relation = self.relation_of(context, 'widget.py', 'build_filter')
         self.assertEqual(relation['callers'], [])
 
+    def widget_class(self, name='widget.py'):
+        self.write_source(name,
+                          'class WidgetFilter:\n'
+                          '    def apply(self, value):\n'
+                          '        return value\n')
+
+    def decide(self, job, component, entry='keep the filter semantics', supersedes=None):
+        return self.f.record_memory(job, 'decision', entry, 'the operator', component,
+                                    'a new requirement', owner='operator',
+                                    reason='compatibility', supersedes=supersedes)
+
+    def memory_ids(self, holder):
+        return [attachment['record_id'] for attachment in holder['memory']]
+
+    def test_a_current_decision_attaches_to_the_method_it_names(self):
+        self.widget_class()
+        spec = self.command_spec('memory-method')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        decision = self.decide('memory-method', 'WidgetFilter.apply')
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        method = self.relation_of(context, 'widget.py', 'WidgetFilter.apply')
+        self.assertEqual(self.memory_ids(method), [decision['record_id']])
+        attachment = method['memory'][0]
+        self.assertEqual(attachment['status'], 'current')
+        self.assertTrue(attachment['usable'])
+        self.assertEqual(attachment['how'], 'textual')
+        self.assertEqual(attachment['field'], 'affected_component')
+        self.assertIn('textual match does not prove', attachment['reason'])
+        self.assertEqual(self.relation_of(context, 'widget.py', 'WidgetFilter')['memory'], [])
+        self.assertEqual(context['memory']['attached'], 1)
+
+    def test_a_superseded_decision_is_attached_and_marked_not_usable(self):
+        self.widget_class()
+        spec = self.command_spec('memory-superseded', checks=[[sys.executable, '-c',
+                   "from pathlib import Path; text=Path('memory_seen.txt').read_text(); "
+                   "assert 'NOT USABLE (superseded)' in text, text"]])
+        spec['objective'] = 'repair the widget filter'
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import os; from pathlib import Path; "
+                                  "Path('memory_seen.txt').write_text(os.environ.get("
+                                  "'OVERSEER_CODEBASE_SUMMARY','') + '\\n' + os.environ.get("
+                                  "'OVERSEER_CODEBASE_MEMORY',''))"]
+        self.assertTrue(self.f.submit(spec))
+        first = self.decide('memory-superseded', 'WidgetFilter.apply', 'keep the old behaviour')
+        second = self.decide('memory-superseded', 'WidgetFilter.apply',
+                             'replace the old behaviour', supersedes=first['record_id'])
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        context = self.codebase_of(result)
+        method = self.relation_of(context, 'widget.py', 'WidgetFilter.apply')
+        self.assertEqual(self.memory_ids(method), [second['record_id'], first['record_id']])
+        old = method['memory'][1]
+        self.assertEqual(old['status'], 'superseded')
+        self.assertFalse(old['usable'])
+        self.assertEqual(old['superseded_by'], second['record_id'])
+        self.assertIn('superseded', old['reason'])
+        self.assertTrue(method['memory'][0]['usable'])
+        carried = (self.root / 'memory_seen.txt').read_text()
+        lines = [line for line in carried.splitlines() if first['record_id'][:8] in line]
+        self.assertEqual(len(lines), 1)
+        self.assertIn('NOT USABLE (superseded)', lines[0])
+        self.assertEqual(carried.splitlines()[-1], '2')
+        manifest = self.manifest_of(result)
+        symbols = {entry['symbol']: entry for entry in manifest['codebase']['memory']['symbols']}
+        self.assertEqual(symbols['WidgetFilter.apply']['not_usable'], [first['record_id']])
+        supplied = {item['item']: item for item in manifest['supplied']}
+        self.assertIn('1 of them attached', supplied['applicable_decisions']['source'])
+        self.assertIn('2 recalled memory records attached',
+                      supplied['relevant_code_and_interfaces']['source'])
+
+    def test_an_invalidated_fact_is_attached_and_marked_not_usable(self):
+        workspace = self.root / 'repo'
+        workspace.mkdir()
+        self.git('init', '--quiet', str(workspace))
+        (workspace / 'widget.py').write_text('def build_filter():\n    return 1\n')
+        self.git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test',
+                 'add', 'widget.py', cwd=str(workspace))
+        self.git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test',
+                 'commit', '--quiet', '-m', 'initial', cwd=str(workspace))
+        spec = self.command_spec('memory-stale')
+        spec['workspace'] = str(workspace)
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        fact = self.f.record_memory('memory-stale', 'verified_fact',
+                                    'build_filter returned one in the old release', 'a run',
+                                    'the package', 'a new release', revision='oldcommit',
+                                    environment='linux')
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        relation = self.relation_of(context, 'widget.py', 'build_filter')
+        self.assertEqual(self.memory_ids(relation), [fact['record_id']])
+        attachment = relation['memory'][0]
+        self.assertEqual(attachment['field'], 'entry')
+        self.assertEqual(attachment['status'], 'invalidated')
+        self.assertFalse(attachment['usable'])
+        self.assertIn('oldcommit', attachment['reason'])
+        self.assertIn(fact['record_id'], self.manifest_of(result)['codebase']['memory']
+                      ['symbols'][0]['not_usable'])
+
+    def test_a_record_naming_no_symbol_stays_unattached_with_the_reason(self):
+        self.widget_class()
+        spec = self.command_spec('memory-none', checks=[[sys.executable, '-c',
+                   "from pathlib import Path; text=Path('memory_seen.txt').read_text(); "
+                   "assert 'memory: 1 recalled records name no selected symbol' in text, text"]])
+        spec['objective'] = 'repair the widget filter'
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import os; from pathlib import Path; "
+                                  "Path('memory_seen.txt').write_text(os.environ.get("
+                                  "'OVERSEER_CODEBASE_SUMMARY',''))"]
+        self.assertTrue(self.f.submit(spec))
+        guess = self.f.record_memory('memory-none', 'hypothesis', 'a faster importer may help',
+                                     'a note', 'the importer', 'a measurement')
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        self.assertEqual([record['record_id'] for record in self.recall_of(result)['records']],
+                         [guess['record_id']])
+        context = self.codebase_of(result)
+        memory = context['memory']
+        self.assertEqual(memory['unattached_count'], 1)
+        self.assertEqual(memory['unattached'][0]['record_id'], guess['record_id'])
+        self.assertIn('names no selected symbol', memory['unattached'][0]['reason'])
+        self.assertEqual(memory['attached'], 0)
+        for entry in context['selected']:
+            self.assertEqual(entry['memory'], [])
+            for relation in entry['relations']:
+                self.assertEqual(relation['memory'], [])
+
+    def test_the_memory_match_is_on_identifier_boundaries(self):
+        self.write_source('widget.py',
+                          'def build():\n    return 1\n\n\n'
+                          'def build_filter():\n    return 2\n')
+        spec = self.command_spec('memory-boundary')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        longer = self.decide('memory-boundary', 'build_filter_v2')
+        word = self.f.record_memory('memory-boundary', 'hypothesis', 'run the build again',
+                                    'a note', 'the importer', 'a measurement')
+        plain = self.decide('memory-boundary', 'build')
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        self.assertEqual(self.memory_ids(self.relation_of(context, 'widget.py', 'build')),
+                         [plain['record_id']])
+        self.assertEqual(self.relation_of(context, 'widget.py', 'build_filter')['memory'], [])
+        unattached = {item['record_id'] for item in context['memory']['unattached']}
+        self.assertEqual(unattached, {longer['record_id'], word['record_id']})
+
+    def test_a_record_naming_a_file_path_attaches_to_the_file(self):
+        self.widget_class('pkg/widget.py')
+        spec = self.command_spec('memory-file')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        decision = self.decide('memory-file', 'pkg/widget.py')
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        selected = {entry['path']: entry for entry in context['selected']}
+        entry = selected['pkg/widget.py']
+        self.assertEqual(self.memory_ids(entry), [decision['record_id']])
+        self.assertEqual(entry['memory'][0]['matched'], 'pkg/widget.py')
+        for relation in entry['relations']:
+            self.assertEqual(relation['memory'], [])
+        files = self.manifest_of(result)['codebase']['memory']['files']
+        self.assertEqual(files, [{'path': 'pkg/widget.py',
+                                  'record_ids': [decision['record_id']], 'not_usable': []}])
+
+    def test_the_memory_attachment_is_bounded(self):
+        self.widget_class()
+        spec = self.command_spec('memory-bounds')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        for index in range(8):
+            self.decide('memory-bounds', 'WidgetFilter.apply', 'decision %d' % index)
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        limits = context['limits']
+        for name, value in (('max_memory_records_per_symbol', MAX_MEMORY_RECORDS_PER_SYMBOL),
+                            ('max_memory_records_per_file', MAX_MEMORY_RECORDS_PER_FILE),
+                            ('max_memory_entry_chars', MAX_MEMORY_ENTRY_CHARS),
+                            ('max_unattached_memory_records', MAX_UNATTACHED_MEMORY_RECORDS),
+                            ('max_summary_memory_lines', MAX_SUMMARY_MEMORY_LINES)):
+            self.assertEqual(limits[name], value)
+        method = self.relation_of(context, 'widget.py', 'WidgetFilter.apply')
+        self.assertEqual(len(method['memory']), MAX_MEMORY_RECORDS_PER_SYMBOL)
+        self.assertEqual(method['memory_dropped'], 8 - MAX_MEMORY_RECORDS_PER_SYMBOL)
+        self.assertIn('memory list is truncated', method['reason'])
+        # The counts describe what the map shows: the records the cap dropped
+        # are counted apart, not as attached.
+        self.assertEqual(context['memory']['attached'], MAX_MEMORY_RECORDS_PER_SYMBOL)
+        self.assertEqual(context['memory']['dropped_by_cap'], 8 - MAX_MEMORY_RECORDS_PER_SYMBOL)
+        self.assertEqual(context['memory']['attachments_dropped'],
+                         8 - MAX_MEMORY_RECORDS_PER_SYMBOL)
+        self.assertEqual(self.manifest_of(result)['codebase']['memory']['attached'],
+                         MAX_MEMORY_RECORDS_PER_SYMBOL)
+        digest = codebase_summary(context)
+        memory_lines = [line for line in digest.splitlines()
+                        if line.lstrip().startswith(('memory ', 'file memory '))]
+        self.assertLessEqual(len(memory_lines), MAX_SUMMARY_MEMORY_LINES)
+        self.assertNotIn('more memory records', digest)
+        for index in range(8):
+            self.decide('memory-bounds', 'WidgetFilter', 'class decision %d' % index)
+        records = self.f.recall({'id': 'memory-bounds', 'workspace': str(self.root)})['records']
+        wide = assemble_codebase(str(self.root), spec, memory=records)
+        digest = codebase_summary(wide)
+        memory_lines = [line for line in digest.splitlines()
+                        if line.lstrip().startswith(('memory ', 'file memory '))]
+        self.assertEqual(len(memory_lines), MAX_SUMMARY_MEMORY_LINES)
+        self.assertIn('(4 more memory records of this file are not shown)', digest)
+
+    def test_the_memory_attachment_is_pure_and_deterministic(self):
+        self.widget_class()
+        spec = self.command_spec('memory-pure')
+        spec['objective'] = 'repair the widget filter'
+        records = [
+            {'record_id': 'b' * 32, 'kind': 'decision', 'status': 'current',
+             'informs_decision': True, 'entry': 'keep WidgetFilter.apply stable',
+             'affected_component': 'the filter', 'superseded_by': None},
+            {'record_id': 'a' * 32, 'kind': 'hypothesis', 'status': 'unverified',
+             'informs_decision': False, 'entry': 'WidgetFilter may be slow',
+             'affected_component': 'WidgetFilter'},
+            {'record_id': 'c' * 32, 'kind': 'historical_attempt'},
+        ]
+        first = assemble_codebase(str(self.root), spec, memory=records)
+        second = assemble_codebase(str(self.root), spec, memory=[dict(r) for r in records])
+        self.assertEqual(json.dumps(first['memory'], sort_keys=True),
+                         json.dumps(second['memory'], sort_keys=True))
+        self.assertEqual(json.dumps(first['selected'], sort_keys=True),
+                         json.dumps(second['selected'], sort_keys=True))
+        self.assertEqual(self.memory_ids(self.relation_of(first, 'widget.py',
+                                                          'WidgetFilter.apply')), ['b' * 32])
+        self.assertEqual(self.memory_ids(self.relation_of(first, 'widget.py', 'WidgetFilter')),
+                         ['a' * 32])
+        self.assertEqual(first['memory']['unattached_count'], 1)
+        bare = assemble_codebase(str(self.root), spec)
+        self.assertIn('no memory record was supplied', bare['memory']['reason'])
+        self.assertEqual(bare['memory']['attached'], 0)
+
+
+    @staticmethod
+    def selected_of(*files):
+        """Return a selected list of plain dicts, one entry per (path, kind, names)."""
+        selected = []
+        for path, names in files:
+            selected.append({'path': path,
+                             'symbols': [{'name': name, 'kind': kind}
+                                         for kind, name in names],
+                             'relations': [{'symbol': name, 'callers': [], 'tests': [],
+                                            'reason': None} for _, name in names]})
+        return selected
+
+    @staticmethod
+    def record(record_id, component='', entry='', status='current', usable=True,
+               kind='decision'):
+        return {'record_id': record_id, 'kind': kind, 'status': status,
+                'informs_decision': usable, 'affected_component': component,
+                'entry': entry}
+
+    @staticmethod
+    def memory_of(selected, path, symbol=None):
+        entry = {item['path']: item for item in selected}[path]
+        if symbol is None:
+            return [attachment['record_id'] for attachment in entry['memory']]
+        for relation in entry['relations']:
+            if relation['symbol'] == symbol:
+                return [attachment['record_id'] for attachment in relation['memory']]
+        raise AssertionError(symbol)
+
+    def test_a_path_in_a_record_attaches_to_the_file_and_not_to_a_symbol_of_its_name(self):
+        selected = self.selected_of(
+            ('pkg/build.py', [('function', 'build')]),
+            ('filters/build_filter.py', [('function', 'build_filter')]))
+        block = attach_memory(selected, [
+            self.record('a', component='pkg/build.py'),
+            self.record('b', entry='the importer in filters/build_filter.py is slow')])
+        self.assertEqual(self.memory_of(selected, 'pkg/build.py'), ['a'])
+        self.assertEqual(self.memory_of(selected, 'pkg/build.py', 'build'), [])
+        self.assertEqual(self.memory_of(selected, 'filters/build_filter.py'), ['b'])
+        self.assertEqual(self.memory_of(selected, 'filters/build_filter.py', 'build_filter'), [])
+        self.assertEqual((block['attached'], block['attached_to_files'],
+                          block['attached_to_symbols']), (2, 2, 0))
+
+    def test_a_record_naming_a_symbol_and_its_file_attaches_to_the_symbol_only(self):
+        selected = self.selected_of(('pkg/widget.py', [('function', 'build_filter')]))
+        attach_memory(selected, [self.record('a', component='build_filter in pkg/widget.py')])
+        self.assertEqual(self.memory_of(selected, 'pkg/widget.py', 'build_filter'), ['a'])
+        self.assertEqual(self.memory_of(selected, 'pkg/widget.py'), [])
+
+    def test_a_path_matches_only_on_path_boundaries(self):
+        selected = self.selected_of(('pkg/widget.py', []))
+        block = attach_memory(selected, [
+            self.record('end', component='see pkg/widget.py.'),
+            self.record('pyc', component='pkg/widget.pyc'),
+            self.record('prefix', component='xpkg/widget.py'),
+            self.record('longer', component='pkg/widget.py.bak')])
+        self.assertEqual(self.memory_of(selected, 'pkg/widget.py'), ['end'])
+        self.assertEqual({item['record_id'] for item in block['unattached']},
+                         {'pyc', 'prefix', 'longer'})
+
+    def test_the_memory_match_is_case_sensitive_and_skips_errors_and_short_names(self):
+        selected = self.selected_of(('widget.py', [('function', 'build_filter'),
+                                                   ('function', 'go'),
+                                                   ('error', 'syntax error')]))
+        block = attach_memory(selected, [self.record('a', component='Build_Filter'),
+                                         self.record('b', component='go'),
+                                         self.record('c', component='syntax error')])
+        for symbol in ('build_filter', 'go', 'syntax error'):
+            self.assertEqual(self.memory_of(selected, 'widget.py', symbol), [])
+        self.assertEqual(block['unattached_count'], 3)
+
+    def test_a_usable_record_is_listed_before_a_more_recent_unusable_one(self):
+        selected = self.selected_of(('widget.py', [('function', 'build_filter')]))
+        records = [self.record('new%d' % index, component='build_filter', status='superseded',
+                               usable=False) for index in range(MAX_MEMORY_RECORDS_PER_SYMBOL)]
+        records.append(self.record('old', component='build_filter'))
+        block = attach_memory(selected, records)
+        kept = self.memory_of(selected, 'widget.py', 'build_filter')
+        self.assertEqual(kept[0], 'old')
+        self.assertEqual(len(kept), MAX_MEMORY_RECORDS_PER_SYMBOL)
+        self.assertEqual(block['not_usable_attached'], MAX_MEMORY_RECORDS_PER_SYMBOL - 1)
+        self.assertEqual(block['dropped_by_cap'], 1)
+
+    def test_the_digest_shows_a_usable_record_before_another_symbols_unusable_ones(self):
+        selected = self.selected_of(('widget.py', [('class', 'WidgetFilter'),
+                                                   ('function', 'make_widget'),
+                                                   ('function', 'build_filter')]))
+        records = [self.record('old%d' % index, component='WidgetFilter make_widget',
+                               status='superseded', usable=False)
+                   for index in range(MAX_MEMORY_RECORDS_PER_SYMBOL)]
+        records.append(self.record('kept', component='build_filter'))
+        attach_memory(selected, records)
+        digest = codebase_summary({'selected': selected, 'relations': {'searched_files': 1}})
+        self.assertIn('memory decision/current kept', digest)
+        memory_lines = [line for line in digest.splitlines()
+                        if line.lstrip().startswith('memory ')]
+        self.assertEqual(len(memory_lines), MAX_SUMMARY_MEMORY_LINES)
+        self.assertIn('(%d more memory records of this file are not shown)'
+                      % (2 * MAX_MEMORY_RECORDS_PER_SYMBOL + 1 - MAX_SUMMARY_MEMORY_LINES),
+                      digest)
+
+    def test_the_entry_file_and_unattached_bounds_hold(self):
+        selected = self.selected_of(('pkg/widget.py', []))
+        long_entry = 'x' * (MAX_MEMORY_ENTRY_CHARS + 50)
+        records = [self.record('f%d' % index, component='pkg/widget.py', entry=long_entry)
+                   for index in range(MAX_MEMORY_RECORDS_PER_FILE + 2)]
+        records += [self.record('u%d' % index, component='nothing selected')
+                    for index in range(MAX_UNATTACHED_MEMORY_RECORDS + 3)]
+        block = attach_memory(selected, records)
+        entry = selected[0]
+        self.assertEqual(len(entry['memory']), MAX_MEMORY_RECORDS_PER_FILE)
+        self.assertEqual(entry['memory_dropped'], 2)
+        self.assertIn('memory list is truncated', entry['memory_reason'])
+        self.assertTrue(all(len(item['entry']) == MAX_MEMORY_ENTRY_CHARS
+                            for item in entry['memory']))
+        self.assertEqual(len(block['unattached']), MAX_UNATTACHED_MEMORY_RECORDS)
+        self.assertEqual(block['unattached_count'], MAX_UNATTACHED_MEMORY_RECORDS + 3)
+        self.assertTrue(block['unattached_truncated'])
+
+    def test_the_digest_with_the_unattached_line_stays_within_its_limit(self):
+        selected = self.selected_of(('widget.py', [('function', 'build_filter')]))
+        block = attach_memory(selected, [self.record('a', component='nothing')])
+        context = {'selected': selected, 'relations': {'searched_files': 1}, 'memory': block}
+        for limit in (10, 50, 200, 4000):
+            self.assertLessEqual(len(codebase_summary(context, limit=limit).split(
+                '\n[truncated]')[0]), limit)
+        self.assertIn('memory: 1 recalled records', codebase_summary(context))
 
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""

@@ -2223,3 +2223,114 @@ A Python file with a null byte past the first kilobyte raised a `ValueError`
 from the parser before Python 3.12, and the map could not read such a file
 at all. The parser call now treats that as the file it is, and the search
 leaves the file alone with the reason recorded.
+
+### Recalled memory attached to the symbols it names
+
+The user asked to continue the work. The CONTEXT row named the next
+increment: relate the recalled memory records to the symbols they name, so a
+decision or a verified fact about a symbol is attached to that symbol in the
+map instead of listed beside it. The prompt for this increment was written by
+the dedicated prompt-writing agent and executed by the primary agent, which is
+the standing workflow and not a deviation from it. The prompt is kept in
+`CONTEXT_MEMORY_SYMBOLS_NEXT_PROMPT.md`.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+grep -n "^from overseer\|^import overseer" overseer/codemap.py
+```
+
+The recall is computed before the map, so the runner now hands the recalled
+records to the map as plain dicts. The map reads no ledger and imports nothing
+from the factory; the grep prints nothing. The recall, its file, its digest,
+and its variables are unchanged: the recall stays the complete list, and the
+map adds the attachment.
+
+The attachment is a textual match, and every attachment says so. A symbol's
+name is matched case-sensitively on identifier boundaries, so `build_filter`
+does not match `build_filter_v2`. Every name is matched in the record's
+affected component; only an identifier-shaped name, one with `_` or `.` or a
+capital after its first character, is matched in its entry, because a plain
+lowercase word in free text is far more often an English word than a symbol.
+The most specific name wins: `WidgetFilter.apply` in a record attaches to the
+method and not to the class. A record that names a selected file's path and
+none of its symbols attaches to the file. A record that names nothing selected
+stays in the recall and is counted in the map as unattached, with the reason.
+
+Every status attaches. A superseded decision, a fact whose bound revision is
+not the workspace's base commit, a hypothesis, and a past attempt are attached
+with `usable` false and a reason that names why, and the digest prints
+`NOT USABLE` on their lines; the usable records are listed first. The bounds
+are module constants and are recorded in the map's limits: 5 records per
+symbol and 5 per file, 160 characters of entry, 32 unattached records listed,
+and 6 memory lines per file in the digest. A cap that drops an attachment is
+recorded with the count.
+
+The attachment reaches the attempt through the memory lines of
+`OVERSEER_CODEBASE_SUMMARY`, the attached count in `OVERSEER_CODEBASE_MEMORY`,
+the `memory` block of the manifest's codebase entry, and `codebase.json`. The
+supplied list says how many records were attached and how many current
+decisions; it says they were supplied, and it claims no enforcement.
+
+Eight tests were added with the increment, and eight more with the review
+correction below; the suite runs 250 tests. Each of the first eight was
+checked against the defect: with the records withheld from the map, all eight
+fail.
+
+Every citation of `overseer/factory.py` and `overseer/codemap.py` in the
+pillar map was re-derived after the last edit. A line map of the old and the
+new code was built from the diff, and each cited line was checked to hold the
+same text after it moved; nine citations in other rows of the map moved with
+the code and were carried. Three citations had drifted before this increment
+and were corrected by hand: the memory record API pointed at two `return`
+lines, and the process paragraph pointed at the line before `assemble`.
+
+### Review correction: paths read as symbols, and the counts counted what was dropped
+
+A fresh reviewer read the increment against the prompt and found four
+defects and weak tests. The findings were checked by running them, and they
+were true.
+
+A path in a record attached to a symbol of the same name instead of to the
+file: `pkg/build.py` holds the identifier `build` between its separators, so
+the symbol `build` was named and the file was not. The selected paths are now
+blanked out of a record's text before the names are matched, so a path names
+its file, and only its file.
+
+The counts were taken before the caps, so a record every attachment of which
+a cap had dropped was counted as attached; with eight records on one symbol
+the map said eight were attached and showed five. The counts now describe the
+attachments the caps kept, and the records a cap dropped are counted apart in
+`dropped_by_cap`, with the dropped attachments in `attachments_dropped`. The
+test that asserted eight had locked the defect in and now asserts five.
+
+The digest ordered the usable records first only inside one symbol's list,
+so the not-usable records of one symbol could fill the six lines of a file
+and hide a usable record of another. The room is now shared by the whole file
+and the usable records take it first. The line about the unattached records
+could also carry the digest past a limit shorter than itself; it is now cut
+to the limit.
+
+The reviewer made nine mutations of the code, and eight of them passed the
+tests: the path boundaries, the usable-first order, the entry, file, and
+unattached bounds, the rule that a symbol named with its file attaches only to
+the symbol, case sensitivity, and the skip of an error or a short name. Eight
+tests were added on plain dicts. The nine mutations and four more for the
+corrections, the path blanking, the counts after the cap, the digest order,
+and the cut of the line, all fail the tests now.
+
+The invalidated reason names the fact's bound revision, so the attachment
+reads the record's `revision`, a key the prompt's list did not name; the
+prompt's own test required the reason to name it. A record that names a
+symbol of one file and the path of another is counted both as attached to a
+symbol and as attached to a file, and once as attached.
+
+Moving the factory's lines moved citations in the STATE, TOOLS, PERMISSIONS,
+and EVIDENCE rows of the pillar map. They were carried with the code, which
+the prompt's list of passages did not name; leaving them would have left them
+false. Two older citations had drifted and were corrected: the decision
+record pointed inside `resolve`, and the submission pointed inside `event`.
+Every citation of the factory and the map in the pillar map was checked by
+hand against the line it names after the last edit, and the reference checker
+resolves 138 of them; the count fell by two because two corrected citations
+now name lines that were already cited.

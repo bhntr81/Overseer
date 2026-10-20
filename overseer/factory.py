@@ -869,7 +869,8 @@ class Factory:
     def memory(self, job_id, kind=None):
         """Return a job's memory records, optionally only one kind.
 
-        The records are stored and queryable. Nothing consumes them.
+        The records are stored and queryable. The recall reads them for a new
+        attempt, and the codebase map attaches them to the symbols they name.
         """
         if kind is not None and kind not in MEMORY_KINDS:
             raise ValueError('memory kind must be one of: ' + ', '.join(MEMORY_KINDS))
@@ -1028,6 +1029,8 @@ class Factory:
         relations = context.get('relations') or {}
         env['OVERSEER_CODEBASE_RELATIONS'] = str(
             (relations.get('caller_count') or 0) + (relations.get('test_count') or 0))
+        env['OVERSEER_CODEBASE_MEMORY'] = str(
+            (context.get('memory') or {}).get('attached') or 0)
         return env
 
     def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
@@ -1053,6 +1056,16 @@ class Factory:
         relations = assembled.get('relations') or {}
         caller_count = relations.get('caller_count') or 0
         test_count = relations.get('test_count') or 0
+        attached = assembled.get('memory') or {}
+        attached_ids = set()
+        for entry in selected:
+            for attachment in entry.get('memory') or []:
+                attached_ids.add(attachment['record_id'])
+            for relation in entry.get('relations') or []:
+                for attachment in relation.get('memory') or []:
+                    attached_ids.add(attachment['record_id'])
+        attached_decisions = [record for record in current_decisions
+                              if record['record_id'] in attached_ids]
         commands = []
         for result in results:
             if 'argv' not in result:
@@ -1078,9 +1091,11 @@ class Factory:
             {'item': 'relevant_code_and_interfaces',
              'source': ('the workspace file tree: %d files, %d selected for this task with '
                         '%d structural symbols, %d bytes of code excerpt, and %d caller and '
-                        '%d test references'
+                        '%d test references, and %d recalled memory records attached by a '
+                        'textual match to the symbols or files they name'
                         % (assembled.get('file_count') or 0, len(selected), symbol_count,
-                           assembled.get('excerpt_bytes') or 0, caller_count, test_count))
+                           assembled.get('excerpt_bytes') or 0, caller_count, test_count,
+                           attached.get('attached') or 0))
                        if assembled.get('assembled') else None,
              'why': ('the repository map names the files, the symbols, the line ranges '
                      'of the code the attempt can read, and the callers and the tests '
@@ -1095,7 +1110,9 @@ class Factory:
                      if past_attempts else
                      'no failure history is assembled for this attempt')},
             {'item': 'applicable_decisions',
-             'source': ('the memory ledger: %d current decision records' % len(current_decisions))
+             'source': ('the memory ledger: %d current decision records, %d of them attached '
+                        'to a selected symbol or file by a textual match'
+                        % (len(current_decisions), len(attached_decisions)))
                        if current_decisions else None,
              'why': ('the decisions that still stand were consulted when this attempt '
                      'was prepared'
@@ -1181,6 +1198,37 @@ class Factory:
                                  'reason': relation.get('reason')}
                                 for entry in selected
                                 for relation in entry.get('relations') or []],
+                },
+                'memory': {
+                    'supplied': attached.get('supplied') or 0,
+                    'attached': attached.get('attached') or 0,
+                    'attached_to_symbols': attached.get('attached_to_symbols') or 0,
+                    'attached_to_files': attached.get('attached_to_files') or 0,
+                    'attachments': attached.get('attachments') or 0,
+                    'attachments_dropped': attached.get('attachments_dropped') or 0,
+                    'dropped_by_cap': attached.get('dropped_by_cap') or 0,
+                    'not_usable_attached': attached.get('not_usable_attached') or 0,
+                    'unattached': attached.get('unattached') or [],
+                    'unattached_count': attached.get('unattached_count') or 0,
+                    'unattached_truncated': bool(attached.get('unattached_truncated')),
+                    'how': attached.get('how') or 'textual',
+                    'reason': attached.get('reason') if attached else
+                              'no memory record was supplied',
+                    'symbols': [{'path': entry['path'],
+                                 'symbol': relation['symbol'],
+                                 'record_ids': [item['record_id']
+                                                for item in relation['memory']],
+                                 'not_usable': [item['record_id']
+                                                for item in relation['memory']
+                                                if not item['usable']]}
+                                for entry in selected
+                                for relation in entry.get('relations') or []
+                                if relation.get('memory')],
+                    'files': [{'path': entry['path'],
+                               'record_ids': [item['record_id'] for item in entry['memory']],
+                               'not_usable': [item['record_id'] for item in entry['memory']
+                                              if not item['usable']]}
+                              for entry in selected if entry.get('memory')],
                 },
                 'path': (codebase or {}).get('path'),
                 'sha256': (codebase or {}).get('sha256'),
@@ -1871,7 +1919,8 @@ class Factory:
             # The codebase context is assembled from the file tree before the
             # work starts, so the attempt can find the files and symbols it
             # needs. The map names files and symbols; it carries no content.
-            codebase = assemble_codebase(spec.get('workspace'), spec)
+            codebase = assemble_codebase(spec.get('workspace'), spec,
+                                         memory=recalled['records'])
             codebase_path = evidence / 'codebase.json'
             codebase_path.write_text(json.dumps(codebase, indent=2))
             codebase_digest = hashlib.sha256(codebase_path.read_bytes()).hexdigest()

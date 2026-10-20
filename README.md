@@ -69,8 +69,8 @@ the workspace file tree: it selects the files the task commands name or whose
 path matches the task terms, extracts their structural symbols, and writes the
 map to `codebase.json` in the run evidence, which the worker receives through
 `OVERSEER_CODEBASE_PATH`, `OVERSEER_CODEBASE_FILES`,
-`OVERSEER_CODEBASE_SELECTED`, `OVERSEER_CODEBASE_SUMMARY`, and
-`OVERSEER_CODEBASE_RELATIONS`. The map names
+`OVERSEER_CODEBASE_SELECTED`, `OVERSEER_CODEBASE_SUMMARY`,
+`OVERSEER_CODEBASE_RELATIONS`, and `OVERSEER_CODEBASE_MEMORY`. The map names
 the files and the symbols and carries a bounded excerpt of their code: at
 most 8 KiB and 60 lines per file, and 32 KiB for the whole attempt. It also
 relates each selected symbol to the code that calls it and to the test files
@@ -85,7 +85,18 @@ the reason that says so. A file
 whose name marks it as a secret is never read for its content, and a file that
 is binary, too large, or not text is left alone. The manifest records the
 excerpt's line ranges and byte counts, and the relation counts and the
-per-symbol entries.
+per-symbol entries. The map also attaches each recalled memory record to the
+selected symbols and files it names, with the record's status. The match is
+textual and on identifier boundaries, so it does not prove that a record is
+about a symbol: every name is matched in the record's affected component, and
+only an identifier-shaped name, such as `build_filter` or `WidgetFilter.apply`,
+in its entry. A superseded decision, an invalidated fact, a hypothesis, and a
+past attempt are attached but marked not usable, and the digest prints
+`NOT USABLE` on their lines. At most 5 records are kept per symbol and per
+file, 160 characters of each entry, and 6 memory lines per file in the digest;
+a record that names nothing selected stays in the recall and is counted as
+unattached. `OVERSEER_CODEBASE_MEMORY` carries the number of attached records.
+An attached decision is supplied to the attempt; nothing enforces it.
 A command-mode task must carry a `contract` block that states the
 role, risk tier, external effects, protected paths, approval requirements,
 acceptance identifiers, required capabilities, project constraints, measured

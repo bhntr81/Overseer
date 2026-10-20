@@ -48,6 +48,14 @@ MAX_TESTS_PER_SYMBOL = 10
 MAX_SKIPPED_REFERENCE_FILES = 20
 # The lines of one file's relations that the digest shows.
 MAX_SUMMARY_SYMBOL_LINES = 6
+# The bounds of the memory attachment: the recalled records kept for one
+# symbol and for one file, the characters of a record's entry kept, the
+# unattached records listed, and the memory lines one file adds to the digest.
+MAX_MEMORY_RECORDS_PER_SYMBOL = 5
+MAX_MEMORY_RECORDS_PER_FILE = 5
+MAX_MEMORY_ENTRY_CHARS = 160
+MAX_UNATTACHED_MEMORY_RECORDS = 32
+MAX_SUMMARY_MEMORY_LINES = 6
 # A file whose name marks it as a secret is never read for its content.
 SECRET_SUFFIXES = ('.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.ppk',
                     '.asc', '.gpg', '.kdbx')
@@ -551,6 +559,238 @@ def _reference_reason(kind, how, fallback, by_bare=False):
     return '; '.join(parts)
 
 
+MEMORY_MATCH_REASON = ('the record names the symbol by its text; a textual match does not '
+                       'prove the record is about this symbol')
+MEMORY_FILE_REASON = ('the record names the file by its path and none of its symbols; a '
+                      'textual match does not prove the record is about this file')
+
+
+def _identifier_shaped(name):
+    """Return whether a name reads as an identifier rather than an English word."""
+    return '_' in name or '.' in name or any(char.isupper() for char in name[1:])
+
+
+def _name_spans(name, text):
+    """Return the spans where a name occurs in a text on identifier boundaries."""
+    pattern = re.compile(r'(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])' % re.escape(name))
+    return [match.span() for match in pattern.finditer(text)]
+
+
+def _path_pattern(path):
+    """Return the pattern of a workspace path on path boundaries.
+
+    A trailing '.' or ',' of a sentence is not part of the path, but a '.'
+    that starts a longer suffix is.
+    """
+    return re.compile(r'(?<![A-Za-z0-9_./-])%s(?![A-Za-z0-9_/-])(?!\.[A-Za-z0-9_])'
+                      % re.escape(path))
+
+
+def _mask_paths(text, paths):
+    """Return a text with the selected paths it names blanked out.
+
+    A path such as 'pkg/build.py' holds the identifier 'build' between its
+    separators, and that is the name of the file, not a mention of a symbol.
+    """
+    for path in sorted(paths, key=len, reverse=True):
+        text = _path_pattern(path).sub(lambda match: ' ' * len(match.group(0)), text)
+    return text
+
+
+def _names_in(text, names, shaped_only):
+    """Return the names a text names, the most specific name winning.
+
+    An occurrence of a name inside the occurrence of a longer name, such as
+    'WidgetFilter' inside 'WidgetFilter.apply', belongs to the longer name.
+    """
+    if not text:
+        return set()
+    spans = {}
+    for name in names:
+        if shaped_only and not _identifier_shaped(name):
+            continue
+        found = _name_spans(name, text)
+        if found:
+            spans[name] = found
+    named = set()
+    for name, found in spans.items():
+        for start, end in found:
+            inside = any(other != name and len(other) > len(name)
+                         and other_start <= start and end <= other_end
+                         for other, other_spans in spans.items()
+                         for other_start, other_end in other_spans)
+            if not inside:
+                named.add(name)
+                break
+    return named
+
+
+def _unusable_clause(record):
+    """Return why a recalled record is not usable, or None when it is."""
+    if record.get('informs_decision') is True:
+        return None
+    status = record.get('status')
+    if status == 'superseded':
+        by = record.get('superseded_by')
+        return 'the decision was superseded%s and is not usable' % (
+            ' by %s' % by if by else '')
+    if status == 'invalidated':
+        revision = record.get('revision')
+        return ("the fact is bound to revision %s, which is not the workspace's base "
+                'commit, and it is not usable' % (revision or 'unknown'))
+    if status == 'unverified':
+        return 'the record is a hypothesis, unverified, and it is not usable'
+    if status == 'historical':
+        return ('the record is a past attempt, a result and not current state, and it is '
+                'not usable')
+    return 'the record does not inform a decision, and it is not usable'
+
+
+def _attachment(record, matched, field, base_reason):
+    """Return the attachment of one record to one symbol or file."""
+    entry = ' '.join(str(record.get('entry') or '').split())[:MAX_MEMORY_ENTRY_CHARS]
+    clause = _unusable_clause(record)
+    return {
+        'record_id': record.get('record_id'),
+        'kind': record.get('kind'),
+        'status': record.get('status'),
+        'usable': clause is None,
+        'superseded_by': record.get('superseded_by') if record.get('kind') == 'decision'
+                         else None,
+        'matched': matched,
+        'field': field,
+        'how': 'textual',
+        'entry': entry,
+        'reason': base_reason + ('; ' + clause if clause else ''),
+    }
+
+
+def _keep(holder, found, cap, reason_key):
+    """Order the attachments of one holder and keep at most cap of them.
+
+    The usable records come first, then the rest; inside each group the
+    recall's order is kept, so a usable record is never crowded out.
+    """
+    found.sort(key=lambda pair: (not pair[1]['usable'], pair[0],
+                                 str(pair[1]['record_id'])))
+    holder['memory'] = [attachment for _, attachment in found[:cap]]
+    holder['memory_dropped'] = max(0, len(found) - cap)
+    kept = [order for order, _ in found[:cap]]
+    if holder['memory_dropped']:
+        note = ('the memory list is truncated at %d of %d records'
+                % (cap, len(found)))
+        holder[reason_key] = '; '.join(part for part in (holder.get(reason_key), note)
+                                       if part)
+    return kept
+
+
+def attach_memory(selected, records):
+    """Attach recalled memory records to the selected symbols they name.
+
+    The records are plain dicts. The match is textual, case-sensitive, and on
+    identifier boundaries, so it does not prove that a record is about a
+    symbol. Every eligible name is matched in the record's affected component;
+    only an identifier-shaped name, one with '_' or '.' or a capital after its
+    first character, is matched in its entry, because a plain lowercase word in
+    free text is far more often an English word than a symbol. Every status
+    attaches, and a record that does not inform a decision is marked not
+    usable. A record that names no selected symbol and no selected file is
+    counted as unattached. The counts describe the attachments the caps kept,
+    and a record every attachment of which a cap dropped is counted apart.
+    Nothing is read from a file or a ledger.
+    """
+    records = list(records or [])
+    owners = {}
+    for entry in selected:
+        for relation in entry.get('relations') or []:
+            relation['memory'] = []
+            relation['memory_dropped'] = 0
+        entry['memory'] = []
+        entry['memory_dropped'] = 0
+        kinds = {symbol.get('name'): symbol.get('kind') for symbol in entry.get('symbols') or []}
+        for relation in entry.get('relations') or []:
+            name = relation.get('symbol') or ''
+            if kinds.get(name) == 'error' or len(name) < 3:
+                continue
+            owners.setdefault(name, []).append((entry, relation))
+    names = sorted(owners)
+    paths = [entry['path'] for entry in selected]
+    found_for = {}
+    matched = set()
+    unattached = []
+    for order, record in enumerate(records):
+        component = str(record.get('affected_component') or '')
+        text = str(record.get('entry') or '')
+        in_component = _names_in(_mask_paths(component, paths), names, shaped_only=False)
+        in_entry = _names_in(_mask_paths(text, paths), names, shaped_only=True) - in_component
+        hit_files = set()
+        hit_any = False
+        for field, hits in (('affected_component', in_component), ('entry', in_entry)):
+            for name in sorted(hits):
+                for entry, relation in owners[name]:
+                    attachment = _attachment(record, name, field, MEMORY_MATCH_REASON)
+                    found_for.setdefault(id(relation), (relation, []))[1].append(
+                        (order, attachment))
+                    hit_files.add(entry['path'])
+                    hit_any = True
+        for entry in selected:
+            if entry['path'] in hit_files:
+                continue
+            for field, value in (('affected_component', component), ('entry', text)):
+                if _path_pattern(entry['path']).search(value):
+                    attachment = _attachment(record, entry['path'], field, MEMORY_FILE_REASON)
+                    found_for.setdefault(id(entry), (entry, []))[1].append((order, attachment))
+                    hit_any = True
+                    break
+        if hit_any:
+            matched.add(order)
+        else:
+            unattached.append({'record_id': record.get('record_id'),
+                               'kind': record.get('kind'),
+                               'status': record.get('status'),
+                               'reason': 'the record names no selected symbol and no '
+                                         'selected file'})
+    attachments = 0
+    dropped = 0
+    to_symbols = set()
+    to_files = set()
+    for holder, found in found_for.values():
+        # A file entry's reason is why it was selected, so the cap of its own
+        # memory list is noted beside it.
+        if 'symbol' in holder:
+            to_symbols.update(_keep(holder, found, MAX_MEMORY_RECORDS_PER_SYMBOL, 'reason'))
+        else:
+            to_files.update(_keep(holder, found, MAX_MEMORY_RECORDS_PER_FILE, 'memory_reason'))
+        attachments += len(holder['memory'])
+        dropped += holder['memory_dropped']
+    attached = to_symbols | to_files
+    return {
+        'supplied': len(records),
+        'attached': len(attached),
+        'attached_to_symbols': len(to_symbols),
+        'attached_to_files': len(to_files),
+        'attachments': attachments,
+        'attachments_dropped': dropped,
+        'dropped_by_cap': len(matched - attached),
+        'not_usable_attached': len([order for order in attached
+                                    if _unusable_clause(records[order]) is not None]),
+        'unattached': unattached[:MAX_UNATTACHED_MEMORY_RECORDS],
+        'unattached_count': len(unattached),
+        'unattached_truncated': len(unattached) > MAX_UNATTACHED_MEMORY_RECORDS,
+        'how': 'textual',
+        'reason': None if records else 'no memory record was supplied',
+    }
+
+
+def _no_memory():
+    """Return the memory block of a map that was given no record."""
+    return {'supplied': 0, 'attached': 0, 'attached_to_symbols': 0, 'attached_to_files': 0,
+            'attachments': 0, 'attachments_dropped': 0, 'dropped_by_cap': 0,
+            'not_usable_attached': 0, 'unattached': [],
+            'unattached_count': 0, 'unattached_truncated': False, 'how': 'textual',
+            'reason': 'no memory record was supplied'}
+
+
 def task_terms(spec):
     """Return the terms of a task that a file can be relevant by.
 
@@ -649,8 +889,12 @@ def select(files, terms, named, root):
     return chosen[:MAX_SELECTED]
 
 
-def assemble(workspace, spec):
-    """Assemble the codebase context of a task attempt."""
+def assemble(workspace, spec, memory=None):
+    """Assemble the codebase context of a task attempt.
+
+    The memory is the list of recalled records, as plain dicts. When it is
+    given, each record is attached to the selected symbols and files it names.
+    """
     if not workspace:
         return {'version': 1, 'assembled': False, 'reason': 'the task names no workspace',
                 'files': [], 'selected': [], 'file_count': 0, 'excerpt_bytes': 0}
@@ -697,6 +941,16 @@ def assemble(workspace, spec):
     facts = search['facts']
     facts['caller_count'] = caller_count
     facts['test_count'] = test_count
+    if memory is None:
+        attached = _no_memory()
+        for item in detailed:
+            item['memory'] = []
+            item['memory_dropped'] = 0
+            for relation in item['relations']:
+                relation['memory'] = []
+                relation['memory_dropped'] = 0
+    else:
+        attached = attach_memory(detailed, memory)
     return {
         'version': 1,
         'assembled': True,
@@ -708,6 +962,7 @@ def assemble(workspace, spec):
         'selected': detailed,
         'excerpt_bytes': excerpt_bytes,
         'relations': facts,
+        'memory': attached,
         'limits': {'max_files': MAX_FILES, 'max_depth': MAX_DEPTH,
                    'max_file_bytes': MAX_FILE_BYTES, 'max_selected': MAX_SELECTED,
                    'max_symbols': MAX_SYMBOLS,
@@ -719,24 +974,48 @@ def assemble(workspace, spec):
                    'max_reference_bytes': MAX_REFERENCE_BYTES,
                    'max_callers_per_symbol': MAX_CALLERS_PER_SYMBOL,
                    'max_tests_per_symbol': MAX_TESTS_PER_SYMBOL,
-                   'max_skipped_reference_files': MAX_SKIPPED_REFERENCE_FILES},
+                   'max_skipped_reference_files': MAX_SKIPPED_REFERENCE_FILES,
+                   'max_memory_records_per_symbol': MAX_MEMORY_RECORDS_PER_SYMBOL,
+                   'max_memory_records_per_file': MAX_MEMORY_RECORDS_PER_FILE,
+                   'max_memory_entry_chars': MAX_MEMORY_ENTRY_CHARS,
+                   'max_unattached_memory_records': MAX_UNATTACHED_MEMORY_RECORDS,
+                   'max_summary_memory_lines': MAX_SUMMARY_MEMORY_LINES},
     }
 
 
 def summary(context, limit=SUMMARY_LIMIT):
     """Return a bounded digest of the assembled codebase context."""
     searched = (context.get('relations') or {}).get('searched_files') or 0
+    unattached = (context.get('memory') or {}).get('unattached_count') or 0
+    tail = ('memory: %d recalled records name no selected symbol; see '
+            'OVERSEER_RECALL_SUMMARY' % unattached) if unattached else ''
+    # The tail keeps its own room, and never more room than the digest has.
+    tail = tail[:limit]
+    if tail:
+        limit = max(0, limit - len(tail) - 1)
     blocks = []
     for entry in context.get('selected') or []:
         names = ', '.join(symbol['name'] for symbol in entry.get('symbols') or [])
         lines = ['%s (%s, score %s): %s' % (
             entry['path'], entry.get('reason'), entry.get('score'), names or 'no symbol')]
         relations = entry.get('relations') or []
+        total = len(entry.get('memory') or []) + sum(
+            len(relation.get('memory') or []) for relation in relations)
+        shown = _shown_memory(entry, relations[:MAX_SUMMARY_SYMBOL_LINES])
+        for attachment in entry.get('memory') or []:
+            if id(attachment) in shown:
+                lines.append('  file %s' % _memory_line(attachment))
         for relation in relations[:MAX_SUMMARY_SYMBOL_LINES]:
             lines.append('  %s' % _relation_line(relation, searched))
+            for attachment in relation.get('memory') or []:
+                if id(attachment) in shown:
+                    lines.append('    %s' % _memory_line(attachment))
         if len(relations) > MAX_SUMMARY_SYMBOL_LINES:
             lines.append('  (%d more symbols of this file are not shown)'
                          % (len(relations) - MAX_SUMMARY_SYMBOL_LINES))
+        if total > len(shown):
+            lines.append('  (%d more memory records of this file are not shown)'
+                         % (total - len(shown)))
         blocks.append(lines)
     pieces = []
     dropped = 0
@@ -761,8 +1040,37 @@ def summary(context, limit=SUMMARY_LIMIT):
             notes.append('the relations of the first file were cut')
         if dropped:
             notes.append("%d more files' relations were dropped" % dropped)
+        if tail:
+            text = text + '\n' + tail if text else tail
         text += '\n[truncated] %s' % ' and '.join(notes)
+    elif tail:
+        text = text + '\n' + tail if text else tail
     return text
+
+
+def _shown_memory(entry, relations):
+    """Return the attachments of one file that the digest has room for.
+
+    The room is shared by the whole file, and the usable records take it
+    first, so a not-usable record of one symbol never crowds out a usable
+    record of another. Inside each group the file's own order is kept.
+    """
+    candidates = list(entry.get('memory') or [])
+    for relation in relations:
+        candidates.extend(relation.get('memory') or [])
+    ranked = sorted(enumerate(candidates),
+                    key=lambda pair: (not pair[1].get('usable'), pair[0]))
+    return {id(attachment) for _, attachment in ranked[:MAX_SUMMARY_MEMORY_LINES]}
+
+
+def _memory_line(attachment):
+    """Return the one line that carries an attached memory record in the digest."""
+    head = 'memory %s/%s %s' % (attachment.get('kind'), attachment.get('status'),
+                                str(attachment.get('record_id') or '')[:8])
+    if not attachment.get('usable'):
+        head += ' NOT USABLE (%s)' % attachment.get('status')
+    return '%s: %s (textual match on %s)' % (head, attachment.get('entry'),
+                                             attachment.get('field'))
 
 
 def _relation_line(relation, searched):
