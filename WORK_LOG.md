@@ -1948,3 +1948,17 @@ The suite grew from 193 to 205 tests, all passing, and the document reference
 checker resolves all 116 citations. The CONTEXT row of the pillar map carries
 this increment, and the STATE row's now-false claim that recall was absent was
 corrected.
+
+A live run confirmed it outside the test suite. Two tasks were submitted to a
+temporary ledger in a temporary workspace: the first job recorded a decision
+and a verified fact, and the second attempt recalled both. Its `recall.json`
+named the scope, the counts, and each record with its status, the worker
+received the digest through the environment, and the manifest recorded the
+consumption, the record identifiers, and the digest of the recall file:
+
+```text
+[verified_fact/current] the package: the package passed the checks
+[decision/current] the filter: keep the filter semantics
+```
+
+The private factory ledger and the repository were not touched by that run.
