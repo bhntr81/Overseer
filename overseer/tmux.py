@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import fnmatch
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -12,6 +13,32 @@ from .modelchoice import (
 )
 
 CLIENTS = frozenset({"codex", "claude", "opencode"})
+
+
+def under(directory, root):
+    """Report whether a directory is inside a root directory."""
+    if not directory or not root:
+        return False
+    try:
+        return os.path.commonpath([directory, root]) == root
+    except ValueError:
+        return False
+
+
+def client_directory(pane, binding=None, fallback=None):
+    """Return the working directory of the client that runs in a pane.
+
+    A reptyr-bridged pane reports the bridge's directory, so the client's own
+    directory is read from the bridged process instead.
+    """
+    if binding:
+        try:
+            return os.readlink("/proc/%s/cwd" % binding.split(":")[0])
+        except OSError:
+            pass
+    if fallback is None:
+        fallback = command("display-message", "-p", "-t", pane, "#{pane_current_path}").strip()
+    return fallback
 
 
 def command(*args):
@@ -64,26 +91,56 @@ def bridged_process(bridge_pid, binding):
 
 
 class Tmux:
-    def __init__(self, exclusions=()):
+    def __init__(self, exclusions=(), targets=(), target_paths=()):
         self.exclusions = exclusions
+        self.targets = targets
+        self.target_paths = target_paths
 
     def inventory(self):
         try:
-            output = command("list-panes", "-a", "-F", "#{pane_id}\t#{@overseer}\t#{session_name}\t#{pane_title}")
+            output = command("list-panes", "-a", "-F",
+                             "#{pane_id}\t#{@overseer}\t#{session_name}\t#{pane_title}\t"
+                             "#{@overseer_target}\t#{pane_current_path}")
         except RuntimeError as error:
             if "no server running" in str(error) or "error connecting" in str(error):
                 return []
             raise
         result = []
         for line in output.splitlines():
-            pane, enabled, session, title = line.split("\t", 3)
+            pane, enabled, session, title, binding, path = line.split("\t", 5)
             excluded = any(matches(pattern, (pane, session, title)) for pattern in self.exclusions)
             result.append({"pane": pane, "enabled": enabled == "1", "session": session,
-                           "title": title, "excluded": excluded})
+                           "title": title, "binding": binding, "path": path, "excluded": excluded})
         return result
 
+    def targeted(self, row):
+        """Report whether a pane is inside the configured target scope."""
+        if any(matches(pattern, (row["pane"], row["session"], row["title"]))
+               for pattern in self.targets):
+            return True
+        if not self.target_paths:
+            return False
+        directory = client_directory(row["pane"], row["binding"], row["path"])
+        return any(under(directory, root) for root in self.target_paths)
+
+    def scope(self, row):
+        """Return the management scope of a pane."""
+        if row["excluded"]:
+            return "EXCLUDED"
+        if row["enabled"]:
+            return "WATCHED"
+        if self.targeted(row):
+            return "TARGETED"
+        return "OUT OF SCOPE"
+
     def panes(self):
-        return [row["pane"] for row in self.inventory() if row["enabled"] and not row["excluded"]]
+        """Return the panes the monitor manages.
+
+        A pane is managed when it was explicitly enrolled, or when the
+        configured target scope names it. Everything else is ignored.
+        """
+        return [row["pane"] for row in self.inventory()
+                if not row["excluded"] and (row["enabled"] or self.targeted(row))]
 
     def snapshot(self, pane, require_opt_in=True):
         metadata = command("display-message", "-p", "-t", pane,

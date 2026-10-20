@@ -16,7 +16,8 @@ class ExclusionTests(unittest.TestCase):
 
     def test_excluded_pane_is_never_sent_to(self):
         backend = Tmux(["labs"])
-        inventory = "%0\t1\tsolver\tSolver\n%1\t1\tkali\tKali labs\n"
+        # pane, enrolled, session, title, bridge binding, pane path
+        inventory = "%0\t1\tsolver\tSolver\t\t/tmp/solver\n%1\t1\tkali\tKali labs\t\t/tmp/kali\n"
         with patch("overseer.tmux.command", return_value=inventory) as command:
             self.assertEqual(backend.panes(), ["%0"])
             with self.assertRaisesRegex(RuntimeError, "excluded"):

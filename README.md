@@ -103,6 +103,36 @@ in force. `watch` and `unwatch` independently control pane enrollment. Config is
 reloaded every poll, so exclusions and setting changes apply within 30 seconds.
 Do not use `include` as a substitute for checking `status` when several rules match.
 
+## Project targeting
+
+The monitor manages only the panes that are in scope. A pane is in scope when
+it was explicitly enrolled with `overseer watch`, or when the configured
+target scope names it. Every other tmux window is ignored: it is never
+snapshotted, never queued, never sent to, and never typed into.
+
+`config.json` carries the scope:
+
+```json
+"targets": ["overseer-projects-1174383"],
+"target_paths": ["."]
+```
+
+- `targets` are patterns matched against the pane ID, the session name, and the
+  window title, with the same rules as `exclude`: an exact pane ID, a
+  case-insensitive substring, or a quoted glob. A matching pane is managed
+  without being enrolled.
+- `target_paths` are directories. A pane whose client runs inside one of them
+  is managed. A relative path is resolved against the directory that holds
+  `config.json`, so `"."` means this workspace. The directory is the client's
+  own, not the bridge's, so a reptyr-bridged session is judged by the project
+  its client actually works on.
+
+The rules, in order: an excluded pane is never managed, even when it is
+enrolled or targeted. Otherwise an enrolled pane is managed, then a targeted
+one. `overseer status` shows the scope of every window: `WATCHED` for an
+enrolled pane, `TARGETED` for a pane in scope by configuration, `EXCLUDED` for
+an excluded one, and `OUT OF SCOPE` for a window the monitor ignores.
+
 ## Try it
 
 ```sh
@@ -266,8 +296,9 @@ identical capacity screen without an observed intervening run remains ambiguous
 and is held rather than automatically retried. Changed footer tips do not count
 as evidence of a new answer. A new routine continuation question can also end a
 turn for clients that do not display Codex's completed-turn footer. An
-operator can explicitly unwatch it to release its reservation. Exclusions and
-unwatching remove panes from queue control. The scheduler serializes Overseer's
+operator can explicitly unwatch it to release its reservation. Exclusions,
+unwatching, and leaving the target scope remove panes from queue control. The
+scheduler serializes Overseer's
 automatic terminal dispatches only: manual input, excluded sessions, and agents
 delegated inside a session can still overlap. Terminal-state detection remains
 heuristic, so this is not a provider-wide concurrency lock.

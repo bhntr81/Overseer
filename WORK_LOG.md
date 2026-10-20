@@ -1779,7 +1779,12 @@ Acceptance checks and the test that proves each one:
 2. a command-mode task with a contract is accepted —
    `test_a_command_mode_task_with_a_contract_is_accepted`
 3. the three controller-owned modes still run with no contract —
-   `test_the_controller_modes_still_run_without_a_contract`
+   `test_the_controller_modes_still_run_without_a_contract` proves that all
+   three submit without a contract and that the fixture mode runs; the
+   fake-provider mode's run is proved by
+   `test_fake_provider_success_receipt_is_bound_to_its_verifier`, and the
+   isolation probe's run by `test_live_probe_blocks_protected_paths_network_and_memory`
+   in `tests/test_isolation.py`
 4. a stored legacy job still runs, still inspects with `contract` as `None`,
    and keeps its stored hash and specification —
    `test_a_stored_legacy_job_still_runs_and_is_not_rewritten`, and the same
@@ -1830,3 +1835,55 @@ Disagreements and limits, kept visible:
 Not touched: the live tmux server and every pane, the running monitor service,
 the live factory ledger, `config.json`, the monitor's own modules,
 `factory/routing-policy.json`, and the routing policy's status string.
+
+A review of this increment then found five statements that did not match
+reality, the dedicated prompt-writing agent authored the corrective prompt,
+and the primary agent executed it. No behaviour changed and no test was added,
+removed, renamed, or weakened. The execution record's total-suite figure was
+wrong, it said 172 where the check command reports 178. The pillar map's
+`tests/test_factory.py` coverage citation pointed at a helper line instead of
+the test it named. The implementation's own docstring and the `ContractTests`
+class docstring still called the contract block optional. The CONTRACT row's
+verdict still opened with permission wording, "may now carry", one clause
+before the same sentence said the block is required. The execution record's
+ledger sentence said "Everything above" where it meant the ledger facts
+above. The five files corrected were `overseer/factory.py`,
+`tests/test_factory.py`, `docs/FACTORY_EXECUTION.md`,
+`docs/HARNESS_FRAMEWORK.md`, and this log.
+
+### Explicit project targeting
+
+The user asked that Overseer manage only the tmux windows and projects that
+are explicitly targeted, instead of sweeping every active pane, and that the
+work stay inside the Overseer workspace. The dedicated prompt-writing agent
+authored the bounded prompt; the primary agent executed it.
+
+The transport already required an explicit enrollment to be managed, but it
+had no way to name a project. `config.json` now carries the scope:
+
+```json
+"targets": ["overseer-projects-1174383"],
+"target_paths": ["."]
+```
+
+`targets` are patterns matched against the pane ID, the session name, and the
+window title, with the same rules as `exclude`. `target_paths` are
+directories; a relative path resolves against the directory that holds
+`config.json`, so `"."` is this workspace. The directory that is compared is
+the client's own, read from the bridged process, because a reptyr-bridged
+pane reports the bridge's directory instead.
+
+The rules, in order: an excluded pane is never managed, an enrolled pane is
+managed, a targeted pane is managed, and every other window is ignored. The
+transport refuses to type into a pane that is not in scope, so the scope
+holds at the last moment before a send. `overseer status` now shows `WATCHED`,
+`TARGETED`, `EXCLUDED`, or `OUT OF SCOPE` for every window.
+
+Targeting the Overseer session brought a dead client back into the monitor's
+view, and a dead client used to be reported on every poll. The stale notice
+is now reported once per episode instead of once per poll.
+
+The suite grew from 178 to 192 tests, all passing, and the document reference
+checker resolves all 112 citations. The live tmux server, every pane, and the
+running sessions of other projects were not touched; no work was routed
+anywhere.

@@ -47,6 +47,14 @@ def settings(path):
             raise ValueError(f"{field} must be a positive integer")
     if not isinstance(config.get("exclude", []), list) or any(not isinstance(v, str) or not v.strip() for v in config.get("exclude", [])):
         raise ValueError("exclude must be a list of nonempty patterns")
+    if not isinstance(config.get("targets", []), list) or any(not isinstance(v, str) or not v.strip() for v in config.get("targets", [])):
+        raise ValueError("targets must be a list of nonempty patterns")
+    if not isinstance(config.get("target_paths", []), list) or any(not isinstance(v, str) or not v.strip() for v in config.get("target_paths", [])):
+        raise ValueError("target_paths must be a list of nonempty paths")
+    # A relative target path is resolved against the workspace that holds the
+    # configuration, so "." means this project.
+    config["target_paths"] = [str((path.parent / item).resolve()) if not Path(item).is_absolute() else item
+                              for item in config.get("target_paths", [])]
     reply = config.get("reply", DEFAULT_REPLY)
     if not isinstance(reply, str) or not reply.strip() or len(reply) > 1000 or any(ord(c) < 32 or ord(c) == 127 for c in reply):
         raise ValueError("reply must be one nonempty line, at most 1000 characters")
@@ -157,7 +165,8 @@ def model_select(args):
     if entry is None:
         print("Provider %s is not permitted." % choice, file=sys.stderr)
         return 1
-    backend = Tmux(config.get("exclude", []))
+    backend = Tmux(config.get("exclude", []), config.get("targets", []),
+                  config.get("target_paths", []))
     try:
         snapshot = backend.inspect(args.pane)
     except (RuntimeError, OSError, ValueError) as error:
@@ -261,7 +270,8 @@ def run(args):
         if not isinstance(state, dict) or any(not isinstance(v, dict) for v in state.values()):
             raise ValueError("invalid state file; inspect it before restarting")
         policy = Policy(config["idle_seconds"], config["cooldown_seconds"], config["max_per_day"], config.get("continue_on_completion", False))
-        backend = Tmux(config.get("exclude", []))
+        backend = Tmux(config.get("exclude", []), config.get("targets", []),
+                      config.get("target_paths", []))
         stopped = False
 
         def stop(signum, frame):
@@ -275,6 +285,8 @@ def run(args):
             try:
                 config = settings(args.config)
                 backend.exclusions = config.get("exclude", [])
+                backend.targets = config.get("targets", [])
+                backend.target_paths = config.get("target_paths", [])
                 policy = Policy(config["idle_seconds"], config["cooldown_seconds"], config["max_per_day"], config.get("continue_on_completion", False))
                 tick(backend, policy, state, config, args.state, time.time())
             except (RuntimeError, OSError, ValueError) as error:
@@ -338,9 +350,10 @@ def main():
                 for key, entry in state.items():
                     if entry.get('queue_reason', '').startswith('capacity retry limit'):
                         print(f"Blocked {key}: {entry['queue_reason']}")
-            for row in Tmux(config.get("exclude", [])).inventory():
-                status = "EXCLUDED" if row["excluded"] else "WATCHED" if row["enabled"] else "OFF"
-                print(f"{row['pane']} {status}: {row['session']} — {row['title']}")
+            backend = Tmux(config.get("exclude", []), config.get("targets", []),
+                           config.get("target_paths", []))
+            for row in backend.inventory():
+                print(f"{row['pane']} {backend.scope(row)}: {row['session']} — {row['title']}")
             for pane, record in sorted(pending_decisions(args.state).items()):
                 print(f"{pane} MODEL DECISION PENDING: {record.get('name')} "
                       f"({record.get('detail')}) — providers: "

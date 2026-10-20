@@ -90,10 +90,19 @@ def _missing_process(error):
 
 
 def _mark_stale(state, pane):
+    """Mark the panes of a dead client. Report whether the notice is new.
+
+    A dead client is a standing fact, so it is reported once rather than on
+    every poll.
+    """
+    notices = state.setdefault('_stale_notices', {})
     prefix = f'{pane}:'
     for key, entry in state.items():
         if key.startswith(prefix) and isinstance(entry, dict):
             entry['queue_reason'] = 'dead or stale process'
+    new = pane not in notices
+    notices[pane] = True
+    return new
 
 
 def _resolutions(path):
@@ -181,8 +190,8 @@ def tick_queue(backend, policy, state, config, path, now, save):
         except (RuntimeError, OSError, ValueError) as error:
             if _missing_process(error):
                 stale.add(pane)
-                _mark_stale(state, pane)
-                LOG.warning('%s queue observation skipped: dead or stale process: %s', pane, error)
+                if _mark_stale(state, pane):
+                    LOG.warning('%s queue observation skipped: dead or stale process: %s', pane, error)
                 continue
             LOG.warning('%s queue observation failed: %s', pane, error)
             failed = True
@@ -219,6 +228,7 @@ def tick_queue(backend, policy, state, config, path, now, save):
     eligible_map = {}
     for key, s in snapshots.items():
         entry = state.setdefault(key, {})
+        state.get('_stale_notices', {}).pop(s.pane, None)
         capacity = phases[key] == 'capacity'
         route_entry = routes.get(s.pane)
         resume = bool(isinstance(route_entry, dict) and route_entry.get('resume'))
