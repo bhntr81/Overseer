@@ -278,15 +278,16 @@ def opencode_composer(text):
 
 
 def opencode_empty(text):
-    """Report whether an OpenCode composer row shows an idle, empty composer.
+    """Report whether an OpenCode composer row shows an empty composer.
 
-    A blank border row means a turn is using the box, so only the idle
-    placeholder counts as an empty composer.
+    The composer is a bordered box. A blank box row is an empty composer: a
+    finished turn leaves the box blank, and a fresh session shows the idle
+    placeholder. Only text after the border is a draft.
     """
     body = opencode_composer(text)
     if body is None:
         return False
-    return body.startswith("Ask anything")
+    return body == "" or body.startswith("Ask anything")
 
 
 def running_marker(text):

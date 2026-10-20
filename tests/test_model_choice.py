@@ -63,13 +63,22 @@ OPENCODE_RUNNING = [
 OPENCODE_RUNNING_CURSOR = 6
 OPENCODE_IDLE = [
     '  ┃',
+    '  ┃',
+    '  ┃',
+    '  ┃  Build · MiniMax M3.1 Flash Free OpenCode',
+    '  ╹' + '▀' * 40,
+    '   ~/Projects/Crypto-Cooking                      207.1K (21%)  ctrl+p commands',
+]
+OPENCODE_IDLE_CURSOR = 1
+OPENCODE_FRESH = [
+    '  ┃',
     '  ┃  Ask anything… "Fix broken tests"',
     '  ┃',
     '  ┃  Build · MiniMax M3.1 Flash Free OpenCode',
-    '  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+    '  ╹' + '▀' * 40,
     '   ~/Projects/Crypto-Cooking                 shift+tab agents  ctrl+p commands',
 ]
-OPENCODE_IDLE_CURSOR = 1
+OPENCODE_FRESH_CURSOR = 1
 
 
 MODEL_ERROR = (
@@ -264,13 +273,13 @@ class ModelChoiceTests(unittest.TestCase):
         self.assertEqual(self.state['%0:0']['queue_reason'], 'CREDITS_EXHAUSTED_WAITING')
 
     def test_opencode_composer_readiness(self):
-        empty = Snapshot('%0', 'opencode', '1', 'text', '┃  Ask anything… "Fix broken tests"', '0', '0')
-        self.assertTrue(empty.ready)
+        fresh = Snapshot('%0', 'opencode', '1', 'text', '┃  Ask anything… "Fix broken tests"', '0', '0')
+        self.assertTrue(fresh.ready)
+        # A finished turn leaves the composer box blank, not placeholdered.
+        finished = Snapshot('%0', 'opencode', '1', 'text', '┃', '0', '0')
+        self.assertTrue(finished.ready)
         draft = Snapshot('%0', 'opencode', '1', 'text', '┃  x', '0', '0')
         self.assertFalse(draft.ready)
-        # A blank border row is a turn using the box, not an empty composer.
-        boxed = Snapshot('%0', 'opencode', '1', 'text', '┃', '0', '0')
-        self.assertFalse(boxed.ready)
 
     def test_picker_block_ignores_conversation_lines(self):
         screen = CONVERSATION + PICKER
@@ -356,6 +365,8 @@ class ModelChoiceTests(unittest.TestCase):
     def test_opencode_finished_turn_is_finished(self):
         screen = self.opencode_screen(OPENCODE_IDLE, OPENCODE_IDLE_CURSOR)
         self.assertEqual(phase(screen), 'finished')
+        fresh = self.opencode_screen(OPENCODE_FRESH, OPENCODE_FRESH_CURSOR)
+        self.assertEqual(phase(fresh), 'finished')
 
     def test_opencode_turn_releases_the_reservation(self):
         idle = self.opencode_screen(OPENCODE_IDLE, OPENCODE_IDLE_CURSOR)

@@ -1004,3 +1004,21 @@ running is eligible for the next continuation once it finishes, and the queue
 reservation is released. The suite grew from 115 to 119 tests, all passing,
 and the document reference checker resolves all 87 citations. The live OpenCode
 session was still running its turn throughout this change.
+
+The live check confirmed the fix, and corrected it. The first pass assumed
+that a finished OpenCode turn restores the `Ask anything…` placeholder; the
+live session showed that it does not. A finished turn leaves the composer box
+blank, and the placeholder only appears in a fresh session, so the readiness
+rule accepts a blank box as an empty composer and the running marker is what
+separates a running turn from a finished one.
+
+The routed session `%7` then released its reservation on the first poll after
+the service restart:
+
+```text
+Oct 20 01:11:48 INFO queue releases %7: stopped
+```
+
+The OpenCode turn ended with `OVERSEER_NEEDS_INPUT`, so the pane is now held
+by the stop marker and waits for the operator. The turn itself ran 50m 41s
+with about 110 tool calls and four delegated agents.

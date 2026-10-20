@@ -288,11 +288,12 @@ recognized, so the monitor reports it instead of driving it.
 
 An OpenCode session is understood in both of its turn states. While a turn
 runs, the running footer (`esc interrupt`) and the background-work hint mark
-the pane as active, and it is never answered. When the turn ends and the
-composer shows its idle `Ask anything…` placeholder again, the pane counts as
-finished, the queue reservation is released, and the next continuation is
-sent. OpenCode draws no user-message boundary, so the tail of its screen is
-treated as the current answer.
+the pane as active, and it is never answered. When the turn ends, that marker
+is gone and the composer is an empty box, so the pane counts as finished, the
+queue reservation is released, and the next continuation is sent. A fresh
+session shows an `Ask anything…` placeholder in the same box. OpenCode draws
+no user-message boundary, so the tail of its screen is treated as the current
+answer.
 
 Replies have a 15-minute cooldown and a limit of 12 per pane per rolling day.
 The monitor persists fingerprints in `~/.local/state/overseer/state.json` so
