@@ -56,10 +56,11 @@ harness pillars and the code that implements them.
 Run `python3 -m overseer.factory --help` for the separate explicit-job runner.
 A command-mode task may carry an optional `contract` block that states the
 role, risk tier, external effects, protected paths, approval requirements,
-acceptance identifiers, required capabilities, project constraints, and budget
-limits. The block is validated and stored with the task; it records those
-statements and enforces none of them. Run `python3 scripts/check` for isolated
-local verification. The terminal monitor continues to operate independently.
+acceptance identifiers, required capabilities, project constraints, measured
+evidence, provider availability, and budget limits. The block is validated and
+stored with the task; it records those statements and enforces none of them.
+Run `python3 scripts/check` for isolated local verification. The terminal
+monitor continues to operate independently.
 
 ## Installed configuration
 

@@ -1124,3 +1124,63 @@ Not touched: the live tmux server and every pane, the running monitor service
 (still PID 3550026, not restarted), the live factory ledger at
 `~/.local/state/overseer/factory` (its `jobs.sqlite3` still carries its
 2026-10-19 22:34:24 timestamp), `config.json`, and the monitor's own modules.
+
+### Review correction: three contract rejections raised TypeError, not ValueError
+
+The review of the contract increment found one real defect, and the dedicated
+prompt-writing agent authored the corrective prompt while the primary agent
+executed it. The contract schema, its bounds, the `REQUEST_INPUT_FIELDS` map,
+the routing-policy `status` string, and the pillar verdicts are unchanged.
+
+The defect was in the rejection path, not the accepted values. Three checks
+tested membership or uniqueness before they tested the type, so an unhashable
+value escaped as a `TypeError` instead of the `ValueError` the increment
+promised. `overseer/factory.py:213` and `overseer/factory.py:215` tested
+`contract['role']` and `contract['risk_tier']` against their closed sets, and
+`overseer/factory.py:228` built a `set()` of the acceptance identifiers before
+checking that they were strings. Reproduced against a temporary database:
+
+```text
+role -> TypeError : cannot use 'list' as a set element (unhashable type: 'list')
+risk_tier -> TypeError : cannot use 'dict' as a set element (unhashable type: 'dict')
+acceptance_ids -> TypeError : cannot use 'list' as a set element (unhashable type: 'list')
+```
+
+It mattered because `main()` catches only `(ValueError, OSError, RuntimeError,
+sqlite3.Error)`, so an invalid task printed a Python traceback instead of the
+runner's `{"error": ...}` object. The role and risk tier checks now test the
+type before the membership test, and the acceptance identifiers are checked
+for the identifier pattern before the uniqueness check. The accepted values,
+the count rule, the uniqueness rule, and the eleven-key closed set are exactly
+as they were.
+
+```text
+python3 -m unittest discover -s tests -p 'test_factory.py' -v
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --check
+```
+
+Results, copied from the final run: the factory suite ran 48 tests in 2.738
+seconds, OK; the full suite ran 134 tests in 13.721 seconds, OK; the document
+reference checker reported `91 references checked in HARNESS_FRAMEWORK.md`;
+`git diff --check` exited 0. The factory suite grew from 46 to 48 tests: one
+case for the unhashable values, and one that runs the runner's own command
+line against a temporary database and asserts the JSON error object, the exit
+code 1, and no traceback on stderr. Token usage and monetary cost were not
+supplied by the runtime and remain unavailable.
+
+Files changed: `overseer/factory.py` (three rejection paths), `tests/test_factory.py`
+(two tests), `README.md` (the field enumeration now names all eleven keys),
+and this log. `docs/HARNESS_FRAMEWORK.md` needed no re-citation: the fix
+changed the conditions in place and moved no line, and every cited line was
+re-read by content afterwards. The live tmux server, every pane, the running
+monitor service, the live factory ledger, `config.json`,
+`docs/FACTORY_EXECUTION.md`, and `factory/tasks/overseer-checks.json` were not
+touched.
+
+A few citations in the pillar map point at blank lines
+(`overseer/__main__.py:17`, `overseer/__main__.py:21`, `overseer/__main__.py:270`,
+`overseer/modelchoice.py:292`, `docs/FACTORY_EXECUTION.md:97`). They predate
+this increment, they were not touched here, and they remain as a separate
+housekeeping item.

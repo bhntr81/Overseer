@@ -849,6 +849,36 @@ class ContractTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         self.f.submit(spec_without_id)
 
+    def test_unhashable_contract_values_are_validation_errors(self):
+        cases = (
+            ('role', ['implementation']),
+            ('role', {'role': 'implementation'}),
+            ('risk_tier', ['low']),
+            ('risk_tier', {'risk': 'low'}),
+            ('acceptance_ids', [['A1']]),
+            ('acceptance_ids', [{'id': 'A1'}]),
+        )
+        for field, value in cases:
+            with self.subTest(field=field, value=value):
+                block = self.contract()
+                block[field] = value
+                with self.assertRaises(ValueError):
+                    self.f.submit(self.contract_spec('unhashable', block))
+
+    def test_invalid_task_reports_a_json_error_without_a_traceback(self):
+        spec = self.contract_spec('cli-bad')
+        spec['contract']['role'] = ['not', 'a', 'string']
+        path = self.root / 'bad.json'
+        path.write_text(json.dumps(spec))
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        result = subprocess.run(
+            [sys.executable, '-m', 'overseer.factory', '--db',
+             str(self.root / 'cli' / 'jobs.sqlite3'), 'submit', str(path)],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('error', json.loads(result.stdout))
+        self.assertNotIn('Traceback', result.stderr)
+
     def test_a_spec_without_a_contract_still_runs(self):
         spec = self.command_spec('legacy')
         self.assertTrue(self.f.submit(spec))

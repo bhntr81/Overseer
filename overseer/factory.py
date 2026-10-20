@@ -210,9 +210,9 @@ def validate_contract(contract, spec):
         raise ValueError('contract must be an object')
     if set(contract) != set(CONTRACT_FIELDS):
         raise ValueError('contract must have exactly: ' + ', '.join(CONTRACT_FIELDS))
-    if contract['role'] not in CONTRACT_ROLES:
+    if not isinstance(contract['role'], str) or contract['role'] not in CONTRACT_ROLES:
         raise ValueError('contract role must be one of: ' + ', '.join(sorted(CONTRACT_ROLES)))
-    if contract['risk_tier'] not in RISK_TIERS:
+    if not isinstance(contract['risk_tier'], str) or contract['risk_tier'] not in RISK_TIERS:
         raise ValueError('contract risk_tier must be one of: ' + ', '.join(sorted(RISK_TIERS)))
     _text_list(contract, 'external_effects', 16, 200)
     _text_list(contract, 'required_capabilities', 32, 200)
@@ -225,11 +225,11 @@ def validate_contract(contract, spec):
         raise ValueError('contract acceptance_ids must be a list')
     if len(identifiers) != len(spec['checks']):
         raise ValueError('contract acceptance_ids must match the number of acceptance commands')
-    if len(set(identifiers)) != len(identifiers):
-        raise ValueError('contract acceptance_ids entries must be unique')
     for identifier in identifiers:
         if not isinstance(identifier, str) or IDENTIFIER.fullmatch(identifier) is None:
             raise ValueError('contract acceptance_ids entries must be identifiers')
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError('contract acceptance_ids entries must be unique')
 
     evidence = contract['measured_evidence']
     if evidence is not None:
