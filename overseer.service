@@ -3,7 +3,7 @@ Description=Overseer LLM terminal continuation monitor
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/Overseer
+WorkingDirectory=%h/Programming/Projects/Overseer
 ExecStart=/usr/bin/python3 -m overseer run
 Restart=on-failure
 RestartSec=10

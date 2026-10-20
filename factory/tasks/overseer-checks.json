@@ -1,7 +1,7 @@
 {
-  "id": "overseer-foundation-checks-001",
+  "id": "overseer-foundation-checks-002",
   "objective": "Record independent Overseer validation; no AI implementation or product acceptance claimed",
-  "workspace": "/home/kali/Projects/Overseer",
+  "workspace": "/home/kali/Programming/Projects/Overseer",
   "timeout_seconds": 120,
   "implementation": ["python3", "-c", "from pathlib import Path; assert Path('overseer/factory.py').is_file(); print('Factory source is present')"],
   "checks": [["python3", "scripts/check"]]

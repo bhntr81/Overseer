@@ -1151,3 +1151,61 @@ class EnvelopeTests(unittest.TestCase):
         rows = json.loads(status.stdout)
         self.assertEqual(rows[0]['approval']['decider'], 'operator')
         self.assertEqual(rows[0]['id'], 'cli')
+
+    def test_cancel_refuses_a_task_that_started_running_in_between(self):
+        self.assertTrue(self.f.submit(self.command_spec('racing')))
+        competing = sqlite3.connect(self.db, timeout=10)
+
+        def trace(statement):
+            if statement.strip().upper().startswith('UPDATE JOBS SET STATE'):
+                competing.execute("UPDATE jobs SET state='running' WHERE id='racing'")
+                competing.commit()
+
+        self.f.db.set_trace_callback(trace)
+        try:
+            with self.assertRaises(ValueError):
+                self.f.cancel('racing')
+        finally:
+            self.f.db.set_trace_callback(None)
+            competing.close()
+        saved = self.f.inspect('racing')
+        self.assertEqual(saved['state'], 'running')
+        events = [e['state'] for e in saved['events']]
+        self.assertNotIn('cancelled', events)
+
+    def test_the_decision_updates_the_job_detail(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('detail-granted')))
+        granted = self.f.decide('detail-granted', 'granted', 'operator', 'a note')
+        self.assertIn('granted', granted['detail'])
+        self.assertIn('operator', granted['detail'])
+        self.assertNotIn('waiting for a recorded decision', granted['detail'])
+        self.assertTrue(self.f.submit(self.envelope_spec('detail-refused')))
+        refused = self.f.decide('detail-refused', 'refused', 'operator', 'not now')
+        self.assertIn('refused', refused['detail'])
+        self.assertIn('dispatched no command', refused['detail'])
+        self.assertIn('no external effect', refused['detail'])
+        self.assertNotIn('waiting for a recorded decision', refused['detail'])
+
+    def test_a_task_that_needs_no_decision_is_queued_and_runs(self):
+        block = self.envelope(requires_decision=False)
+        self.assertTrue(self.f.submit(self.envelope_spec('no-decision', block)))
+        self.assertEqual(self.f.inspect('no-decision')['state'], 'queued')
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        self.assertTrue((self.root / 'marker').exists())
+        self.assertIsNone(self.f.inspect('no-decision')['approval'])
+
+    def test_the_status_rows_carry_the_same_detail_as_inspect(self):
+        self.assertTrue(self.f.submit(self.envelope_spec('status-detail')))
+        self.f.decide('status-detail', 'granted', 'operator', 'note')
+        path = self.root / 'status.json'
+        path.write_text(json.dumps(self.envelope_spec('status-detail')))
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        result = subprocess.run(
+            [sys.executable, '-m', 'overseer.factory', '--db', str(self.db), 'status'],
+            capture_output=True, text=True, timeout=60, cwd=str(ROOT), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = json.loads(result.stdout)
+        row = [r for r in rows if r['id'] == 'status-detail'][0]
+        self.assertEqual(row['detail'], self.f.inspect('status-detail')['detail'])
+        self.assertIn('granted', row['detail'])

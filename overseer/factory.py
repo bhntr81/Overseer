@@ -732,6 +732,19 @@ class Factory:
             detail = ('decision ' + decision + ' by ' + decider.strip()
                       + '; envelope mode ' + str(envelope.get('mode'))
                       + '; note: ' + note)
+            if decision == 'granted':
+                state = 'queued'
+                job_detail = ('decision granted by ' + decider.strip()
+                              + '; envelope mode ' + str(envelope.get('mode'))
+                              + '; queued for dispatch; note: ' + note)
+                event = 'approval_granted'
+            else:
+                state = 'refused'
+                job_detail = ('decision refused by ' + decider.strip()
+                              + '; envelope mode ' + str(envelope.get('mode'))
+                              + '; the runner dispatched no command, started no child process, '
+                              'and recorded no external effect for this task; note: ' + note)
+                event = 'approval_refused'
             with self.db:
                 try:
                     self.db.execute(
@@ -741,12 +754,10 @@ class Factory:
                     )
                 except sqlite3.IntegrityError:
                     raise ValueError('a decision was already recorded for this task') from None
-                if decision == 'granted':
-                    self.db.execute('UPDATE jobs SET state=? WHERE id=?', ('queued', job_id))
-                    self.event(job_id, 'approval_granted', detail)
-                else:
-                    self.db.execute('UPDATE jobs SET state=? WHERE id=?', ('refused', job_id))
-                    self.event(job_id, 'approval_refused', detail)
+                # The state and its detail change in the same transaction.
+                self.db.execute('UPDATE jobs SET state=?,detail=? WHERE id=?',
+                                (state, job_detail, job_id))
+                self.event(job_id, event, detail)
         return self.inspect(job_id)
 
     def cancel(self, job_id):
@@ -756,7 +767,12 @@ class Factory:
                 raise ValueError('unknown job')
             if row['state'] not in ('queued', 'awaiting_approval'):
                 raise ValueError('only a queued or waiting job can be cancelled here')
-            self.db.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (job_id,))
+            # The state change is guarded by the state that was observed, so a
+            # task that started running in between is refused, not overwritten.
+            cur = self.db.execute('UPDATE jobs SET state=? WHERE id=? AND state=?',
+                                  ('cancelled', job_id, row['state']))
+            if cur.rowcount != 1:
+                raise ValueError('only a queued or waiting job can be cancelled here')
             if row['state'] == 'awaiting_approval':
                 detail = ('operator cancelled a waiting task: the runner dispatched no command, '
                           'started no child process, and recorded no external effect')

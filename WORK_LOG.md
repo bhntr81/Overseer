@@ -1306,21 +1306,164 @@ visible rather than smoothed over:
   not mention `decide`. That file is outside this increment's scope, so the
   drift is recorded here as work for a later increment.
 
-Two sentences in `docs/HARNESS_FRAMEWORK.md` were false once the gate
-existed, and they were corrected with the change recorded here: the
-process-order paragraph said "There is still no general permission envelope",
-and the claims list said "There is no approval gate and no approver
-identity". They now state what exists, a recorded envelope and one
-pre-dispatch gate in the factory, and what still does not, an approver
-identity check, an enforced scope, a policy engine, and an operator pause of
-running work. Every other pillar row, including the CONTRACT row and its
-sentence that the monitor's request contract is still one free-text string,
-is unchanged. Every `path:line` citation in the file was re-cited to the line
-that now holds the claimed content and re-read by content, because the
-reference checker proves only that a path exists and a line is in range.
+Four prose edits in `docs/HARNESS_FRAMEWORK.md` were needed once the gate
+existed, and each is recorded here with its before and after:
+
+1. The process-order paragraph said "There is still no general permission
+   envelope, so the stage that decides what the model sees is missing and the
+   stage that decides what it may do covers one failure class only." It now
+   says that the factory carries a recorded capability envelope, that a task
+   which declares it needs a fresh decision waits in `awaiting_approval` until
+   a decision naming the decider is recorded, that the envelope's scope and
+   decider identity are recorded and not authorized, that the stage that
+   decides what the model sees is still missing, and that there is no operator
+   pause of running work.
+2. The contract-block claims bullet ended with "and there is no approver
+   identity and no approval gate." That clause was removed, because the
+   factory now has one approval gate, and the bullet keeps the contract
+   block's own honest limit: the block records declared risk, protected paths,
+   approval requirements, and budget limits and enforces none of them.
+3. A new claims bullet was added for the envelope: "The envelope block
+   records a capability mode, a declared scope, and a decider name; it
+   authorizes none of them. The only enforced part is the gate: a task that
+   declares it needs a decision is not dispatched until a decision is
+   recorded, and the recorded decider is compared with no roster."
+4. The claims bullet "There is no approval gate and no approver identity" was
+   replaced by "The factory has one pre-dispatch approval gate and one
+   operator approval gate in the monitor. There is no approver identity
+   check, no enforced scope, no policy engine, no operator pause of running
+   work, and no retry-with-reason path."
+
+Every other pillar row, including the CONTRACT row and its sentence that the
+monitor's request contract is still one free-text string, kept its verdict and
+its next-increment text; only their citations were re-pointed. Every
+`path:line` citation in the file was re-cited to the line that now holds the
+claimed content and re-read by content, because the reference checker proves
+only that a path exists and a line is in range.
 
 Not touched: the live tmux server and every pane, the running monitor service
 (still PID 3550026, not restarted), the live factory ledger at
 `~/.local/state/overseer/factory`, `config.json`, the monitor's own modules,
 `docs/FACTORY_EXECUTION.md`, `factory/tasks/overseer-checks.json`, and
 `factory/routing-policy.json`.
+
+### Review correction: five defects in the envelope increment
+
+The review of the envelope increment found five defects, the dedicated
+prompt-writing agent authored the corrective prompt, and the primary agent
+executed it. The envelope schema, the four modes, the bounds, the `approvals`
+table shape, the `decide` method's fail-closed set, the `decide` command line,
+the `status` shape, the state vocabulary, and the dispatch re-check are all
+unchanged.
+
+The first defect was a safety regression in `cancel()`. The method read the
+job's state and then wrote `state='cancelled'` without a guard, so a task that
+started running between the read and the write was silently overwritten with
+`cancelled` while its child process might still be alive. It was reproduced
+deterministically with a competing writer:
+
+```text
+cancel returned; state is now: cancelled (DEFECT: the guard was lost)
+```
+
+The state change is now one statement guarded by the state that was observed,
+`UPDATE jobs SET state='cancelled' WHERE id=? AND state=?`, and a row count of
+zero raises the same refusal. A test now installs a trace callback that
+competes the write at the moment the cancel's update runs, and asserts that
+the cancel is refused, that the state is still `running`, and that no
+`cancelled` event was written.
+
+The second defect was a stale job detail. `decide()` changed the state but
+left the row's detail saying the task was waiting for a decision, and the
+refusal's "dispatched no command, recorded no external effect" wording lived
+only in the event log, so the operator-facing `status` output contradicted the
+state. The decision now writes the state and its detail in the same
+transaction: a grant says the decision was granted, names the decider and the
+envelope mode, and says the task is queued for dispatch; a refusal says the
+decision was refused, names the decider and the envelope mode, and says that
+the runner dispatched no command, started no child process, and recorded no
+external effect for that task.
+
+The third defect was an untested branch. A task whose envelope declares
+`requires_decision: false` was accepted but nothing proved it behaves as
+before. A test now submits one, asserts the state is `queued` rather than
+`awaiting_approval`, runs it, and asserts it passes with the marker file
+written and no approval record.
+
+The fourth defect was an incomplete inventory of the prose edits, which is
+corrected in the entry above with the before and after of each of the four
+edits.
+
+The fifth defect was a citation that did not hold what its cell claimed: the
+PERMISSIONS row cited `docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt:541` for the
+envelope modes, and that line holds the capability-envelope sentence, while
+the mode table starts at line 543. The citation now points at the table.
+
+```text
+python3 -m unittest discover -s tests -p 'test_factory.py' -v
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --check
+```
+
+Results, copied from the run: the factory suite ran 68 tests in 10.014
+seconds, OK; the full suite ran 154 tests in 22.400 seconds, OK; the document
+reference checker reported `97 references checked in HARNESS_FRAMEWORK.md`;
+`git diff --check` exited 0. The factory suite grew from 64 to 68 tests.
+Token usage and monetary cost were not supplied by the runtime and remain
+unavailable.
+
+### The operator moved the project tree, and the monitor was repaired
+
+Mid-increment the operator moved `/home/kali/Projects` to
+`/home/kali/Programming/Projects`. The move was not announced, and it broke
+the running monitor: the user service's working directory still pointed at
+the old path, so every cycle failed.
+
+```text
+Oct 20 02:06:01 kali python3[3550026]: WARNING monitor cycle: [Errno 2] No such file or directory: '/home/kali/Projects/Overseer/config.json'
+Oct 20 02:06:31 kali python3[3550026]: WARNING monitor cycle: [Errno 2] No such file or directory: '/home/kali/Projects/Overseer/config.json'
+```
+
+The repair was done immediately, because a monitor that fails every cycle
+sends no continuations at all. The unit's working directory is now
+`%h/Programming/Projects/Overseer` in both `overseer.service` and the
+installed `~/.config/systemd/user/overseer.service`, the unit was reloaded,
+and the service was restarted. It came back as PID 3709508 at 02:08:49 with a
+fresh `monitor started; dry_run=False; poll=30s` line and no further cycle
+failures, and `python3 -m overseer status` again lists the watched panes.
+
+The path references the move broke were repaired in the same pass:
+
+- `config.json` `reply` pointed the sessions at
+  `/home/kali/Projects/AGENTS.md` and
+  `/home/kali/Projects/coder_optimization/docs/PLAYBOOK.md`. Both now name
+  the new location, so an automatic continuation tells a session to read files
+  that exist.
+- `AGENTS.md` pointed at the shared workflow file, and
+  `docs/FACTORY_EXECUTION.md` told the reader to `cd` into the old path.
+  Both were updated.
+- `factory/tasks/overseer-checks.json` named the old workspace, which no
+  longer exists, so the example task could not be submitted again. Its
+  workspace was updated and its ID was changed to
+  `overseer-foundation-checks-002`: the earlier `overseer-foundation-checks-001`
+  record keeps its original specification and its acceptance in the live
+  ledger, and a new ID keeps the documented idempotent re-submission working.
+  `docs/FACTORY_EXECUTION.md` was updated to match.
+- The shared workflow file `/home/kali/Programming/Projects/AGENTS.md` and the
+  nine other `AGENTS.md` files under the moved tree still named
+  `/home/kali/Projects/AGENTS.md`. Each reference was changed to the new
+  location. These files are outside this repository; only the path changed,
+  no instruction text was altered, and each file's change is visible in its
+  own repository's status.
+
+The historical records were left alone: `WORK_LOG.md`, `DEVTOOLS_INSTALL_RESULT.md`,
+`GROK_INSTALL_NEXT_PROMPT.md`, `MODEL_DECISION_NEXT_PROMPT.md`, and the
+`artifacts/` directory describe what happened at the old path and are not
+rewritten.
+
+The live tmux panes were not touched. Their clients keep running: the moved
+directories travelled with the running processes, and the panes now report
+`/home/kali/Programming/Projects/...` as their current path. The live factory
+ledger was not opened: it was copied to a temporary directory and queried
+there, and its `jobs.sqlite3` still carries its 2026-10-19 22:34:24 timestamp.

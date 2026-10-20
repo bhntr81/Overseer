@@ -55,16 +55,19 @@ routing-policy JSON is a proposal, not an active authority mechanism.
 ## Using the first slice
 
 ```sh
-cd /home/kali/Projects/Overseer
+cd /home/kali/Programming/Projects/Overseer
 python3 scripts/check
 python3 -m overseer.factory submit factory/tasks/overseer-checks.json
 python3 -m overseer.factory run-one
 python3 -m overseer.factory status
-python3 -m overseer.factory inspect overseer-foundation-checks-001
+python3 -m overseer.factory inspect overseer-foundation-checks-002
 ```
 
 The example already ran successfully. Submitting it again is idempotent and will
-not rerun a passed job. For a new run, create an explicitly reviewed task with a
+not rerun a passed job. The example carries a new ID because the workspace
+moved; the earlier `overseer-foundation-checks-001` record keeps its original
+specification and acceptance. For a new run, create an explicitly reviewed task
+with a
 new ID. Each task specifies an existing absolute workspace, an objective, one
 implementation argv, one or more acceptance argvs, and a per-command timeout.
 There is no implicit shell or automatic tool/model selection.
