@@ -2055,3 +2055,19 @@ The suite grew from 217 to 223 tests, all passing, and the document reference
 checker resolves all 127 citations. The CONTEXT row of the pillar map carries
 this increment, and the next CONTEXT increment is named: the map relates the
 symbols to their code, but not to their callers and their tests.
+
+The live run showed that a secret named file was selected but that the reason
+was not recorded, and that the file was read before the secret check. The
+check now comes first: a file whose name marks it as a secret is never opened,
+its structure is reported as `secret`, its excerpt is reported as skipped with
+the reason, and its content is absent from the map. The live run now reports:
+
+```text
+pkg/.env -> structure_kind: secret
+  structure_reason: the file name marks it as a secret
+  excerpt: {'skipped': 'the file name marks it as a secret', 'lines': [], 'bytes': 0}
+```
+
+The same run showed the bounds holding: a file with a four hundred line
+function was excerpted to sixty lines and 758 bytes with the truncation
+recorded, and the whole attempt was given 969 bytes of code.

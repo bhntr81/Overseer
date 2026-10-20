@@ -2019,12 +2019,16 @@ class ContextTests(unittest.TestCase):
         spec['objective'] = 'read the credentials module'
         self.assertTrue(self.f.submit(spec))
         result = self.f.run_one()
-        selected = {entry['path']: entry for entry in self.codebase_of(result)['selected']}
-        piece = selected.get('credentials.json', {}).get('excerpt')
-        if piece is not None:
-            self.assertEqual(piece['text'], '')
-            self.assertIn('secret', piece['skipped'])
-        self.assertNotIn('s3cret-value', json.dumps(self.codebase_of(result)))
+        context = self.codebase_of(result)
+        selected = {entry['path']: entry for entry in context['selected']}
+        entry = selected.get('credentials.json')
+        if entry is not None:
+            self.assertEqual(entry.get('structure_kind'), 'secret')
+            self.assertIn('secret', entry.get('structure_reason') or '')
+            piece = entry.get('excerpt') or {}
+            self.assertEqual(piece.get('text', ''), '')
+            self.assertIn('secret', piece.get('skipped') or '')
+        self.assertNotIn('s3cret-value', json.dumps(context))
 
     def test_the_manifest_records_the_excerpt_line_ranges(self):
         self.write_source('gadget.py', 'def gadget():\n    return 1\n')

@@ -114,6 +114,9 @@ def scan(workspace):
 
 def structure(path):
     """Return the structural symbols of one file, or the reason there are none."""
+    if is_secret(path):
+        return {'kind': 'secret', 'symbols': [],
+                'reason': 'the file name marks it as a secret'}
     try:
         size = path.stat().st_size
     except OSError as error:
@@ -148,11 +151,11 @@ def excerpt(path, symbols, budget):
     The excerpt names the line ranges it holds, so a reader can find the code
     in the file itself. A file whose name marks it as a secret is never read.
     """
-    if not symbols:
-        return None
     if is_secret(path):
         return {'skipped': 'the file name marks it as a secret', 'lines': [], 'bytes': 0,
                 'text': '', 'truncated': False}
+    if not symbols:
+        return None
     try:
         text = path.read_text(encoding='utf-8')
     except (OSError, UnicodeDecodeError):
