@@ -57,9 +57,14 @@ Run `python3 -m overseer.factory --help` for the separate explicit-job runner.
 Each completed run writes a `context.json` manifest into its run evidence
 directory, recording what the controller supplied for that attempt and why,
 and the ledger stores the four memory record kinds: a verified fact, a
-decision, a hypothesis, and a historical attempt. The manifest records what
-was supplied; nothing assembles context from a codebase and no memory record
-is consulted when a task runs.
+decision, a hypothesis, and a historical attempt. Before a new attempt starts,
+the runner recalls the relevant records: those of its own job and those of
+earlier runs in the same project. A decision a later decision superseded, and a
+verified fact whose bound revision is no longer the workspace's base commit,
+are marked as unusable rather than handed over as settled. The recall is
+written to `recall.json` in the run evidence and passed to the worker through
+`OVERSEER_RECALL_PATH`, `OVERSEER_RECALL_COUNT`, `OVERSEER_RECALL_KINDS`, and
+`OVERSEER_RECALL_SUMMARY`. Nothing assembles context from a codebase yet.
 A command-mode task must carry a `contract` block that states the
 role, risk tier, external effects, protected paths, approval requirements,
 acceptance identifiers, required capabilities, project constraints, measured

@@ -1604,6 +1604,196 @@ class ContextTests(unittest.TestCase):
         self.f.restore(destination)
         self.assertEqual(len(self.f.memory('legacy-job')), 0)
 
+    def recall_of(self, result):
+        return json.loads((Path(result['evidence']) / 'recall.json').read_text())
+
+    def test_a_new_attempt_recalls_the_records_of_its_own_job(self):
+        self.assertTrue(self.f.submit(self.command_spec('own')))
+        self.f.record_memory('own', 'verified_fact', 'the package passed the test',
+                             'the acceptance command', 'the package', 'a new release',
+                             revision='abc123', environment='linux')
+        self.f.record_memory('own', 'decision', 'keep the filter semantics',
+                             'the operator', 'the filter', 'a new requirement',
+                             owner='operator', reason='compatibility')
+        self.f.record_memory('own', 'hypothesis', 'a new import flow may reduce effort',
+                             'a note', 'the importer', 'a measurement')
+        self.f.record_memory('own', 'historical_attempt', 'the earlier OCR change failed',
+                             'an old run', 'the OCR tool', 'a new fixture')
+        result = self.f.run_one()
+        recall = self.recall_of(result)
+        self.assertEqual(recall['counts'], {'verified_fact': 1, 'decision': 1,
+                                            'hypothesis': 1, 'historical_attempt': 1})
+        self.assertEqual({record['kind'] for record in recall['records']}, set(MEMORY_KINDS))
+        self.assertTrue(all(record['from_job'] == 'own' for record in recall['records']))
+
+    def test_the_recall_reaches_an_earlier_job_of_the_same_project(self):
+        self.assertTrue(self.f.submit(self.command_spec('first')))
+        self.f.record_memory('first', 'decision', 'keep the old behaviour',
+                             'the operator', 'the filter', 'a new requirement',
+                             owner='operator', reason='compatibility')
+        self.f.run_one()
+        self.assertTrue(self.f.submit(self.command_spec('second')))
+        result = self.f.run_one()
+        recall = self.recall_of(result)
+        self.assertEqual([record['from_job'] for record in recall['records']], ['first'])
+        self.assertEqual(len(recall['current_decisions']), 1)
+
+    def test_the_recall_ignores_a_job_in_another_project(self):
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        spec = self.command_spec('elsewhere')
+        spec['workspace'] = elsewhere.name
+        self.assertTrue(self.f.submit(spec))
+        self.f.record_memory('elsewhere', 'decision', 'a decision of another project',
+                             'the operator', 'the filter', 'a new requirement',
+                             owner='operator', reason='compatibility')
+        self.f.run_one()
+        self.assertTrue(self.f.submit(self.command_spec('here')))
+        result = self.f.run_one()
+        recall = self.recall_of(result)
+        self.assertEqual(recall['records'], [])
+        self.assertEqual(recall['counts'], {kind: 0 for kind in MEMORY_KINDS})
+
+    def test_a_superseded_decision_is_recalled_but_not_current(self):
+        self.assertTrue(self.f.submit(self.command_spec('superseded')))
+        first = self.f.record_memory('superseded', 'decision', 'keep the old behaviour',
+                                     'the operator', 'the filter', 'a new requirement',
+                                     owner='operator', reason='compatibility')
+        self.f.record_memory('superseded', 'decision', 'replace the old behaviour',
+                             'the operator', 'the filter', 'a new requirement',
+                             owner='operator', reason='measured', supersedes=first['record_id'])
+        result = self.f.run_one()
+        recall = self.recall_of(result)
+        statuses = {record['record_id']: record['status'] for record in recall['records']}
+        self.assertEqual(statuses[first['record_id']], 'superseded')
+        self.assertEqual(len(recall['current_decisions']), 1)
+        self.assertIn(first['record_id'], recall['not_usable'])
+
+    def test_a_verified_fact_bound_to_an_old_revision_is_marked_invalidated(self):
+        workspace = self.root / 'repo'
+        workspace.mkdir()
+        self.git('init', '--quiet', str(workspace))
+        (workspace / 'file.txt').write_text('content\n')
+        self.git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test',
+                'add', 'file.txt', cwd=str(workspace))
+        self.git('-c', 'user.email=test@example.invalid', '-c', 'user.name=test',
+                'commit', '--quiet', '-m', 'initial', cwd=str(workspace))
+        head = self.git('-C', str(workspace), 'rev-parse', 'HEAD').stdout.strip()
+        spec = self.command_spec('stale')
+        spec['workspace'] = str(workspace)
+        self.assertTrue(self.f.submit(spec))
+        self.f.record_memory('stale', 'verified_fact', 'the old fact', 'a run',
+                             'the package', 'a new release', revision='oldcommit',
+                             environment='linux')
+        result = self.f.run_one()
+        recall = self.recall_of(result)
+        self.assertEqual(recall['records'][0]['status'], 'invalidated')
+        self.assertFalse(recall['records'][0]['informs_decision'])
+        self.assertIn(recall['records'][0]['record_id'], recall['not_usable'])
+        # A fact bound to the revision the workspace is on stays usable.
+        self.f.record_memory('stale', 'verified_fact', 'the current fact', 'a run',
+                             'the package', 'a new release', revision=head,
+                             environment='linux')
+        fresh = self.f.recall({'id': 'stale', 'workspace': str(workspace)})
+        current = [record for record in fresh['records'] if record['entry'] == 'the current fact']
+        self.assertEqual(current[0]['status'], 'current')
+        self.assertTrue(current[0]['informs_decision'])
+
+    def test_a_hypothesis_is_recalled_as_unverified(self):
+        self.assertTrue(self.f.submit(self.command_spec('guess')))
+        self.f.record_memory('guess', 'hypothesis', 'the flow may be faster',
+                             'a note', 'the importer', 'a measurement')
+        result = self.f.run_one()
+        recall = self.recall_of(result)
+        self.assertEqual(recall['records'][0]['status'], 'unverified')
+        self.assertFalse(recall['records'][0]['informs_decision'])
+
+    def test_the_execution_environment_carries_the_recalled_context(self):
+        self.assertTrue(self.f.submit(self.command_spec('earlier')))
+        self.f.record_memory('earlier', 'decision', 'keep the filter semantics',
+                             'the operator', 'the filter', 'a new requirement',
+                             owner='operator', reason='compatibility')
+        self.f.run_one()
+        spec = self.command_spec('consumer', checks=[[sys.executable, '-c',
+                   "from pathlib import Path; text=Path('recall.txt').read_text(); "
+                   "assert text.split('|')[0] == '1', text; "
+                   "assert 'keep the filter semantics' in text, text"]])
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import os; from pathlib import Path; "
+                                  "Path('recall.txt').write_text('|'.join(["
+                                  "os.environ.get('OVERSEER_RECALL_COUNT',''), "
+                                  "os.environ.get('OVERSEER_RECALL_SUMMARY',''), "
+                                  "os.environ.get('OVERSEER_RECALL_PATH','')]))"]
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        recall = self.recall_of(result)
+        self.assertEqual(len(recall['records']), 1)
+        carried = (self.root / 'recall.txt').read_text().split('|')
+        self.assertEqual(carried[0], '1')
+        self.assertIn('keep the filter semantics', carried[1])
+        self.assertEqual(carried[2], str(Path(result['evidence']) / 'recall.json'))
+
+    def test_the_context_manifest_records_the_consumption(self):
+        self.assertTrue(self.f.submit(self.command_spec('consumed')))
+        self.f.record_memory('consumed', 'decision', 'keep the filter semantics',
+                             'the operator', 'the filter', 'a new requirement',
+                             owner='operator', reason='compatibility')
+        result = self.f.run_one()
+        manifest = self.manifest_of(result)
+        memory = manifest['memory']
+        self.assertTrue(memory['consumed'])
+        self.assertEqual(memory['recalled_count'], 1)
+        self.assertEqual(len(memory['record_ids']), 1)
+        self.assertEqual(len(memory['current_decisions']), 1)
+        self.assertTrue(Path(memory['path']).is_file())
+        self.assertEqual(memory['sha256'], hashlib.sha256(
+            Path(memory['path']).read_bytes()).hexdigest())
+        supplied = {entry['item']: entry for entry in manifest['supplied']}
+        self.assertIn('current decision records', supplied['applicable_decisions']['source'])
+        self.assertIn('consulted', supplied['applicable_decisions']['why'])
+
+    def test_an_attempt_without_relevant_records_records_no_consumption(self):
+        self.assertTrue(self.f.submit(self.command_spec('bare')))
+        result = self.f.run_one()
+        manifest = self.manifest_of(result)
+        self.assertFalse(manifest['memory']['consumed'])
+        self.assertEqual(manifest['memory']['recalled_count'], 0)
+        self.assertIn('no memory record', manifest['memory']['note'])
+        supplied = {entry['item']: entry for entry in manifest['supplied']}
+        self.assertIsNone(supplied['applicable_decisions']['source'])
+
+    def test_the_recall_is_bounded_and_most_recent_first(self):
+        self.assertTrue(self.f.submit(self.command_spec('many')))
+        for index in range(4):
+            self.f.record_memory('many', 'historical_attempt', f'attempt {index}',
+                                 'a run', 'the tool', 'a new fixture')
+        recall = self.f.recall({'id': 'many', 'workspace': str(self.root)}, limit=2)
+        self.assertEqual(len(recall['records']), 2)
+        self.assertEqual(recall['scope']['order'], 'most recent first')
+        self.assertEqual(recall['scope']['limit'], 2)
+
+    def test_recall_rejects_a_bad_kind_and_a_bad_limit(self):
+        with self.assertRaises(ValueError):
+            self.f.recall({'id': 'x', 'workspace': str(self.root)}, kinds=['invented'])
+        with self.assertRaises(ValueError):
+            self.f.recall({'id': 'x', 'workspace': str(self.root)}, kinds=[])
+        with self.assertRaises(ValueError):
+            self.f.recall({'id': 'x', 'workspace': str(self.root)}, limit=0)
+
+    def test_the_recall_does_not_change_what_the_attempt_is_judged_by(self):
+        self.assertTrue(self.f.submit(self.command_spec('judged')))
+        self.f.record_memory('judged', 'decision', 'keep the filter semantics',
+                             'the operator', 'the filter', 'a new requirement',
+                             owner='operator', reason='compatibility')
+        self.f.run_one()
+        spec = self.command_spec('judged-bad', checks=[[sys.executable, '-c',
+                   "raise SystemExit(1)"]])
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(self.recall_of(result)['counts']['decision'], 1)
+
 
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""

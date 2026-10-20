@@ -1907,3 +1907,44 @@ targeting. None of those files were touched, staged, or committed here, and
 the tree was left exactly as found. The full suite passed at 192 tests while
 that work was in the tree, which is higher than the 178 this increment
 measured, because the other writer's new tests are counted there too.
+
+### Memory recall and consumption in the factory
+
+The user asked for the recall side of the CONTEXT and STATE pillars: a new
+attempt must be able to query and consume the relevant historical memory
+records before it starts, and the runner must pass that past context into the
+execution environment or the manifest. This increment was written and
+executed by the primary agent without a separate prompt-writing agent, because
+another agent was committing to the same repository and one writer held the
+tree. That is a deviation from the standing workflow and is recorded here
+rather than papered over.
+
+The four memory record kinds could already be stored and queried, and the
+manifest said so: "the memory kinds are stored and queryable, but nothing
+assembles context from a codebase and no record is consulted by any decision".
+That is now false, and the change makes it true.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+```
+
+`Factory.recall` answers the query. A new attempt recalls the records of its
+own job and the records of earlier jobs in the same project, where the
+project is the repository root when the workspace is a repository and the
+workspace directory when it is not. The records are ordered most recent first
+and bounded. A decision that a later decision superseded, and a verified fact
+whose bound revision is no longer the workspace's base commit, are marked
+unusable rather than handed over as settled, and a hypothesis stays
+unverified. The recall is written to `recall.json` in the run evidence
+directory, and the execution environment of the worker carries it through
+`OVERSEER_RECALL_PATH`, `OVERSEER_RECALL_COUNT`, `OVERSEER_RECALL_KINDS`, and
+a bounded `OVERSEER_RECALL_SUMMARY`. The context manifest records the
+consumption, the record identifiers, the digest of the recall file, and the
+supplied sources for the applicable decisions and the earlier attempts. The
+recall changes what the attempt is informed by, not what it is judged by.
+
+The suite grew from 193 to 205 tests, all passing, and the document reference
+checker resolves all 116 citations. The CONTEXT row of the pillar map carries
+this increment, and the STATE row's now-false claim that recall was absent was
+corrected.

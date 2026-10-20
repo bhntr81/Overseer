@@ -330,6 +330,16 @@ def repository_identity(workspace):
             'base_commit_source': 'git rev-parse HEAD observed at attempt start'}
 
 
+def _under(path, root):
+    """Report whether a path is inside a root directory."""
+    if not path or not root:
+        return False
+    try:
+        return os.path.commonpath([str(path), str(root)]) == str(root)
+    except ValueError:
+        return False
+
+
 def validate(spec):
     if not isinstance(spec, dict):
         raise ValueError('invalid task object')
@@ -894,7 +904,118 @@ class Factory:
             record['current'] = False
         return record
 
-    def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch):
+    def _job_workspace(self, job_id):
+        """Return the workspace a stored job was submitted with, or None."""
+        row = self.db.execute('SELECT spec FROM jobs WHERE id=?', (job_id,)).fetchone()
+        if row is None:
+            return None
+        try:
+            spec = json.loads(row['spec'])
+        except ValueError:
+            return None
+        workspace = spec.get('workspace')
+        return workspace if isinstance(workspace, str) else None
+
+    @staticmethod
+    def _record_status(record, base_commit):
+        """Return how a recalled record may be used."""
+        if record['kind'] == 'decision':
+            return 'superseded' if record.get('superseded_by') else 'current'
+        if record['kind'] == 'verified_fact':
+            revision = record.get('revision')
+            if base_commit and revision and revision != base_commit:
+                return 'invalidated'
+            return 'current'
+        if record['kind'] == 'hypothesis':
+            return 'unverified'
+        return 'historical'
+
+    def recall(self, spec, kinds=None, limit=32):
+        """Return the memory records relevant to a new attempt.
+
+        A new attempt is informed by the records of its own job and by the
+        records of earlier jobs in the same project, because a prior run of the
+        same project is prior context. A decision that a later decision
+        superseded is marked, and a verified fact whose bound revision is no
+        longer the workspace's base commit is marked invalidated, so neither is
+        handed over as a settled fact.
+        """
+        if kinds is not None:
+            if not isinstance(kinds, (list, tuple)) or not kinds:
+                raise ValueError('kinds must be a nonempty list of memory kinds')
+            for kind in kinds:
+                if kind not in MEMORY_KINDS:
+                    raise ValueError('memory kind must be one of: ' + ', '.join(MEMORY_KINDS))
+        if not isinstance(limit, int) or limit < 1:
+            raise ValueError('limit must be a positive integer')
+        job_id = spec.get('id') if isinstance(spec, dict) else None
+        workspace = spec.get('workspace') if isinstance(spec, dict) else None
+        identity = repository_identity(workspace)
+        root = identity.get('root') if identity.get('present') else workspace
+        base = identity.get('base_commit') if identity.get('present') else None
+        found = []
+        for row in self.db.execute('SELECT DISTINCT job_id FROM memory_records ORDER BY job_id'):
+            other = row['job_id']
+            if other != job_id and not _under(self._job_workspace(other), root):
+                continue
+            for record in self.memory(other):
+                if kinds is not None and record['kind'] not in kinds:
+                    continue
+                record = dict(record)
+                record['from_job'] = other
+                found.append(record)
+        found.sort(key=lambda record: record['at'], reverse=True)
+        found = found[:limit]
+        for record in found:
+            record['status'] = self._record_status(record, base)
+            record['informs_decision'] = record['status'] == 'current'
+        counts = {kind: 0 for kind in MEMORY_KINDS}
+        for record in found:
+            counts[record['kind']] += 1
+        return {
+            'version': 1,
+            'job_id': job_id,
+            'at': time.time(),
+            'workspace': workspace,
+            'repository': identity,
+            'scope': {
+                'rule': 'the records of this job and of earlier jobs in the same project',
+                'project_root': root,
+                'order': 'most recent first',
+                'limit': limit,
+            },
+            'counts': counts,
+            'records': found,
+            'current_decisions': [record['record_id'] for record in found
+                                  if record['kind'] == 'decision' and record['status'] == 'current'],
+            'not_usable': [record['record_id'] for record in found
+                           if record['status'] in {'superseded', 'invalidated'}],
+        }
+
+    @staticmethod
+    def _recall_summary(recall, limit=4000):
+        """Return a bounded digest of the recalled records."""
+        lines = []
+        for record in recall['records']:
+            entry = ' '.join(record['entry'].split())
+            lines.append('[%s/%s] %s: %s' % (record['kind'], record['status'],
+                                              record['affected_component'], entry))
+        text = '\n'.join(lines)
+        if len(text) > limit:
+            text = text[:limit] + '\n[truncated]'
+        return text
+
+    def _recall_environment(self, recall, path):
+        """Return the child environment that carries the recalled context."""
+        env = dict(os.environ)
+        env['OVERSEER_RECALL_PATH'] = str(path)
+        env['OVERSEER_RECALL_COUNT'] = str(len(recall['records']))
+        env['OVERSEER_RECALL_KINDS'] = ','.join(
+            kind for kind in MEMORY_KINDS if recall['counts'].get(kind))
+        env['OVERSEER_RECALL_SUMMARY'] = self._recall_summary(recall)
+        return env
+
+    def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None):
         """Record what the controller supplied for this attempt, and why."""
         contract = spec.get('contract') or {}
         acceptance_ids = list(contract.get('acceptance_ids') or [])
@@ -906,6 +1027,10 @@ class Factory:
         for row in self.db.execute('SELECT kind FROM memory_records WHERE job_id=?', (job_id,)):
             if row['kind'] in counts:
                 counts[row['kind']] += 1
+        recalled = list((recall or {}).get('records') or [])
+        current_decisions = [record for record in recalled
+                             if record['kind'] == 'decision' and record.get('status') == 'current']
+        past_attempts = [record for record in recalled if record['kind'] == 'historical_attempt']
         commands = []
         for result in results:
             if 'argv' not in result:
@@ -933,12 +1058,18 @@ class Factory:
              'why': 'no context builder exists: nothing is assembled from a codebase, '
                     'and no file or interface was read into this manifest'},
             {'item': 'recent_verified_failures',
-             'source': None,
-             'why': 'no failure history is assembled for this attempt'},
+             'source': ('the memory ledger: %d historical attempt records' % len(past_attempts))
+                       if past_attempts else None,
+             'why': ('the recalled records of earlier attempts carry what was tried and failed'
+                     if past_attempts else
+                     'no failure history is assembled for this attempt')},
             {'item': 'applicable_decisions',
-             'source': None,
-             'why': 'memory records are stored and queryable, but no decision record was '
-                    'consulted when this attempt was prepared'},
+             'source': ('the memory ledger: %d current decision records' % len(current_decisions))
+                       if current_decisions else None,
+             'why': ('the decisions that still stand were consulted when this attempt '
+                     'was prepared'
+                     if current_decisions else
+                     'no current decision record was consulted when this attempt was prepared')},
             {'item': 'deeper_evidence',
              'source': 'the run evidence directory and the recorded events',
              'why': 'the evidence directory holds the task, the results, the summary, '
@@ -968,8 +1099,17 @@ class Factory:
             'memory': {
                 'kinds': list(MEMORY_KINDS),
                 'records_for_job': counts,
-                'consumed': False,
-                'note': 'no memory record was consulted: nothing reads the memory kinds',
+                'consumed': bool(recalled),
+                'recalled_count': len(recalled),
+                'record_ids': [record['record_id'] for record in recalled],
+                'current_decisions': [record['record_id'] for record in current_decisions],
+                'not_usable': [record['record_id'] for record in recalled
+                               if record.get('status') in {'superseded', 'invalidated'}],
+                'path': (recall or {}).get('path'),
+                'sha256': (recall or {}).get('sha256'),
+                'note': ('the recalled records were consulted before the attempt and were '
+                         'passed to the execution environment' if recalled else
+                         'no memory record was relevant to this attempt'),
             },
             'unmeasured': ['tokens', 'cost_usd', 'candidate_revision', 'remaining_budget',
                            'unresolved_effects', 'environment_digest'],
@@ -996,7 +1136,7 @@ class Factory:
             else:
                 self.event(job_id, 'cancelled', 'operator cancelled queued task')
 
-    def execute(self, job_id, argv, cwd, timeout, log):
+    def execute(self, job_id, argv, cwd, timeout, log, env=None):
         started = time.monotonic()
         # Bounded captured output; drain the remainder so a noisy child cannot
         # deadlock or fill the evidence filesystem. stderr is merged with stdout.
@@ -1009,7 +1149,7 @@ class Factory:
                   'os.execvpe(sys.argv[1],sys.argv[1:],os.environ)')
         child = subprocess.Popen([sys.executable, '-c', launch, *argv], cwd=cwd, stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 start_new_session=True)
+                                 start_new_session=True, env=env)
         selector = None
         timed_out = False
         written = 0
@@ -1644,9 +1784,20 @@ class Factory:
             evidence = self.path.parent/'runs'/run_id
             evidence.mkdir(parents=True, mode=0o700)
             (evidence/'task.json').write_text(row['spec'])
+            # The recall happens before the work starts, so the attempt is
+            # informed by the records of its own job and of earlier runs in the
+            # same project. The recall file and the environment carry them.
+            recalled = self.recall(spec)
+            recall_path = evidence / 'recall.json'
+            recall_path.write_text(json.dumps(recalled, indent=2))
+            recall_digest = hashlib.sha256(recall_path.read_bytes()).hexdigest()
+            recall_info = {'records': recalled['records'], 'path': str(recall_path),
+                           'sha256': recall_digest}
+            child_env = self._recall_environment(recalled, recall_path)
             self.db.execute("UPDATE jobs SET state='running',run_id=?,evidence=?,started=? WHERE id=?",
                             (run_id, str(evidence), time.time(), job_id))
             self.event(job_id, 'running', 'durable reservation before command launch')
+            self.event(job_id, 'recall', f'recalled {len(recalled["records"])} memory records')
             self.db.commit()
             results = []
             final = 'failed'
@@ -1677,7 +1828,7 @@ class Factory:
                     for index, argv in enumerate([spec['implementation'], *spec['checks']]):
                         if index:
                             self.transition(job_id, 'checking', f'acceptance command {index}')
-                        result = self.execute(job_id, argv, spec['workspace'], spec['timeout_seconds'], evidence/f'{index:02d}.log')
+                        result = self.execute(job_id, argv, spec['workspace'], spec['timeout_seconds'], evidence/f'{index:02d}.log', env=child_env)
                         result['stage'] = 'implementation' if index == 0 else 'acceptance'
                         results.append(result)
                         (evidence/'results.json').write_text(json.dumps(results, indent=2))
@@ -1703,7 +1854,7 @@ class Factory:
             # final state change, in one transaction.
             epoch, _ = self._controller_values()
             manifest = self._context_manifest(
-                job_id, run_id, spec, row['spec_hash'], results, epoch)
+                job_id, run_id, spec, row['spec_hash'], results, epoch, recall_info)
             manifest_path = evidence / 'context.json'
             manifest_path.write_text(json.dumps(manifest, indent=2))
             manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
