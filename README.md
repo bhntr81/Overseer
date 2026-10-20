@@ -1,9 +1,12 @@
 # Overseer
 
 A local Python monitor for explicitly opted-in Codex and Claude terminal sessions.
-It checks every 30 seconds and can send a configured continuation message after
-a recognized question remains unchanged for three minutes. No API key or Python
-dependencies are required. Requires Python 3 and tmux on Linux.
+It checks every 30 seconds. When a watched pane shows a structured output
+report, Overseer builds the next one-line prompt from that report and submits
+it. When no report is visible, it can send the configured continuation
+instruction after a recognized question remains unchanged for three minutes.
+No API key or Python dependencies are required. Requires Python 3 and tmux
+on Linux.
 
 The integration uses tmux panes, accessible from one QTerminal project hub. It
 does not switch desktop focus during monitoring. The six original Codex clients
@@ -41,10 +44,14 @@ recorded in `~/.local/state/overseer/terminal-hub.json`.
 
 ## Software factory direction
 
-The [software factory blueprint](docs/SOFTWARE_FACTORY_BLUEPRINT.md) describes the
-CEO, director, provider supervisors, Model Router, worker agents, quality gates,
-and phased delivery plan. [Execution record and commands](docs/FACTORY_EXECUTION.md)
+Overseer is the software factory project. The current design is the
+[Version 2 blueprint](docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt), moved verbatim from
+Downloads. The [original blueprint](docs/SOFTWARE_FACTORY_BLUEPRINT.md) is retained
+for history. [Selected third-party skills](docs/FACTORY_SKILLS.md) support prompt
+writing, bounded loops, and skill authoring. [Execution record and commands](docs/FACTORY_EXECUTION.md)
 distinguish the implemented local task runner from planned provider automation.
+The [harness framework](docs/HARNESS_FRAMEWORK.md) maps that design onto the six
+harness pillars and the code that implements them.
 
 Run `python3 -m overseer.factory --help` for the separate explicit-job runner.
 Run `python3 scripts/check` for isolated local verification. The terminal monitor
@@ -98,20 +105,20 @@ python3 -m overseer run
 ```
 
 To enable sending, set `dry_run` to `false` in `config.json`.
-Change `reply` to the desired single-line continuation instruction.
-The included reply requires the shared `/home/kali/Projects/AGENTS.md` workflow:
-use `coder_optimization` guidance and a dedicated prompt-writing agent. The writer
-reads the last execution output and verification results, writes a bounded next
-prompt, and the primary agent executes and verifies that prompt before returning
-results to the writer. Project-specific agent/model requirements still apply.
-All ten current project roots link to this shared guidance; new projects beneath
-that directory inherit it. Inactive projects do not have live agents, and existing
-terminal sessions must load the updated instructions before following them.
-It distinguishes a completed prompt-writing step from a completed authorized
-project workflow: when execution was already authorized, the client should
-execute the next step and verify its results. Draft-only requests do not grant
-execution authority. Completion and blocker responses must explain the reason
-before ending with the appropriate stop marker.
+`reply` is the single-line instruction used when a pane has not yet printed a
+report. The included reply tells the client to follow
+`/home/kali/Projects/AGENTS.md` and the coder optimization playbook, do the next
+authorized step, and print one visible `OVERSEER_REPORT` line. That line starts
+with `OVERSEER_REPORT` and a JSON object. The keys are `status`, `objective`,
+`remaining`, `done`, and `evidence`. `status` is `continue`, `done`, or
+`needs_input`. `continue` needs a nonempty objective and remaining step.
+Overseer reads the latest report on the visible screen, copies those fields
+into the next one-line prompt, and submits that prompt. It does not ask another
+model to invent the prompt, and it does not execute terminal text. A `done` or
+`needs_input` report stops further automatic prompts for that screen. An invalid
+report, or a continue report with no objective or remaining step, also stops
+that screen instead of falling back to `reply`. Project-specific agent and model
+requirements still apply. Draft-only requests do not grant execution authority.
 
 Manage existing tmux panes:
 
@@ -179,19 +186,29 @@ heuristic, so this is not a provider-wide concurrency lock.
 The monitor recognizes explicit routine questions such as “Would you like me to
 continue?” and “Shall I proceed?”. With `continue_on_completion: true` (enabled),
 it also recognizes Codex's completed-turn footer, `Worked for … • …`, when the
-composer is empty. It asks the client to continue only unfinished authorized work,
-using the designated prompt agent if applicable. A standalone `OVERSEER_DONE` or
-`OVERSEER_NEEDS_INPUT` response stops further automatic continuation of that
-screen. It does not use another LLM to interpret arbitrary questions. Idle alone
-without a recognized question/completion marker does not trigger a reply.
+composer is empty. Eligible screens that contain an `OVERSEER_REPORT` line
+receive a prompt built from that report. Eligible screens without one receive
+`reply`. A standalone `OVERSEER_DONE` or `OVERSEER_NEEDS_INPUT` response stops
+further automatic continuation of that screen, as does a report whose status is
+`done` or `needs_input`. The report has to stay on one visible line because the
+monitor captures the current pane, not scrollback. Permission wording, generation
+markers, and the other skip rules still apply to the whole visible screen,
+including text inside a report. Idle alone without a recognized
+question/completion marker does not trigger a reply.
 
 If a client appears to ignore a continuation, inspect its response in the pane.
-`sent routine continuation` in the journal means tmux accepted the input commands;
-it does not prove submission, execution, or completion. A visible client response
-of `OVERSEER_DONE` means the client received the instruction and declared its work
-complete; it can still have interpreted the task too narrowly. Correct that task
-scope in the conversation when necessary. Changing `reply` applies to future
-eligible sends; it does not clear existing stop markers or resend old messages.
+`sent routine continuation` means the configured instruction was typed.
+`sent report-based prompt` means the typed line was built from the visible
+report. Neither journal line includes the prompt or the report, and neither
+proves that the client submitted, executed, or finished the work. `skipped:
+invalid output report`, `skipped: report has no remaining work`, and `skipped:
+output report requested no further continuation` mean that screen was withheld
+and will not be answered again until its visible text changes. A visible client
+response of `OVERSEER_DONE` means the client declared its work complete; it can
+still have interpreted the task too narrowly. Changing `reply` applies to future
+eligible sends that have no report; it does not clear existing stop markers or
+resend old messages. Code changes apply after the user service is restarted.
+Config changes apply on the next poll.
 
 The foreground command must be `codex` or `claude`, with an empty composer line
 (`>`, `›`, or `❯`, including the verified empty Codex placeholder). A shell,

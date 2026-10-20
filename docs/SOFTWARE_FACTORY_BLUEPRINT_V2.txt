@@ -1,0 +1,832 @@
+# Overseer Software Factory Blueprint
+
+Version 2 • Research checked October 18, 2026, America/Chicago
+
+Purpose: build an ambitious, measurable software factory that turns your ideas into useful products, preserves existing functionality, verifies its own work through independent mechanisms, and improves from evidence.
+
+Status: proposed architecture and execution plan. The attached original blueprint is the source for existing Overseer observations. This review did not inspect your live Kali or Windows machines, repositories, credentials, or FACTORY_EXECUTION.md. Source-reported installation details remain unverified here. Proposed components, commands, budgets, and milestones below are not claims of implementation.
+
+## 1. My assessment
+
+The original blueprint is a strong foundation. It understands that sending a prompt is not completing a job, passing a unit test is not accepting a product, and adding agents is not automatically increasing productivity. Preserve its durable ownership, bounded repair loops, isolated workspaces, independent acceptance, measured routing, and incremental migration.
+
+Its main weakness is that it describes orchestration more precisely than it describes the software factory's actual judgment. It needs stronger answers to seven questions:
+
+1. Are we solving a real user problem?
+2. What observable evidence would prove the requested behavior?
+3. How do we preserve everything that already works?
+4. Which work can safely happen in parallel?
+5. How do we know the verifier and its tests are meaningful?
+6. Does the exact integrated release still satisfy the contract?
+7. What permanent improvement follows when something fails?
+
+The improved factory has three connected responsibilities: discover worthwhile work, deliver verified changes, and improve the system from measured outcomes. Its strategic advantage is the accumulated body of product knowledge, regression fixtures, reliable workflows, and operational evidence. Better future models should plug into that foundation without requiring a redesign.
+
+The recommendation is ambitious in capability and modest in initial infrastructure: extend Overseer into a small deterministic controller, connect one structured coding worker, build trustworthy verification, and prove one complete delivery path. Expand only when an observed bottleneck justifies it.
+
+## 2. What current research changes
+
+**Engineering the environment matters.** OpenAI's February 2026 account describes making repositories, application behavior, documentation, and observability accessible to coding agents. It is a company case study, not a controlled estimate of the speedup you should expect. The transferable lesson is to improve the working environment and feedback whenever agents repeatedly struggle. [S01]
+
+**Generator and evaluator should have distinct responsibilities.** Anthropic's March 2026 experiments show why independent evaluation and explicit design criteria can improve long-running application work. They also show that extra iterations cost time and can increase complexity. We adopt bounded feedback and preserve the best validated candidate; we do not copy an unlimited improvement loop. [S02]
+
+**More agents can help or hurt.** The April 2026 revision of research on scaling agent systems reports strong dependence on task structure and coordination. A separate May 2026 coding preprint explores dependency-aware partitioning and structural hub files on 28 tasks. These support testing selective parallelism; they do not establish a universal ideal team size. [S03, S04]
+
+**Public benchmark scores are insufficient procurement evidence.** OpenAI's July 2026 audit estimates that roughly 30% of SWE-Bench Pro tasks have breaking evaluation issues and retracts its earlier recommendation to adopt that benchmark. Anthropic separately documents material score variation from infrastructure configuration. Audit local task definitions, tests, and environments before treating a score as capability. [S05, S06]
+
+**Update the productivity reference.** Keep the original METR study in context. Its early-2025 experienced-maintainer experiment found a 19% slowdown, but METR's February 2026 follow-up says newer data has substantial selection and time-accounting problems. It believes improvement is likely but cannot reliably quantify the current effect from that experiment. Neither a blanket pessimistic nor a blanket optimistic forecast is justified. [S07, S08]
+
+**Measure more than output.** DORA now describes five delivery metrics, including deployment rework rate, and recommends application-level interpretation. Combine delivery measures with product usefulness, cost, human effort, and escaped defects. [S09]
+
+Everything presented below as a design choice is a recommendation for Overseer. The sources motivate particular choices; they do not validate this entire proposed architecture.
+
+## 3. The outcome to optimize
+
+The factory should produce accepted, useful changes at a sustainable total cost while reducing your required attention.
+
+Use a balanced scorecard, not one number that agents can game:
+
+| Dimension | Measure | Interpretation |
+| --- | --- | --- |
+| Product value | Task completion, recurring use, time saved, willingness to pay where relevant | Did the change improve the user's situation? |
+| Correctness | Acceptance pass rate and severity-weighted escaped defects | Did it work, including after release? |
+| Delivery | Idea-to-evidence time, review wait, deployment lead time | Where does progress actually stall? |
+| Economics | Cost per accepted outcome, failed-attempt cost, compute and storage | What did success really cost? |
+| Human effort | Active review, clarification, recovery, and manual repair minutes | Did automation give you time back? |
+| Maintainability | Architecture violations, duplicate systems, dependency growth, repair burden | Is the next change becoming easier? |
+| Reliability | Recovered interruptions, unresolved effects, stale-worker rejections | Can the factory run without losing ownership? |
+
+Do not optimize lines of code, prompts sent, agent count, token consumption, total tests, or PR count. Keep those as diagnostic data when useful.
+
+An accepted change is a technical outcome. A successful product hypothesis is a business outcome. Track them separately so a technically correct but unwanted feature remains visible.
+
+## 4. Preserve the current foundation
+
+The original blueprint reports these useful assets: guarded tmux delivery, a durable terminal FIFO, exclusions, retry limits, tests, a project-terminal hub, and coder_optimization templates and scorecards. Keep them working during the migration.
+
+It also reports Git, GitHub CLI, Codex, Claude, Cursor, Grok Build, uv, and pytest on PATH; Codex and Claude login indications; a successful GitHub user-endpoint response; unresolved Cursor keyring setup and Grok authentication; no discovered CI directories in three inspected roots; and several infrastructure/scanning tools absent from PATH. These are historical observations from that document, not current machine-wide facts.
+
+Begin implementation by checking only the prerequisites needed for the next milestone. A CLI installed on PATH is not proof of model entitlement, valid credentials, safe automation, or repository administration rights.
+
+Preserve these original boundaries:
+
+- Terminal output is operator evidence, not authoritative job state.
+- OVERSEER_DONE is a message, not an acceptance decision.
+- Existing exclusions remain in force.
+- Do not close reptyr donor emulators as part of migration.
+- Keep live tmux sessions and production Windows recovery out of the first pilot.
+- Preserve any explicit Astra-only prompt-authorship requirement. Never silently substitute another model.
+- Keep unknown availability, child-agent activity, and cost explicitly unknown.
+- Maintain FACTORY_EXECUTION.md as the factual implementation record, with dates, revisions, commands, outcomes, and remaining gaps.
+
+## 5. Architecture and authority
+
+Separate reasoning from enforcement. Models propose plans, code, reviews, and explanations. Ordinary software owns job state, leases, permissions, budget reservations, artifact identity, and release gates.
+
+| Component | Responsibility | Initial implementation |
+| --- | --- | --- |
+| Product intake | Turn an idea into an outcome, assumptions, and acceptance criteria | Structured brief plus one planning session |
+| Factory controller | Own tasks, attempts, scheduling, reconciliation, and policy | Overseer extension with a local SQLite ledger |
+| Context builder | Assemble relevant repository facts and source evidence | Versioned manifests and targeted retrieval |
+| Provider adapters | Start, observe, cancel, and reconcile coding runs | One supported headless adapter first |
+| Worker environment | Contain code editing and execution | Disposable isolated workspace with explicit resource limits |
+| Verification service | Run protected checks and record actual outcomes | Separate process/environment, independent evidence storage |
+| Integration lane | Combine changes and check the resulting revision | One integration owner per target branch |
+| Effect broker | Perform approved PR, merge, release, or other external writes | Narrow operations with durable receipts |
+| Evaluation lab | Compare whole workflows and test improvements | Extend coder_optimization |
+| Operator view | Explain progress, uncertainty, cost, and decisions | CLI first; small dashboard after state is reliable |
+
+Conceptual control flow:
+
+```mermaid
+flowchart TD
+  A["Your goals and authority"] --> B["Product brief and acceptance contract"]
+  B --> C["Factory controller"]
+  C --> D["Isolated workers"]
+  C --> E["Protected verifier"]
+  D --> E
+  E --> F["Integration and release gates"]
+  F --> G["Effect broker"]
+  G --> H["Product outcomes and incidents"]
+  H --> I["Evaluation and knowledge updates"]
+  I --> B
+  I --> C
+```
+
+This is a responsibility map. Most components can initially be modules in one application. They do not require separate microservices or permanently running agents.
+
+The trusted controller and verifier configuration must live outside candidate-controlled write access. A worker cannot alter the rules used to certify its own change. Factory self-improvement can propose those edits through a separately reviewed change, but cannot activate them during its own run.
+
+## 6. The organization without management overhead
+
+You remain the CEO and product owner. You set outcomes, priorities, budget envelopes, and delegated authority. The Factory Director prepares concrete options and carries authorized work through execution.
+
+| Role | Required output | Activate when |
+| --- | --- | --- |
+| Factory Director | Ordered portfolio, dependency decisions, concise evidence report | Always as a responsibility; not necessarily a persistent model |
+| Product lead | Problem, user journey, constraints, success measure | New product or ambiguous feature |
+| Architect | Interface contracts and dependency plan | Work crosses boundaries or carries architectural uncertainty |
+| Prompt/context builder | Bounded brief linked to current evidence | Each worker dispatch; usually mostly deterministic |
+| Implementation worker | Complete integrated code change and reproducible instructions | An implementation task is eligible |
+| Independent verifier | Check receipts and unmet criteria | Every consequential change |
+| Reviewer | Specific findings grounded in the diff and contracts | Risk calls for judgment beyond automated checks |
+| Release operator | Release evidence, health criteria, rollback readiness | An authorized release is ready |
+
+Provider supervisors become adapters and capacity policies unless provider-specific reasoning is actually needed. Do not pay four LLM managers to repeat provider status messages.
+
+Start with one implementation worker, one verification environment, and one short-lived reviewer when appropriate. Add parallel researchers or code writers only for independent work with explicit boundaries. Set a configurable descendant limit, initially no more than three agent levels below the human, and count observable descendants against the same task budget.
+
+## 7. Turn an idea into a contract
+
+Each initiative begins with a product brief:
+
+- Intended user and problem, in concrete language.
+- Existing workaround and evidence that the problem matters.
+- Smallest usable improvement.
+- Current behavior to preserve.
+- Observable acceptance criteria and known edge cases.
+- Exclusions and explicit non-goals.
+- Data, privacy, performance, platform, and compatibility constraints.
+- Release mode, rollback method, and permitted external effects.
+- Budget and uncertainty that must be resolved before implementation.
+
+Then create an acceptance map. Every requirement receives an ID and a way to judge it. Some criteria need executable tests; others need a visual demonstration, a reference comparison, or a human product decision. Do not turn every subjective requirement into a fake numeric score.
+
+| Requirement | Verification | Evidence | Owner |
+| --- | --- | --- | --- |
+| Duplicate imports do not duplicate hands | Re-import a fixed dataset | Database counts and hand identities | Verifier |
+| Existing saved filters still work | Load representative prior saved settings | Compatibility results | Verifier |
+| A new control is easy to find | Complete a defined journey on target display sizes | Journey recording and rubric | Product reviewer |
+| A report is useful | User completes the intended analysis | User outcome or explicit acceptance | Product owner |
+
+The task contract is frozen at dispatch. If a requirement is wrong or missing, propose a versioned amendment explaining why. Preserve the old contract and old result; invalidate affected approvals. Do not silently rewrite acceptance so a failed patch becomes a success.
+
+Record preservation coverage and known untested behavior in each acceptance decision. Require the affected critical behaviors and known compatibility obligations, while acknowledging that an initial legacy inventory may be incomplete. The verdict is accepted against a particular contract with stated coverage limits; it is not a claim that every prior capability has been exhaustively proven unchanged.
+
+For uncertain ideas, run a discovery task first: research, inspect existing behavior, produce a mockup, or compare two approaches. It should resolve a named uncertainty, have a stop condition, and avoid prematurely building a full product.
+
+## 8. Define the unit of work
+
+Every attempted change gets a self-contained change package. This is a proposed Overseer record, not an industry-standard interchange format.
+
+It contains the task contract, exact starting revision, context manifest, permissions, provider request, budget, environment identity, candidate patch, independent check receipts, review, and effect receipts. A future agent should be able to explain or reproduce the attempt without relying on a surviving chat session.
+
+Minimum task fields:
+
+| Group | Required information |
+| --- | --- |
+| Identity | task_id, project_id, schema_version, spec_version, spec_hash |
+| Objective | outcome, acceptance IDs, preserved behavior, exclusions |
+| Inputs | repository identity, base commit, context manifest, source timestamps |
+| Dependency | prerequisite tasks, interface versions, expected read/write areas |
+| Risk | risk tier, external effects, protected paths, approval requirements |
+| Execution | provider/model constraints, adapter version, environment digest |
+| Budget | wall-time, token/cost limits where measurable, resource limits, repair allowance |
+| Verification | trusted check manifest, fixtures, test-environment identity |
+| Result | attempts, candidate revision, evidence references, acceptance decision |
+
+Minimum attempt fields add attempt_id, parent_attempt_id, lease generation, dispatch key, requested and observed model identity, process/provider session identity, timestamps, heartbeat, exit reason, usage completeness, and final workspace state.
+
+The controller must distinguish a configured model name from provider-reported identity and from an identity it cannot verify. Record alias resolution dates when available. Never label a run as a particular model merely because that name appeared in a prompt.
+
+## 9. Durable state and recovery
+
+Use local SQLite first. Keep the database on local storage, serialize controller writes, use transactions, and validate backup/restore. Avoid placing the SQLite file on a cross-machine shared filesystem. Separate large artifacts from ledger rows; store content digests and paths in the ledger. SQLite's WAL documentation describes its same-host and checkpoint considerations. [S25]
+
+Before enabling WAL, inspect the SQLite library actually loaded by the runtime. Current documentation identifies a rare WAL-reset corruption bug fixed in 3.51.3 and later, with specified backports. Use a maintained version containing the fix; an unrelated sqlite command on PATH does not establish the application's library version. [S25]
+
+Use an append-only event history plus transactional current-state tables. Append-only describes application behavior; it does not make a database owner unable to rewrite history. Trusted signatures or remote audit storage can be added when stronger tamper evidence is justified.
+
+Separate task state, attempt state, and release state. A task may have failed attempts and still remain active. A released artifact may need rollback without erasing its earlier acceptance history.
+
+Proposed task progression:
+
+`draft → ready → queued → preparing → running → verifying → reviewing → ready_for_integration → integrated → accepted`
+
+Release progression is separate:
+
+`not_requested → ready_for_release → releasing → observing → released`
+
+Explicit outcomes include blocked_auth, blocked_capacity, blocked_quota, blocked_environment, needs_input, needs_reconciliation, failed, cancelled, and rolled_back where applicable. Record why, what evidence exists, and the smallest next action.
+
+Before dispatch:
+
+1. Reserve task budget and the eligible worker slot in a transaction.
+2. Allocate attempt ID, workspace identity, lease generation, and dispatch key.
+3. Persist dispatch intent.
+4. Start the worker and persist its actual session/process identity.
+5. Observe execution; do not infer it from a sent message.
+
+If the controller crashes between intent and confirmed dispatch, reconcile first. The process may be alive, the provider may have accepted the request, or nothing may have started. An absent receipt is not proof of an absent action.
+
+Lease expiry alone does not prevent an old worker from continuing. Use monotonically increasing fencing tokens checked by the controller, artifact intake, and effect broker. Stale generations cannot publish a candidate or request external effects. Terminate or isolate their process trees as well. Fencing only protects resources that enforce it; unrestricted credentials would defeat this design.
+
+Use monotonic timers for local timeout decisions and explicit UTC timestamps for records. Present local times to you with the timezone.
+
+Restoring a ledger can roll counters backward. Restore under a fresh controller epoch, invalidate pre-restore leases, verify that referenced artifacts exist and match their digests, and reconcile in-flight effects before dispatch resumes. A pre-restore worker must not regain authority because its old generation happens to match a restored counter.
+
+Temporal becomes an option when cross-machine recovery, long waits, and durable timers make the local runner demonstrably cumbersome. Its activity documentation still requires attention to idempotency and retries; adopting it does not make external actions exactly once. [S16]
+
+## 10. External effects must have receipts
+
+Separate proposing an action from executing it. A coding worker can request a draft PR; the broker validates scope and performs the allowed operation.
+
+Each effect record includes effect_id, task and attempt IDs, lease generation, operation, normalized parameters, target, permission snapshot, expected target version, request hash, state, and remote receipt.
+
+Use `planned`, `in_flight`, `confirmed`, `failed`, and `unknown` states. A timeout after a request may mean unknown, not failed. Reconcile by remote ID or a stable task marker before retrying. Use provider idempotency keys where available; do not assume GitHub, email, deployment, and every other tool share the same semantics.
+
+Keep the logical effect key stable across retries and new attempt IDs. Bind it to the immutable operation, target, and parameters; record each delivery attempt separately. A newly generated attempt ID must not turn a retried PR creation into a new logical action.
+
+Deduplicate both incoming events and intended work. A webhook event ID stops one kind of duplication; a project/task/spec identity stops duplicate work created by two different triggers. A changed specification should produce an explicit revision, not accidentally reuse an old task.
+
+Choose one trigger owner for each task class. Cursor automation can own a managed run and report its ID, or Overseer can dispatch it. They must not independently start the same issue.
+
+## 11. Safe execution is a prerequisite
+
+An agent-written test, package lifecycle hook, build script, and migration are executable code. Even your own repository can contain newly generated mistakes or imported untrusted content. Introduce isolation before unattended coding adapters, not after they become busy.
+
+An initial worker environment should have:
+
+- A disposable filesystem and isolated checkout/worktree mount.
+- No writable controller ledger, verifier configuration, host home directory, or other projects.
+- No Docker socket, production credentials, or broad GitHub token.
+- Explicit CPU, memory, process, disk, and time budgets.
+- Network access only for approved task needs, with credential handling outside repository processes where supported.
+- Separate temporary database, browser profile, ports, caches, and fixtures per run.
+- Logs collected outside candidate control, with credential redaction and bounded retention.
+
+Worktrees prevent accidental file overlap; they are not security boundaries. Rootless containers are useful for owned code under a defined threat model. Stronger disposable VM or managed sandbox isolation is appropriate for less-trusted repositories. Test the actual restrictions. Docker documents conditions under which rootless resource-control flags may be ignored; a configuration file alone proves nothing. [S17]
+
+Do not mount production data into a test job to make debugging easier. Use minimized, scrubbed fixtures and preserve access controls when real-data validation is necessary.
+
+Treat issue text, README content from external projects, tool descriptions, retrieved documents, and logs as potentially untrusted data. They cannot expand permissions or override the approved task. Validate tool parameters, restrict destinations, and keep secrets out of agent-visible context. MCP provides a tool protocol, not a complete trust system. [S18]
+
+## 12. Scheduling and useful parallelism
+
+Scheduling should follow dependencies, resource availability, and verification capacity.
+
+Start with simple priorities and FIFO among eligible tasks. Add aging so a blocked provider or a stream of small tasks does not starve unrelated work. Respect global, provider, project, and workspace limits.
+
+Reuse or integrate the existing provider capacity gate before unattended provider dispatch. Controller limits cover only work that participates in its accounting. Manually started sessions, excluded terminals, and unobservable nested workers are outside that guarantee; never report the whole machine or account as globally serialized unless it is actually enforced.
+
+Before splitting work, identify shared interfaces and highly connected files: central schemas, routing tables, dependency manifests, database migrations, public APIs, and shared state. Give these one owner or a serialization rule. Non-overlapping filenames do not guarantee non-overlapping behavior.
+
+Good parallel work includes independent research questions, separate product modules with stable contracts, platform packaging after an interface is fixed, and independent review of a frozen candidate. A single algorithm rewrite with tightly coupled state often belongs to one writer.
+
+Use a task dependency graph to expose the critical path. Parallel execution is worthwhile only when expected saved time exceeds coordination, repeated context, integration, and extra verification cost. Treat dependency-aware partitioning as a local experiment inspired by research, not a promised acceleration. [S03, S04]
+
+The integration lane owns changes to the shared target branch. Two candidates can pass independently and still fail together. Rebuild the combined revision and verify affected interfaces before accepting it. GitHub merge queues offer checks against the integration state when available; verify repository entitlement and configure merge-group workflows correctly. Otherwise use a serialized integration branch with equivalent checks. [S15]
+
+Reserve capacity for verification and recovery. If implementation produces changes faster than they can be reviewed, stop increasing writers. Show queue age and review backlog rather than celebrating worker utilization.
+
+## 13. Context that stays useful across sessions
+
+Keep a short AGENTS.md as an entry point. Put detailed facts in versioned architecture notes, product contracts, interface documentation, domain fixtures, and decisions. OpenAI's repository practice supports this navigation-first approach; the proposed freshness rules here extend it for Overseer. [S01]
+
+The context builder should include the current objective, required behavior, relevant code and interfaces, recent verified failures, applicable decisions, and links to deeper evidence. It should record what it supplied and why. Avoid injecting entire terminal histories or every company document.
+
+Separate four kinds of memory:
+
+| Kind | Example | Handling |
+| --- | --- | --- |
+| Verified fact | A particular package passed a particular test | Bind to revision and environment |
+| Decision | Preserve existing filter semantics | Record owner, reason, and superseding decision |
+| Hypothesis | A new import flow may reduce user effort | Keep unverified until measured |
+| Historical attempt | An earlier OCR change failed on a fixture | Preserve result without treating it as current state |
+
+Every durable entry has a source, timestamp, affected component, and invalidation condition. A schema change should flag related schema notes for revalidation. A destination receipt is required before a cross-machine transfer becomes a verified fact.
+
+On handoff, persist objective, base and candidate revisions, completed acceptance IDs, failing IDs, environment state, commands actually run, unresolved effects, remaining budget, and next eligible action. The successor checks the ledger and workspace before trusting the summary. If they disagree, reconcile.
+
+Context resets, compaction, and long sessions are adapter/model choices to evaluate. Do not permanently require expensive resets because one older model benefited from them. Anthropic's later harness work explicitly changed earlier orchestration as model behavior changed. [S02]
+
+## 14. Verification must challenge the result
+
+Verification has three layers: mechanical checks, task-specific evidence, and judgment where the task requires it.
+
+Mechanical checks include established tests, formatting, type checking where useful, architectural constraints, secret detection, and the chosen security/dependency checks. Use the project's existing suite and incrementally improve it. Do not add redundant tests merely to increase counts.
+
+Task-specific checks include a reproduced bug, preserved critical behavior, edge conditions, real integration boundaries, and the required end-to-end journey. Agent-written tests help development, but they do not become independent proof just because they pass.
+
+The verifier checks a clean exported candidate using a protected acceptance manifest. Record source tree/commit, lockfiles, environment, verifier version, check identity, actual command, exit status, result, and evidence digest. If the candidate changes, affected evidence becomes stale. When impact cannot be bounded reliably, rerun the complete relevant acceptance suite.
+
+For significant behavior, evaluate the verifier itself:
+
+1. Does the original baseline reproduce the reported failure?
+2. Would a valid alternative implementation pass?
+3. Would plausible incorrect implementations fail?
+4. Does each hidden case test a requirement visible in the contract?
+5. Is any test merely restating the implementation's own assumptions?
+6. Which real-world boundary remains untested?
+
+Use targeted negative controls or mutation testing for critical parsers, accounting, state machines, permissions, and numerical algorithms. Do this in disposable copies, never by corrupting a live program. A simple documentation correction does not need this machinery.
+
+Keep a small set of held-out cases for consequential changes. The cases may be hidden from the writer to reduce overfitting; the required behavior must not be hidden. Once repeated failures reveal a holdout, move it into the regression set and replenish the holdout.
+
+Anthropic's evaluation guidance distinguishes actual environment outcomes from what an agent reports, and separates capability experiments from regression coverage. Apply both distinctions. [S19]
+
+For user interfaces, record the intended user, journey, display conditions, and design criteria. Capture loading, empty, error, and recovery states where relevant. Use Playwright traces for web journeys and native evidence for desktop products. A screenshot alone cannot prove an interaction works; an agent's click-through alone is not durable regression coverage. [S20]
+
+Treat model review as an additional source of findings. Require a location, affected contract, plausible failure scenario, severity, and supporting evidence. Do not let unsupported reviewer criticism trigger endless edits. Conflicting findings should be adjudicated against the contract or an explicit product decision.
+
+## 15. CI and release gates that actually enforce acceptance
+
+Provide one documented setup command and one primary check command, with version-pinned dependencies. CI should exercise the same essential behavior under a recorded environment.
+
+Use an aggregate acceptance gate that verifies required checks actually ran and passed for the expected revision. GitHub permits successful, skipped, or neutral states for required status checks in relevant protection rules. Therefore a required job name is not by itself proof of executed tests. Verify expected check sources and demonstrate that a deliberately failing candidate cannot merge. [S14]
+
+The aggregate gate itself must run for the relevant PR and merge-group events even when a dependency fails or is skipped, and require explicit successful conclusions for every expected check. Protect its triggers and conditions. A skipped aggregate is not an acceptable factory verdict, even if repository defaults would otherwise permit it.
+
+Protect workflow, verifier, policy, and credential-handling changes. Use minimal token permissions, immutable action revisions, and careful handling of untrusted inputs. Do not combine privileged workflow execution with an untrusted checkout. GitHub's secure-use guidance documents these hazards. [S21]
+
+At integration, verify the combined revision. At release, build the actual deliverable from that accepted revision in the controlled build environment. Test the packaged artifact where relevant: an EXE can fail even when source-level tests pass.
+
+Record release_id, source revision, artifact digest, build recipe, dependency inventory, configuration, acceptance evidence, target environment, approval/delegation, smoke criteria, and rollback plan. Build attestations can connect artifacts to their provenance; verify them against expected identities and digests before deployment. Attestations establish provenance under a trust model, not software correctness. [S22, S23]
+
+Use staged deployment where the product supports it. Define observation windows and health criteria before release. A desktop application may need a controlled pilot installation rather than a web-style canary.
+
+Keep the previous deployable artifact and test restoration. Database migrations need their own compatibility strategy: restoring old code may be unsafe after data or schema changes. Prefer reversible or expand-and-contract changes where feasible; explicitly plan forward repair when reversal is not valid.
+
+## 16. Bounded repair and diagnosis
+
+Default to one implementation attempt and at most two repair attempts within the same task budget. These are starting policy choices, not proven optimal numbers. Stop earlier when the failure repeats unchanged, scope expands, evidence is absent, permissions are insufficient, or cost cannot be kept within authorized limits.
+
+Every repair prompt should say what failed, why the evidence establishes failure, which files/interfaces are implicated, what must remain unchanged, and which acceptance criteria remain. It should not merely say continue or try harder.
+
+| Failure class | Appropriate next move |
+| --- | --- |
+| Implementation bug | Repair the demonstrated behavior and run affected checks |
+| Ambiguous or wrong contract | Propose a documented contract amendment |
+| Weak acceptance test | Improve the oracle through independent review |
+| Missing input or real-world evidence | Obtain the specific missing observation |
+| Environment failure | Repair setup or classify the attempt as blocked |
+| Integration conflict | Resolve under the integration owner; reverify combined behavior |
+| Provider capacity | Bounded backoff with jitter |
+| Authentication | Stop dispatch; repair credentials through the supported path |
+| Quota | Wait for known reset or use already authorized capacity |
+| Unknown external outcome | Reconcile before retrying |
+
+Preserve the best validated candidate before a speculative revision. Do not let the last attempt overwrite a better earlier result merely because it is newer.
+
+Cancellation has separate requested, stopping, and confirmed-stopped states. Reconcile remote effects that may already have happened. Stopping future dispatch does not cancel current provider work or undo a release.
+
+## 17. Model routing and provider adapters
+
+Begin with an explicit policy table and one measured default. A routing model becomes useful only when enough relevant evidence exists to make better decisions than simple rules.
+
+Route ordinary deterministic work to code. Route research, implementation, review, and domain reasoning to suitable verified model/tool combinations. Select for probability of reaching acceptance under the whole task budget, not just the cheapest next call.
+
+Each adapter needs a capability record: supported structured output, continuation/session IDs, cancellation behavior, observed identity, tool controls, authentication mode, usage reporting, billing limitations, descendant visibility, and version. An unavailable capability is a constraint, not a field to fabricate.
+
+| Tool | Recommended role | Verified capability and boundary |
+| --- | --- | --- |
+| Codex | First structured implementation adapter | Noninteractive JSONL events and schema-constrained final output are documented; independently verify the patch. [S10] |
+| Codex App Server | Later richer integration if needed | Bidirectional protocol is documented. Check transport maturity; the opened docs flag WebSocket transport as experimental and unsupported. Do not expose an unauthenticated remote listener. [S11] |
+| Claude Code | Challenger implementation/review adapter | Headless structured and streaming output are documented. Usage/cost fields require careful accounting. [S12] |
+| Grok Build | Additional candidate after bounded validation | Headless JSON/streaming and ACP are documented. Authentication and actual permissions require local checks. [S13] |
+| Cursor | Human cockpit and optional managed worker | Use an isolated task workspace; scheduled/event automations have their own ownership and usage. [S24] |
+| Grok Bot | Optional persistent intake/operations assistant | Keep any integration outside merge/release authority; reverify product access and scope before adoption |
+| GitHub | Review history, protected integration, CI, releases | Confirm repository permissions and feature availability |
+| coder_optimization | Evaluation lab | Extend its existing scorecard rather than creating a rival measurement system |
+
+For Claude Code specifically, the opened documentation says reported costs are client-side estimates, and resumed conversations can report totals including earlier runs. Store cumulative and incremental usage separately to avoid double counting; reconcile with actual billing when available. [S12]
+
+Pin and review automatically loaded repository configuration, hooks, plugins, and MCP servers for each adapter. Headless execution is not inherently inert: Claude's documentation notes project hooks and MCP loading in print mode. Its bare mode changes configuration discovery and authentication requirements, so selecting it requires an explicit adapter/account decision rather than a silent flag change. [S12]
+
+For every fallback, validate role constraints, tools, data policy, context needs, and remaining budget. Capacity alone does not make a different model equivalent. If required Astra authorship cannot be met, report the exact blocked role.
+
+Future-model readiness means versioned adapters, local evaluations, and reversible promotion. It does not require predicting a model release or pretending that an unreleased model is available.
+
+## 18. Economics and resource control
+
+Maintain two views:
+
+**Cash accounting:** actual provider, subscription, compute, storage, and service costs. Distinguish measured charges, estimates, allocated subscription cost, and unknowns.
+
+**Operational accounting:** quota consumption, queue time, worker runtime, verification time, your active effort, repair effort, and post-release support.
+
+For comparable tasks:
+
+`cost per accepted outcome = total attributable cost of all attempts and repairs / independently accepted outcomes`
+
+If no outcomes were accepted, report the total spent and zero accepted; do not create a misleading finite ratio. Do not mix trivial edits with major numerical work in one average.
+
+Missing usage prevents a complete cost-per-accepted-outcome claim. Show measured charges as a lower bound, estimates separately, and the share of runs with complete accounting. Do not rank a partially measured route as cheaper than a fully measured one.
+
+Report active human minutes separately from elapsed time. Concurrent agents can reduce waiting while increasing compute and review. Preserve both effects in the scorecard.
+
+Budget admission must be transactional: reserve estimated remaining cost before dispatch, reconcile actual usage afterward, and count child activity where observable. Maintain a configurable reserve for checking and recovery. A worker that exhausts its budget generating code without funds or time to verify it has not completed the task.
+
+When providers lack reliable cost or hard-cap controls, use enforceable request/time/concurrency restrictions and label their limitation. A timeout is not a guarantee that billing stopped. Unattended paid dispatch requires a configured budget policy; no dollar amount is assumed by this document.
+
+Resource preflight checks available disk, memory, expected artifact size, and runtime limits. Your earlier machines have been resource-constrained, so start one worker at a time and measure peak usage before expanding. Do not add a large local inference stack or a second orchestration platform without a demonstrated benefit.
+
+Choose later infrastructure by a concrete trigger:
+
+| Addition | Trigger |
+| --- | --- |
+| Second worker | Isolation, stale-worker rejection, budget accounting, and integration drills pass |
+| Remote worker | Local resources limit an already productive workflow |
+| PostgreSQL | Multiple controllers or measured database/availability needs justify it |
+| Temporal | Cross-machine durable recovery, timers, and long waits dominate maintenance |
+| OpenTelemetry stack | Correlated local IDs/logs no longer make diagnosis practical |
+| Learned router | Enough matched local outcomes exist to beat simple policy rules |
+| LangGraph | A specific agent-state graph needs it; do not create a competing scheduler |
+
+## 19. The factory improvement laboratory
+
+Three frozen tasks are useful for testing plumbing: one bug, one bounded feature, and one relevant refactor or UI change. They are not enough to declare a winning provider.
+
+Build toward a diverse local evaluation bank, initially aiming for roughly 20–50 representative tasks as resources permit. This is a planning range, not a statistical sufficiency guarantee. Include actual failures, preserved behavior, integration tasks, and explicit environment requirements. Anthropic's evaluation guidance supports starting with real tasks and repeated trials. [S19]
+
+Maintain separate development cases, fresh holdout cases, and production outcome records. A task repeatedly used to tune prompts is no longer an untouched holdout. Keep representative difficulty instead of quietly removing failures.
+
+Evaluate a versioned bundle: model, reasoning settings, prompt/context method, tool definitions, adapter, verification policy, and runtime environment. Randomize candidate order where practical. Keep identical initial revisions and budgets for matched comparisons. Record all failed, cancelled, and blocked attempts; show both end-to-end outcomes and failure attribution.
+
+Track first-attempt acceptance, acceptance within the repair budget, consistency over repeats, total cost, p50/p95 elapsed time, your review minutes, and subsequent defects. Show sample counts and uncertainty. Do not infer reliable performance from a few wins.
+
+A factory improvement proposal must specify a predicted benefit and a regression limit. Evaluate it on replayable tasks, promote it to a small authorized trial, then expand only if production evidence agrees. Roll back promptly when it worsens the relevant quality or effort measures.
+
+Periodically remove one optional layer in an experiment: extra reviewer, prompt writer, context reset, or manager. Retain it only if measured outcomes justify its cost. Anthropic's August 2026 experiments offer a useful caution that imposed roles and CEO-like hierarchy did not automatically improve their collaborative game-building setting. That is a specific finding, not a ban on useful specialization. [S26]
+
+The lab cannot simultaneously change its evaluation rules, budgets, release authority, and the implementation it is grading. Protect the scorecard and holdout through a separate trusted change path.
+
+## 20. Product discovery and commercial judgment
+
+Before a new product or major feature, create a short product contract: who has the problem, what evidence supports it, what they do today, what improvement matters, and what result would justify continuing.
+
+Use real observations when possible: interviews, support problems, an existing manual workflow, a small prototype, or observed task completion. Synthetic personas can generate questions and edge cases; they cannot validate demand or willingness to pay.
+
+Choose the smallest experiment that resolves a consequential assumption. It may be a mockup, a recorded workflow, a data-quality audit, a technical spike, or a limited release. Define the observation window and stop/revise criteria before looking at results. DORA's customer-feedback guidance supports validating the problem and then measuring actual interaction with a focused solution. [S27]
+
+Keep an uncertainty register with assumption, evidence, consequence if false, next cheap test, owner, and status. Prioritize the next action by value of information as well as feature priority.
+
+Examples for your projects:
+
+- Tracker: one independently labeled complete real hand may resolve more uncertainty than another OCR feature.
+- TraceEV: observing a user find and replay an important hand may be more useful than adding another report.
+- Solver: proving toy-game correctness and measuring state growth may be more useful than launching a huge run.
+- Factory: recovering cleanly from a controller crash may be more valuable than adding animated agent avatars.
+
+An evidence-backed decision to simplify, defer, or remove a feature is a successful factory outcome. The director should be allowed to recommend it without manufacturing more coding work.
+
+## 21. Project-specific verification packs
+
+Share the controller and execution infrastructure. Keep each product's definition of truth separate. The following packs use your stated project goals; implementation must reconcile them against the current repository and artifacts.
+
+### TraceEV and poker database analysis
+
+Preserve the database-analysis scope, existing imports, filters, cohorts, replay behavior, notes, sorting, and executable packaging. A new feature cannot silently replace the application with a simpler demonstration.
+
+Define chips, currency, nominal big blinds, effective straddles, antes, rake, and payouts explicitly. Use versioned hand histories with independently checked aggregates, positions, actions, and expected reports. Verify deduplication and saved-data compatibility. Exercise the packaged executable on its actual target platform.
+
+Acceptance should include the complete journey from importing a real session to locating and replaying a relevant hand. Compare reports and filters against reference calculations, not only against the program's own functions. Claims of H2N parity require an enumerated behavior matrix and real comparisons.
+
+### ClubWPT capture and reconstruction
+
+Freeze calibration, capture geometry, client/display conditions, and expected table layout for a recording. Preserve frame and event provenance, uncertainty, temporal ordering, and corrections.
+
+Maintain separate labels for synthetic fixtures, replayed real capture, and live independently verified evidence. Synthetic success must never promote a real incomplete hand to verified status.
+
+The central acceptance unit is a complete hand, not an OCR character. It needs positions, relevant cards, ordered actions, incremental amounts, commitments, pots, settlement, and an independent source for comparison. Action badges and nearby commitments are not interchangeable with action amounts.
+
+Measure complete correctly reconstructed hands per recording hour, false acceptance, review effort, dropped frames, and latency distribution. Reject unresolved exports. Spectator mode needs its own cases because hero-seat assumptions do not apply.
+
+For Kali-to-Windows handoffs, require destination artifact identity and a destination-side run receipt. If remote commands fail, prepare a compact transfer package and instructions for the established email fallback; sending email still requires the appropriate existing authorization. A prepared or sent package does not prove execution.
+
+### Eight-player straddle and ante solver
+
+Start with legal game rules, a trusted hand evaluator, exact toy games, pot/stack conservation, correct information sets, and independently checked small reference cases. Record seeds, abstractions, action sizes, convergence diagnostics, memory, and runtime.
+
+Do not extrapolate two-player zero-sum convergence or exploitability claims to the full eight-player game. OpenSpiel's exploitability implementation explicitly distinguishes its two-player constant-sum restrictions from more general NashConv calculations. Even a valid exact metric can become computationally impractical in a large game. [S28]
+
+Keep AI strategy explanations separate from numerical evidence. A confident poker narrative is not a solver result. Before a full preflop/postflop engine, demonstrate correctness on tractable cases and measure how memory and computation grow.
+
+## 22. The strongest advanced capabilities
+
+These are proposed extensions to build after the core delivery path works.
+
+**Requirement-to-evidence graph.** Link user problem, requirement, assumption, code/interface, check, candidate, release, and observed outcome. Start with ordinary tables. It should answer which promises lack evidence and which results became stale after a shared dependency changed. Add richer graph tooling only when basic queries become insufficient.
+
+**Failure-to-fixture pipeline.** A material failure produces a minimal reproducer, classification, fix, and relevant regression or preflight check. Store concise durable lessons, not endless transcripts. Human/domain review remains necessary when the reference truth is uncertain.
+
+**Counterfactual replay.** Before upgrading a model, prompt, or harness, rerun frozen historical tasks from their original revisions without exposing reference solutions. This estimates whether the change helps on known work; fresh tasks and production results test whether it generalizes.
+
+**Factory simulation.** A deterministic fake provider and fake effect service can simulate capacity errors, dropped acknowledgments, stale workers, malformed events, timeouts, disk exhaustion, and duplicate deliveries. Prove recovery behavior without paying for real calls or touching external accounts.
+
+**Earned autonomy.** Expand authority by task class and verified capability. A worker may reliably prepare dependency PRs while remaining unqualified to migrate a database. Promotion requires relevant evidence and owner-granted scope; an incident automatically reduces scope where a preauthorized policy says so. Never translate general confidence into unrestricted access.
+
+**Design exploration with bounded alternatives.** For genuinely uncertain interfaces, produce two small candidates against the same task and design rubric. Compare observable journeys, choose one, and discard the loser. Do not maintain multiple speculative product implementations indefinitely.
+
+**Architecture maintenance.** Check dependency directions, public interfaces, data boundaries, and duplicated infrastructure. Convert recurring review findings into actionable rules. Schedule cleanup against observed maintenance cost, with a budget, rather than endless cosmetic rewrites.
+
+**A product-quality memory.** Preserve your accepted examples of good UI, useful reports, clear explanations, and unacceptable regressions. Use them to calibrate review. Record that these are your product preferences, not universal design laws.
+
+## 23. Your operating experience
+
+The factory should present decisions in a form you can judge quickly. Its home screen should show outcomes, waiting decisions, blocked work, resource use, and exceptions. Agent activity is secondary.
+
+A review packet opens with what changed, why it matters, a short before/after demonstration, acceptance results, remaining limitations, and the exact decision required. Link to detailed traces instead of forcing you to reconstruct the job from logs.
+
+Your one-screen director report should contain:
+
+1. Delivered outcomes, each linked to its evidence and current release state.
+2. Running and next eligible work, with the actual dependency or wait reason.
+3. Decisions only you need to make, with a recommended option and consequence.
+4. Known spend, estimates, unknown usage, and remaining authorized budget.
+5. Defects, failed hypotheses, recovery events, and proposed priority changes.
+
+Show confidence through evidence labels: claimed, independently checked, integrated, released, observed useful. These labels must refer to distinct recorded milestones. Avoid a single green completed badge that merges all of them.
+
+Permissions should reduce repeated interruptions. Encode already authorized routine actions in a capability envelope. Require a fresh decision only when the action exceeds it, materially changes the product, or needs approval that has not been delegated.
+
+| Mode | Example scope | Authority boundary |
+| --- | --- | --- |
+| Investigation | Read source, research, reproduce in a sandbox | No external publication or production mutation |
+| Draft change | Implement, verify, prepare or create an authorized draft PR | No merge/release unless included in delegation |
+| Bounded maintenance | Approved task classes under fixed checks and budget | Cannot expand class or weaken gate |
+| Release | A concrete artifact, target, rollout, and rollback plan | Approval/delegation binds these exact inputs |
+
+Provide pause-dispatch, inspect, cancel, reconcile, retry-with-reason, and rollback controls. Pausing must not lose evidence; cancellation must show whether execution and remote effects are actually resolved.
+
+## 24. The initial technology choices
+
+Use the existing Overseer language and conventions where practical. If its extension point is Python, a small Python controller with sqlite3, established tests, structured records, and thin adapters is a sensible starting point. Do not rewrite the existing application simply to adopt a fashionable framework.
+
+| Capability | Initial choice | Add or expand when |
+| --- | --- | --- |
+| Version control | Git, isolated branches, preserved baseline | Already fundamental |
+| Ledger | SQLite and local artifact directories | Move only for measured multi-host/controller needs |
+| Worker | One verified structured CLI adapter | Additional providers earn adoption in trials |
+| Verification | Existing test stack and trusted acceptance runner | Add domain checks for actual risk |
+| Python hygiene | Ruff and incremental type checking if absent | Fit existing project conventions |
+| Web journeys | Playwright and focused accessibility checks | A web pilot exists |
+| Security checks | One suitable static scanner, secrets and dependencies | Tune findings before adding overlapping scanners |
+| Runtime isolation | Disposable container or VM appropriate to trust level | Required before unattended code execution |
+| Delivery | GitHub Actions and verified branch enforcement | Chosen repository/permissions are available |
+| Release health | Structured errors, release IDs, smoke checks | Add a service such as Sentry if justified |
+| User interface | CLI, then a small operator board | State/recovery are already trustworthy |
+
+Do not start with Kubernetes, a vector database, multiple workflow engines, five review bots, or a custom foundation model. Each would add a maintenance obligation before the factory has proven its first production line.
+
+When dispatch crosses an asynchronous queue, atomically record the task transition and an outbox entry, then deliver and acknowledge it separately. Consumers still need deduplication. AWS's transactional-outbox guidance describes this dual-write problem; the pattern is useful without adopting AWS. [S29]
+
+## 25. Build sequence with evidence gates
+
+Use milestone exits instead of promising dates before repository inspection. Several milestones may be quick; unfamiliar infrastructure or absent real-world evidence can dominate the schedule.
+
+| Milestone | Deliverable | Exit evidence |
+| --- | --- | --- |
+| M0 Establish reality | Current repository map, clean baseline, protected behavior inventory, current prerequisites | Existing checks recorded; live sessions untouched; unknowns named |
+| M1 Reliable local kernel | Ledger, explicit local commands, trusted fake provider, fixture verification | Pass/fail, timeout, restart, duplicate dispatch, and stale-worker simulations behave correctly; no sandbox claim |
+| M2 One real worker | One structured adapter, protected verifier, and proven runtime isolation | One real bounded bug fixed; independent checks pass; actual identity/usage limitations recorded |
+| M3 Integrated delivery | Authorized draft PR, required CI, protected integration path | Failed check cannot merge; latest combined revision is verified; duplicate events do not duplicate tasks |
+| M4 One real product journey | A low-risk web or local product pilot with complete acceptance | A person can complete the defined journey; packaged/runtime evidence exists |
+| M5 Operable releases | Operator controls, release receipts, observation, rollback | Controlled release and recovery drill; no unresolved effects hidden as success |
+| M6 Measured expansion | Challenger providers and a second worker | Matched evidence shows benefit without unacceptable defects, cost, or owner workload |
+| M7 Domain depth | Extend TraceEV, tracker, and solver packs one project at a time | Each passes its own independent truth tests |
+
+Milestones are dependency gates, not a rigid demand to install every provider. A project's minimum domain verification pack must exist before its M4 product pilot. M7 deepens that coverage; M6 provider/concurrency expansion is optional and must not delay a valuable single-provider product path.
+
+Use Overseer itself for the first low-risk bug or feature, away from live terminal control. A factory that can safely improve its own reporting is a good pilot; a factory changing its own permission enforcement requires the stronger protected review path.
+
+Start M2 with a bounded task that already has a clear acceptance oracle. Do not begin with all projects, production Windows recovery, a complete eight-player solver, or a broad paid benchmark tournament.
+
+### First implementation backlog
+
+| ID | Work | Dependency | Done when |
+| --- | --- | --- | --- |
+| F01 | Inventory current behavior and create baseline | None | Existing checks and protected behaviors recorded |
+| F02 | Define versioned task, attempt, evidence, lease schemas | F01 | Invalid records rejected; identifiers and hashes stable |
+| F03 | Implement local submit/status/inspect | F02 | Records survive restart; no execution on submit |
+| F04 | Implement deterministic fake-worker run-one | F03 | Explicit single attempt records real transitions |
+| F05 | Execute controller-owned acceptance fixtures | F04 | Known-good passes; known-bad and fixture-test tampering fail through the limited fixture interface |
+| F06 | Reconcile crashes, timeouts, and stale workers | F04 | Failure drills preserve ownership and uncertainty |
+| F07 | Prove isolation and resource controls | F01 | Harmless boundary probes demonstrate restrictions |
+| F08 | Connect one real structured adapter | F05, F06, F07 | Real bounded task produces verified candidate |
+| F09 | Add broker, effect receipts, and draft PR path | F08 | Lost acknowledgment and duplicate request reconciled |
+| F10 | Enforce CI and integration checks | F09 | A failing/stale candidate cannot be accepted |
+| F11 | Provide concise review packet and operator view | F10 | You can judge the result without reconstructing logs |
+| F12 | Record baseline economics and local task bank | F08 onward | Failures and unknown costs retained alongside wins |
+
+These are proposed identifiers and interfaces. Map them onto existing names rather than duplicating functionality already implemented.
+
+M1/F05 use trusted built-in fixture modes and a limited candidate-file API. They test control logic, not containment against arbitrary code. Separate directories or chmod under the same OS user do not establish a sandbox. F07 must prove real runtime restrictions before any agent-authored code, repository build hook, arbitrary shell task, or unattended provider worker runs through this path.
+
+## 26. Required failure drills
+
+This is the factory's initial reliability curriculum. Run drills in disposable environments and fake services before using real external accounts.
+
+| Injected condition | Required result |
+| --- | --- |
+| Controller dies immediately after dispatch | Reconcile worker/session; do not blindly launch a duplicate |
+| Duplicate input event | One logical task for the same intended work |
+| Stale worker resumes after lease replacement | Its publish/effect requests are rejected |
+| Worker edits or removes a failing test | Protected acceptance still rejects the incorrect candidate |
+| Candidate changes after verification | Relevant evidence is stale and cannot authorize integration |
+| Two passing branches conflict semantically | Combined acceptance detects the conflict |
+| Required CI work is skipped | Aggregate acceptance gate fails closed |
+| PR creation succeeds but response is lost | Remote reconciliation finds the existing PR |
+| Provider returns malformed/truncated events | Result remains unverified; logs retained for diagnosis |
+| Authentication or quota error | Correct blocked state; no wasteful retry storm |
+| Timeout leaves subprocesses alive | Process tree/environment is retired and state reconciled |
+| Memory, process, or disk limit is exceeded | Run stops without corrupting controller data |
+| Off-policy read, network request, or broker action | Runtime enforcement rejects it |
+| Cancellation races with an external action | Unknown/confirmed effect is displayed truthfully |
+| Provenance points to unaccepted source, or deployment bytes differ from the tested artifact | Provenance or artifact-digest verification blocks the release |
+| Database restoration is needed | Fresh controller epoch invalidates old leases; restored artifact references and pending effects are reconciled |
+| Model/harness upgrade degrades a holdout | Promotion stops; prior stable configuration remains available |
+
+Passing these drills proves the tested cases under the recorded environment. It is not a claim that every possible failure has been eliminated.
+
+## 27. A complete first execution prompt
+
+The following prompt is for the coding agent that can access the actual Overseer repository. It begins implementation without pretending this entire blueprint should be built in one attempt.
+
+```text
+Implement the first reliable local execution slice of the Overseer Software Factory.
+
+Read the current Overseer repository instructions, FACTORY_EXECUTION.md if present,
+the existing coder_optimization integration, and the current software-factory
+blueprint. Inspect actual code before proposing a rewrite. Treat claims in old
+notes as observations to verify, not as proof of current implementation.
+
+Objective
+Create or complete an additive, local-only path that can submit a frozen task,
+run one deterministic fixture worker, independently check its candidate, inspect
+the result, and reconcile an interrupted attempt. Demonstrate success and failure
+honestly. Reuse existing implementations wherever they satisfy the contract.
+
+Preservation requirements
+Preserve all existing working functionality, tests, exclusions, terminal FIFO
+behavior, retry limits, and project-terminal hub behavior. Do not close reptyr
+donor emulators, alter live tmux sessions, control the Windows machine, introduce
+background auto-dispatch, or change global credentials. Work in an isolated
+branch/workspace. Respect uncommitted user work; do not reset or overwrite it.
+
+Complete actual program files in the repository. Do not return snippets that I
+must manually insert. Do not replace the program with a simplified demonstration
+that loses previous functionality. Keep the implementation focused on this slice.
+
+Required behavior
+1. Record the current baseline and run the existing relevant checks.
+2. Add versioned task and attempt records using the project's established stack.
+   A task records objective, preserved behavior, spec hash, source revision,
+   acceptance manifest, and execution limits. An attempt has a unique identity,
+   state history, workspace identity, lease generation, and actual outcome.
+3. Implement or extend explicit submit, status, inspect, run-one, and reconcile
+   commands. Follow existing CLI conventions. Submit must not execute work.
+4. Use a local SQLite ledger, brief transactions, and an artifact directory.
+   Keep runtime state, secrets, and bulky evidence out of source control.
+5. Start with a deterministic fake provider. It must simulate a successful
+   change, an incorrect change, a timeout, and uncertain interruption. No paid
+   model calls, network actions, GitHub writes, or provider login changes belong
+   in this first slice.
+6. Use only trusted built-in fixture modes, a limited candidate-file API, and
+   controlled fixture subprocesses. Do not accept arbitrary shell tasks or run
+   agent-authored/build-hook code. Keep acceptance material outside that limited
+   write API. This demonstrates logical separation, not OS sandbox security.
+   Completion messages and exit zero cannot themselves cause acceptance.
+7. Bind check results to the candidate and verifier identity. A candidate edit
+   after checking must invalidate the relevant result.
+8. Reserve an attempt before launch. On ambiguous restart, record
+   needs_reconciliation and establish what happened before allowing another
+   dispatch. Reject stale-generation result publication.
+9. Enforce fixture-command timeouts and clean up the process tree. Distinguish
+   cancellation requested from confirmed stopped. If the existing platform
+   cannot enforce a required boundary, report it and keep that route disabled.
+10. Do not build the full operator dashboard, multi-provider router, release
+    system, vector memory, Temporal integration, or autonomous manager hierarchy.
+
+Acceptance evidence
+- The original relevant suite still passes, or pre-existing failures are clearly
+  reproduced and distinguished from regressions.
+- A known-good fixture is independently accepted for the exact checked candidate.
+- A known-bad fixture remains failed even if its worker prints a success marker.
+- Editing worker-visible tests cannot bypass the trusted fixture acceptance.
+- Do not claim same-user paths or chmod prove containment. Record real runtime
+  isolation as a prerequisite for the subsequent live-adapter milestone.
+- Duplicate submission/dispatch cannot create two owners for the same task.
+- Interrupted/ambiguous execution is reconciled rather than automatically rerun.
+- A stale lease holder cannot publish an accepted result.
+- Timeouts retire descendants; inspection shows the actual outcome.
+- Ledger backup/restore and restart preserve records, validate referenced
+  artifacts, and invalidate old leases through a fresh controller epoch.
+
+Work autonomously on reversible local implementation within this scope. Use
+bounded tests that prove these failure modes. If an essential prerequisite is
+missing, complete independent work and report the exact missing fact or access.
+Do not claim a real provider adapter or remote enforcement was verified.
+
+Finish with a complete code change, runnable local instructions, the commands
+actually executed and their results, and a concise FACTORY_EXECUTION.md update.
+State what is implemented, what was demonstrated, what remains unverified, and
+the next smallest milestone. Keep claimed capabilities separate from evidence.
+```
+
+## 28. Decisions before later expansion
+
+The first local fake-provider slice can proceed without settling every future question. Before real unattended adapters or external writes, establish:
+
+- Exact repository and branch targets, visibility, permissions, and CI features.
+- Approved provider/model identities and any role-specific authorship constraints.
+- Cash budget, quota policy, review capacity, and resource limits.
+- A functioning isolation boundary and credential path.
+- Which actions are draft-only, which are delegated, and which require a concrete release decision.
+- The first product journey and its independent acceptance evidence.
+- Artifact/log retention, backup scope, and sensitive-data handling.
+
+The target is an operation you can direct through outcomes and inspect through evidence: useful products, complete code, preserved behavior, recoverable execution, and steadily improving judgment. The first proof is one real task traveling through that entire system without shortcuts.
+
+## 29. Research sources
+
+All links below were opened during this review. Vendor documentation establishes documented interfaces, not your account entitlements or local installation. Research results remain specific to their methods and settings. Links to living documentation may change after this research date.
+
+[S01] OpenAI. Harness engineering: leveraging Codex in an agent-first world. February 11, 2026. Repository knowledge, application observability, and architecture enforcement; vendor case study.
+https://openai.com/index/harness-engineering/
+
+[S02] Anthropic. Harness design for long-running application development. March 24, 2026. Generator/evaluator separation, design criteria, and evolving harness requirements; engineering experiments.
+https://www.anthropic.com/engineering/harness-design-long-running-apps
+
+[S03] Kim et al. Towards a Science of Scaling Agent Systems. arXiv 2512.08296, version 3, April 8, 2026. Coordination and task-structure interactions across experimental configurations.
+https://arxiv.org/abs/2512.08296v3
+
+[S04] Yang et al. When Parallelism Pays Off: Cohesion-Aware Task Partitioning for Multi-Agent Coding. Submitted May 31, 2026. Dependency-aware coding partitioning; small experimental task set.
+https://arxiv.org/abs/2606.00953
+
+[S05] OpenAI. Separating signal from noise in coding evaluations. July 8, 2026. Audit of SWE-Bench Pro evaluation defects and implications for benchmark interpretation.
+https://openai.com/index/separating-signal-from-noise-coding-evaluations/
+
+[S06] Anthropic. Quantifying infrastructure noise in agentic coding evals. February 5, 2026. Runtime resource configuration as an evaluation variable.
+https://www.anthropic.com/engineering/infrastructure-noise
+
+[S07] METR. Measuring the Impact of Early-2025 AI on Experienced Open-Source Developer Productivity. July 10, 2025. Original randomized study and limitations.
+https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/
+
+[S08] METR. We are Changing our Developer Productivity Experiment Design. February 24, 2026. Updated selection and concurrent-work measurement limitations.
+https://metr.org/blog/2026-02-24-uplift-update/
+
+[S09] DORA. DORA's software delivery performance metrics. Current guidance reviewed October 18, 2026. Five metrics, context, and gaming pitfalls.
+https://dora.dev/guides/dora-metrics/
+
+[S10] OpenAI. Non-interactive mode. Current official documentation. Structured Codex execution, outputs, and automation credential boundaries.
+https://learn.chatgpt.com/docs/non-interactive-mode
+
+[S11] OpenAI. Codex App Server. Current official documentation. Protocol, transports, capabilities, and maturity caveats.
+https://learn.chatgpt.com/docs/app-server
+
+[S12] Anthropic. Run Claude Code programmatically. Current official documentation. Headless execution, structured output, sessions, and cost-estimate semantics.
+https://code.claude.com/docs/en/headless
+
+[S13] xAI. Headless and Scripting. Current official documentation. Grok Build structured output and ACP interface.
+https://docs.x.ai/build/cli/headless-scripting
+
+[S14] GitHub. About protected branches. Current documentation. Required check states and expected status sources.
+https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches
+
+[S15] GitHub. Managing a merge queue. Current documentation. Integration checks and merge-group workflow requirements.
+https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue
+
+[S16] Temporal. Activity Definition. Current documentation. Activity execution, retry, and idempotency considerations.
+https://docs.temporal.io/activity-definition
+
+[S17] Docker. Rootless mode tips. Current documentation. Resource-control prerequisites and limitations.
+https://docs.docker.com/engine/security/rootless/tips/
+
+[S18] Model Context Protocol. Security Best Practices. Draft documentation reviewed October 18, 2026; draft status matters. Tool-protocol security boundaries and implementation guidance.
+https://modelcontextprotocol.io/docs/draft/tutorials/security/security_best_practices
+
+[S19] Anthropic. Demystifying evals for AI agents. January 9, 2026. Actual outcomes, graders, repeated trials, capability versus regression evaluation.
+https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
+
+[S20] Microsoft Playwright. Trace viewer. Current documentation. Inspectable browser-test traces.
+https://playwright.dev/docs/trace-viewer
+
+[S21] GitHub. Secure use reference. Current documentation. Credential exposure, untrusted input, workflow security, and dependency pinning.
+https://docs.github.com/en/actions/reference/security/secure-use
+
+[S22] GitHub. Artifact attestations. Current documentation. Build provenance and attestation use.
+https://docs.github.com/en/actions/concepts/security/artifact-attestations
+
+[S23] SLSA. Build: Verifying artifacts. Version 1.2. Verification of provenance, artifact identity, and expected builders.
+https://slsa.dev/spec/v1.2/verifying-artifacts
+
+[S24] Cursor. Automations. Current documentation. Scheduled/event-driven cloud agents, ownership, and billing.
+https://cursor.com/docs/cloud-agent/automations
+
+[S25] SQLite. Write-Ahead Logging. Current documentation. Same-host constraints, concurrency, checkpoints, and durability tradeoffs.
+https://www.sqlite.org/wal.html
+
+[S26] Anthropic. Patterns and problems in multiagent systems. August 13, 2026. Experimental collaboration, role/hierarchy limitations, and coordination patterns.
+https://www.anthropic.com/research/multiagent-systems
+
+[S27] DORA. Customer feedback. Current capability guidance. Problem validation and feedback from actual product use.
+https://dora.dev/capabilities/customer-feedback/
+
+[S28] Google DeepMind OpenSpiel. exploitability.py. Current source inspected through GitHub. Two-player constant-sum exploitability restrictions and NashConv implementation; pin a commit before using as a validation dependency.
+https://github.com/google-deepmind/open_spiel/blob/master/open_spiel/python/algorithms/exploitability.py
+
+[S29] AWS Prescriptive Guidance. Transactional outbox pattern. Current documentation. Atomic recording of intent and continued need for idempotent consumers.
+https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html
+
+

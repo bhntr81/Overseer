@@ -1,5 +1,9 @@
 # Overseer software factory blueprint
 
+Historical version: see the [current Version 2 blueprint](SOFTWARE_FACTORY_BLUEPRINT_V2.txt)
+and [skills integration](FACTORY_SKILLS.md). Implementation facts remain in
+[the execution record](FACTORY_EXECUTION.md).
+
 Research date: 2026-10-18, America/Chicago. Status: architecture and execution plan;
 implementation evidence is tracked in `FACTORY_EXECUTION.md`. Vendor capabilities
 below were checked against official documentation. Proposed routing and efficiency

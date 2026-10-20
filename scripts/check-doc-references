@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Check that file and line references in a harness document still resolve.
+
+Read-only. It parses `path:line` references out of a markdown document and
+fails when a cited path is missing or a cited line is outside the file.
+"""
+from pathlib import Path
+import re
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DOCUMENT = ROOT / 'docs' / 'HARNESS_FRAMEWORK.md'
+REFERENCE = re.compile(r'(?<![\w./-])((?:[\w.-]+/)*[\w.-]+\.[A-Za-z0-9]+):(\d+)')
+
+
+def references(text):
+    """Return cited (path, line) pairs, in order of first appearance."""
+    found = []
+    seen = set()
+    for match in REFERENCE.finditer(text):
+        pair = (match.group(1), int(match.group(2)))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        found.append(pair)
+    return found
+
+
+def check(document):
+    """Return a list of human-readable problems with the cited references."""
+    problems = []
+    for relative, line in references(document.read_text()):
+        target = ROOT / relative
+        if not target.is_file():
+            problems.append(f'{relative}:{line} cites a path that does not exist')
+            continue
+        count = len(target.read_text(errors='replace').splitlines())
+        if line < 1 or line > count:
+            problems.append(f'{relative}:{line} is outside the file (1..{count})')
+    return problems
+
+
+def main(argv):
+    document = Path(argv[1]).resolve() if len(argv) > 1 else DEFAULT_DOCUMENT
+    if not document.is_file():
+        print(f'missing document: {document}', file=sys.stderr)
+        return 2
+    problems = check(document)
+    if problems:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        print(f'{len(problems)} unresolved reference(s) in {document.name}', file=sys.stderr)
+        return 1
+    print(f'{len(references(document.read_text()))} references checked in {document.name}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv))

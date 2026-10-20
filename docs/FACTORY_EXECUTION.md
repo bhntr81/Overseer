@@ -1,5 +1,25 @@
 # Software factory execution record
 
+## Blueprint and skills integration
+
+Overseer is the software factory project. Version 2 was moved unchanged from
+Downloads to [SOFTWARE_FACTORY_BLUEPRINT_V2.txt](SOFTWARE_FACTORY_BLUEPRINT_V2.txt);
+the original blueprint remains historical. Its stronger acceptance requirements
+have not all been implemented by the existing trusted-command runner.
+
+The [harness framework](HARNESS_FRAMEWORK.md) maps the blueprint's pillars onto
+the current code and records which pillars are implemented, partial, or absent.
+
+The dedicated `/root/skills_integration_prompt` authored the bounded integration
+handoff. The primary agent installed three reviewed instruction-only skills from
+`davidondrej/skills` at revision `27e2e3a63f36ef8c962dae08d5ed59b27d72249e`
+using the system skill-installer helper: better-prompt, goal-loop, and
+effective-agent-skills. Upstream file hashes match the reviewed checkout; MIT
+licenses accompany the installations. [Integration](FACTORY_SKILLS.md) and
+[provenance](../factory/skills-provenance.json) record scope and verification.
+Runtime activation and usefulness remain untested; no provider run or controller
+change was made in this integration.
+
 ## Authorship and scope
 
 The dedicated `/root/factory_prompt_writer` authored the research and implementation
@@ -95,8 +115,26 @@ No provider workers, nested supervisor swarms, automatic repairs, GitHub issue/P
 integration, merge enforcement, release pipelines, or live Model Router are enabled
 by this slice. All are acceptance-defined phases in the blueprint.
 
-Next implementation task: add one Codex structured adapter in an isolated Git
-worktree, with independent frozen verification, lifecycle-event parsing, explicit
-provider permissions and budget, and a shared dispatch gate with the legacy
-monitor. Validate a real bounded bug fix plus capacity/auth/restart scenarios
-before unattended scheduling. Preserve required model authorship and exclusions.
+The local fake-provider slice is a closed controller-owned mode. Its scenarios
+cover a good candidate, an incorrect candidate, a timeout, and an uncertain
+interruption. A log line that says SUCCESS does not accept the incorrect
+candidate. Acceptance goes through a publish gate bound to the current
+controller epoch, attempt id, and lease generation. Reconciliation and lease
+replacement supersede the old lease. SQLite backup and restore advance the
+epoch, keep the lease counter from moving backward, and invalidate a passed
+fixture or fake-provider job whose candidate is missing or no longer matches
+its receipt. Fencing is committed in a staging database before the live ledger
+is replaced, so a fencing failure leaves the live epoch and lease counter as
+they were. An unreadable passed specification is invalidated instead of
+aborting that fence. Temporary-database tests demonstrated those behaviors. This slice
+is not an OS sandbox, and it does not finish M1.
+
+An `isolation_probe` task runs one controller-owned bubblewrap profile. The
+probe's disposable workspace is writable. Its ledger, credential, and other
+workspace files are read-only, and those host bytes are checked after the
+probe. The profile has no network route, a hard 128 MiB address-space limit
+that the probe cannot raise, and a controller wall-clock kill for a sleep
+command. Passing that probe does not make the trusted argv command runner a
+sandbox, and it does not by itself finish M1. No real provider adapter,
+including Codex, Claude, or Grok, is implemented. Do not enable unattended
+provider dispatch from this slice.
