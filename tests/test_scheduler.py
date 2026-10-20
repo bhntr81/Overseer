@@ -113,6 +113,38 @@ class SchedulerTests(unittest.TestCase):
         self.run_tick(0)
         self.backend.send.assert_not_called()
 
+    def test_missing_process_does_not_block_other_panes(self):
+        errors = (
+            FileNotFoundError(2, 'No such file or directory', '/proc/1174383/stat'),
+            ProcessLookupError(3, 'No such process'),
+        )
+        for error in errors:
+            with self.subTest(error=type(error).__name__):
+                self.backend.send.reset_mock()
+                self.state.clear()
+                self.state['%0:1174383:5806804'] = {}
+
+                def snapshot(pane, failure=error):
+                    if pane == '%0':
+                        raise failure
+                    return self.screens[pane]
+
+                self.backend.snapshot.side_effect = snapshot
+                self.run_tick(0)
+                self.assertEqual(self.backend.send.call_args.args[0].pane, '%1')
+                self.assertEqual(self.backend.send.call_args.args[1], 'Continue.')
+                self.assertEqual(self.state['%0:1174383:5806804']['queue_reason'], 'dead or stale process')
+
+    def test_other_observation_error_still_blocks_live_panes(self):
+        def snapshot(pane):
+            if pane == '%0':
+                raise RuntimeError('capture failed')
+            return self.screens[pane]
+
+        self.backend.snapshot.side_effect = snapshot
+        self.run_tick(0)
+        self.backend.send.assert_not_called()
+
     def test_capacity_history_and_prose_are_not_active(self):
         s = self.screens['%0']
         self.assertEqual(phase(replace(s, text=ERROR + '\n› new question\n' + DONE)), 'finished')
@@ -169,6 +201,46 @@ class SchedulerTests(unittest.TestCase):
         self.change('%0', ERROR + '\nTip: new tip')
         self.run_tick(20)
         self.assertEqual(self.backend.send.call_count, 1)
+
+    def test_queue_sends_prompt_built_from_report(self):
+        report = (
+            'OVERSEER_REPORT {"status":"continue","objective":"report loop",'
+            '"remaining":"parse the output report","done":"found the send path",'
+            '"evidence":"queue test"}\n' + QUESTION
+        )
+        self.change('%0', report)
+        self.change('%1', 'OVERSEER_DONE\n' + QUESTION)
+        self.run_tick(0)
+        self.backend.send.assert_called_once()
+        self.assertEqual(self.backend.send.call_args.args[0].pane, '%0')
+        sent = self.backend.send.call_args.args[1]
+        self.assertIn('parse the output report', sent)
+        self.assertNotEqual(sent, 'Continue.')
+        self.assertLessEqual(len(sent), 1000)
+        self.assertNotIn('\n', sent)
+
+    def test_invalid_report_does_not_take_the_queue_slot(self):
+        self.change('%0', 'OVERSEER_REPORT {not json}\n' + QUESTION)
+        self.run_tick(0)
+        self.assertEqual(self.backend.send.call_args.args[0].pane, '%1')
+        self.assertEqual(self.backend.send.call_args.args[1], 'Continue.')
+        self.assertNotIn('last_sent', self.state['%0:0'])
+        self.assertEqual(self.state['%0:0']['held_reason'], 'invalid output report')
+
+    def test_done_report_does_not_send(self):
+        self.change('%0', 'OVERSEER_REPORT {"status":"needs_input","objective":"x","remaining":"y","done":"z","evidence":"e"}\n' + QUESTION)
+        self.run_tick(0)
+        self.assertEqual(self.backend.send.call_args.args[0].pane, '%1')
+        self.assertEqual(self.state['%0:0']['queue_reason'], 'output report requested no further continuation')
+
+    def test_capacity_retry_keeps_configured_reply(self):
+        self.change('%0', 'OVERSEER_REPORT {"status":"continue","objective":"o","remaining":"should-not-use-this","done":"d","evidence":"e"}\n' + ERROR)
+        self.change('%1', 'OVERSEER_DONE\n' + QUESTION)
+        self.run_tick(0)
+        self.backend.send.assert_not_called()
+        self.run_tick(10)
+        self.assertEqual(self.backend.send.call_args.args[1], 'Continue.')
+        self.assertNotIn('should-not-use-this', self.backend.send.call_args.args[1])
 
     def test_observed_running_then_identical_capacity_releases(self):
         self.change('%0', ERROR)

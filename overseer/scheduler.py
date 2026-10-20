@@ -2,7 +2,9 @@
 import logging
 import re
 
-from .policy import ANSI, BLOCKED, COMPLETED, CONTINUE, STOP, classify, fingerprint
+from .policy import (
+    ANSI, BLOCKED, COMPLETED, CONTINUE, DEFAULT_REPLY, STOP, classify, fingerprint, hold, next_prompt,
+)
 
 LOG = logging.getLogger('overseer')
 ACTIVE = re.compile(r'^\s*[•·].*\b(?:esc to (?:interrupt|cancel)|ctrl.c to (?:interrupt|cancel))\b', re.I | re.M)
@@ -46,16 +48,38 @@ def outcome(snapshot):
     return fingerprint(text[:max(m.end() for m in matches)]) if matches else None
 
 
+def _missing_process(error):
+    """A reptyr target left /proc. Other observation errors stay fatal to the poll."""
+    if isinstance(error, (FileNotFoundError, ProcessLookupError)):
+        return True
+    filename = getattr(error, 'filename', None) or ''
+    return isinstance(error, OSError) and str(filename).startswith('/proc/')
+
+
+def _mark_stale(state, pane):
+    prefix = f'{pane}:'
+    for key, entry in state.items():
+        if key.startswith(prefix) and isinstance(entry, dict):
+            entry['queue_reason'] = 'dead or stale process'
+
+
 def tick_queue(backend, policy, state, config, path, now, save):
+    fallback = config.get('reply', DEFAULT_REPLY)
     queue = state.setdefault('_queue', {'waiting': [], 'active': None})
     waiting = queue.setdefault('waiting', [])
     snapshots = {}
+    stale = set()
     failed = False
     for pane in backend.panes():
         try:
             s = backend.snapshot(pane)
             snapshots[f'{pane}:{s.pid}'] = s
         except (RuntimeError, OSError, ValueError) as error:
+            if _missing_process(error):
+                stale.add(pane)
+                _mark_stale(state, pane)
+                LOG.warning('%s queue observation skipped: dead or stale process: %s', pane, error)
+                continue
             LOG.warning('%s queue observation failed: %s', pane, error)
             failed = True
     # Unobserved panes cannot be assumed gone if any observation failed.
@@ -99,6 +123,13 @@ def tick_queue(backend, policy, state, config, path, now, save):
             continue
         eligible, reason = policy.consider(entry, s.text, now, capacity=capacity,
                                            retry_seconds=config.get('capacity_retry_seconds', 120))
+        if eligible and not capacity:
+            prompt, kind = next_prompt(s.text, fallback)
+            if prompt is None:
+                eligible = False
+                reason = kind
+                hold(entry, s.text, kind)
+                LOG.info('%s skipped: %s', s.pane, kind)
         entry['queue_reason'] = reason
         decisions[key] = eligible
         # Capacity failures take a place immediately and wait their backoff at
@@ -121,13 +152,17 @@ def tick_queue(backend, policy, state, config, path, now, save):
     entry = state[key]
     if config['dry_run']:
         if entry.get('previewed') != entry['fingerprint']:
-            LOG.info('%s would run next in FIFO queue (dry run)', s.pane)
+            _, kind = ('', 'routine continuation') if phases[key] == 'capacity' else next_prompt(s.text, fallback)
+            if kind == 'report-based prompt':
+                LOG.info('%s would send report-based prompt in FIFO queue (dry run)', s.pane)
+            else:
+                LOG.info('%s would run next in FIFO queue (dry run)', s.pane)
             entry['previewed'] = entry['fingerprint']
             save(path, state)
         return
     # Recheck ALL watched panes before reserving; another pane may have started
     # while the queue was being observed. send() separately rechecks the target.
-    if set(backend.panes()) != {s.pane for s in snapshots.values()}:
+    if set(backend.panes()) - stale != {s.pane for s in snapshots.values()}:
         return
     for old in snapshots.values():
         try:
@@ -135,6 +170,14 @@ def tick_queue(backend, policy, state, config, path, now, save):
                 return
         except (RuntimeError, OSError, ValueError):
             return
+    outgoing, kind = (fallback, 'routine continuation') if phases[key] == 'capacity' else next_prompt(s.text, fallback)
+    if outgoing is None:
+        waiting.pop(0)
+        hold(entry, s.text, kind)
+        entry['queue_reason'] = kind
+        LOG.info('%s skipped: %s', s.pane, kind)
+        save(path, state)
+        return
     waiting.pop(0)
     queue['active'] = {'key': key, 'pane': s.pane, 'fingerprint': fingerprint(s.text),
                        'outcome': outcome(s), 'at': now}
@@ -143,8 +186,11 @@ def tick_queue(backend, policy, state, config, path, now, save):
         entry['capacity_attempts'] = entry.get('capacity_attempts', 0) + 1
     save(path, state)
     try:
-        backend.send(s, config['reply'])
-        LOG.info('%s dispatched from FIFO queue', s.pane)
+        backend.send(s, outgoing)
+        if kind == 'report-based prompt':
+            LOG.info('%s sent report-based prompt', s.pane)
+        else:
+            LOG.info('%s dispatched from FIFO queue', s.pane)
     except (RuntimeError, OSError, ValueError) as error:
         # Retain the slot: an ambiguous send cannot safely be retried or overlapped.
         LOG.warning('%s queue delivery uncertain; reservation retained: %s', s.pane, error)

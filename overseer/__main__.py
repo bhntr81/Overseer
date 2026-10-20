@@ -9,7 +9,7 @@ import signal
 import sys
 import time
 
-from .policy import DEFAULT_REPLY, Policy
+from .policy import DEFAULT_REPLY, Policy, hold, next_prompt
 from .tmux import Tmux, command
 
 
@@ -69,17 +69,26 @@ def tick(backend, policy, state, config, path, now):
             if not eligible:
                 LOG.debug("%s skipped: %s", pane, reason)
                 continue
+            prompt, kind = next_prompt(snapshot.text, config.get("reply", DEFAULT_REPLY))
+            if prompt is None:
+                hold(entry, snapshot.text, kind)
+                LOG.info("%s skipped: %s", pane, kind)
+                continue
             if config["dry_run"]:
                 if entry.get("previewed") != entry["fingerprint"]:
-                    LOG.info("%s would send routine continuation (dry run)", pane)
+                    action = "report-based prompt" if kind == "report-based prompt" else "routine continuation"
+                    LOG.info("%s would send %s (dry run)", pane, action)
                     entry["previewed"] = entry["fingerprint"]
                 continue
             # Reserve before interacting. An interrupted/failed send is not retried
             # automatically, because delivery may have happened before a crash.
             policy.acknowledge(entry, snapshot.text, now)
             save(path, state)
-            backend.send(snapshot, config["reply"])
-            LOG.info("%s sent routine continuation", pane)
+            backend.send(snapshot, prompt)
+            if kind == "report-based prompt":
+                LOG.info("%s sent report-based prompt", pane)
+            else:
+                LOG.info("%s sent routine continuation", pane)
         except (RuntimeError, OSError, ValueError) as error:
             LOG.warning("%s: %s", pane, error)
     save(path, state)
@@ -126,7 +135,7 @@ def run(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Watch opted-in tmux LLM panes for routine continuation prompts.")
+    parser = argparse.ArgumentParser(description="Watch opted-in tmux LLM panes, read output reports, and submit the next prompt.")
     sub = parser.add_subparsers(dest="action", required=True)
     monitor = sub.add_parser("run")
     monitor.add_argument("--config", type=Path, default=ROOT / "config.json")
