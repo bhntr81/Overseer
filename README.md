@@ -100,7 +100,7 @@ Do not use `include` as a substitute for checking `status` when several rules ma
 ## Try it
 
 ```sh
-cd /home/kali/Projects/Overseer
+cd /home/kali/Programming/Projects/Overseer
 python3 -m unittest discover -s tests -v
 python3 -m overseer start my-project codex
 tmux attach-session -t my-project
@@ -116,7 +116,7 @@ replies are then logged but never sent. The installed background service already
 runs the monitor; to run it manually, stop that service first:
 
 ```sh
-cd /home/kali/Projects/Overseer
+cd /home/kali/Programming/Projects/Overseer
 systemctl --user stop overseer.service
 python3 -m overseer run
 ```
@@ -124,7 +124,7 @@ python3 -m overseer run
 To enable sending, set `dry_run` to `false` in `config.json`.
 `reply` is the single-line instruction used when a pane has not yet printed a
 report. The included reply tells the client to follow
-`/home/kali/Projects/AGENTS.md` and the coder optimization playbook, do the next
+`/home/kali/Programming/Projects/AGENTS.md` and the coder optimization playbook, do the next
 authorized step, and print one visible `OVERSEER_REPORT` line. That line starts
 with `OVERSEER_REPORT` and a JSON object. The keys are `status`, `objective`,
 `remaining`, `done`, and `evidence`. `status` is `continue`, `done`, or

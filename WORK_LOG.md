@@ -1467,3 +1467,64 @@ directories travelled with the running processes, and the panes now report
 `/home/kali/Programming/Projects/...` as their current path. The live factory
 ledger was not opened: it was copied to a temporary directory and queried
 there, and its `jobs.sqlite3` still carries its 2026-10-19 22:34:24 timestamp.
+
+### Review correction: the last two documentation gaps
+
+The review of the correction commit found the five corrections complete and two
+documentation gaps left by the move repair. The dedicated prompt-writing agent
+authored this corrective prompt and the primary agent executed it. No code,
+test, schema, service, ledger, or pane was touched.
+
+The first gap was `README.md`, which still named the old path in three places
+after the move: the `cd` line in the "Try it" block at line 103, the `cd` line
+in the "run it manually" block at line 119, and the sentence at line 127 that
+says the included reply tells the client to follow
+`/home/kali/Projects/AGENTS.md`. The last one contradicted the repaired
+`config.json`, whose reply now names the new path. All three now name
+`/home/kali/Programming/Projects/...`, each path was checked to exist with
+`ls -d`, and `grep -n "/home/kali/Projects" README.md` now returns nothing.
+Only the paths changed; the surrounding sentences and code fences are
+byte-identical.
+
+The second gap was eight citations in `docs/HARNESS_FRAMEWORK.md` that did not
+hold the content they claimed. Three pointed into `docs/FACTORY_EXECUTION.md`,
+which grew by three lines when the example task moved, and four pointed at
+blank lines, which the log had already recorded as a separate housekeeping
+item. All eight now point at the line that holds the claim, and each was
+re-read by content:
+
+- the provider-adapter claim now cites `docs/FACTORY_EXECUTION.md:141`,
+  "sandbox, and it does not by itself finish M1. No real provider adapter,"
+- the bubblewrap-is-not-a-sandbox claim now cites
+  `docs/FACTORY_EXECUTION.md:140`, "command. Passing that probe does not make
+  the trusted argv command runner a"
+- the no-agent-traces claim now cites `docs/FACTORY_EXECUTION.md:116`,
+  "separate from this local runner; no provider-wide concurrency claim is
+  made."
+- the monitor state file now cites `overseer/__main__.py:19`,
+  `STATE = Path.home() / ".local/state/overseer/state.json"`
+- the atomic save now cites `overseer/__main__.py:23`, `def save(path, state):`,
+  which writes a temporary file, fsyncs it, and replaces the target
+- the single-writer lock now cites `overseer/__main__.py:256`,
+  `fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)`
+- the monitor command surface now cites `overseer/__main__.py:291`,
+  `def main():`
+- the OpenCode running marker now cites `overseer/modelchoice.py:293`,
+  `def running_marker(text):`
+
+No pillar row's verdict, next increment, or surrounding prose changed; the
+diff on that file is citation strings only.
+
+```text
+python3 -m unittest discover -s tests -p 'test_factory.py' -v
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --check
+```
+
+Results, copied from the run: the factory suite ran 68 tests, OK; the full
+suite ran 154 tests, OK; the document reference checker reported `97
+references checked in HARNESS_FRAMEWORK.md`; `git diff --check` exited 0. No
+test was added or changed, because the change is documentation only. Token
+usage and monetary cost were not supplied by the runtime and remain
+unavailable.
