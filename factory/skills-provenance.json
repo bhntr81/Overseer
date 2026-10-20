@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-10-19T04:07:12.465867+00:00",
+  "repository": "https://github.com/davidondrej/skills",
+  "revision": "27e2e3a63f36ef8c962dae08d5ed59b27d72249e",
+  "license": "MIT",
+  "skills": [
+    {
+      "name": "better-prompt",
+      "source_path": "skills/thinking-and-docs/better-prompt",
+      "installed_path": "/home/kali/.codex/skills/better-prompt",
+      "upstream_files_sha256": {
+        "SKILL.md": "2c40a34a0fedb068f707842f0e41ea1accddcdbbfd62e7092b9292ccf77ba84f"
+      },
+      "license_sha256": "1bd321a3b9cfa8d4af2105e20edd69d830df0b28e83a1b0255558f888e493981",
+      "status": "installed_bytes_verified",
+      "runtime_activation": "not_tested",
+      "runtime_discovery": "observed_in_acceptance_reviewer_catalog"
+    },
+    {
+      "name": "goal-loop",
+      "source_path": "skills/agent-orchestration/goal-loop",
+      "installed_path": "/home/kali/.codex/skills/goal-loop",
+      "upstream_files_sha256": {
+        "SKILL.md": "2e6120ad119e90aecb95dff7b561f0781d7ae41818c444985160faa2ded220de"
+      },
+      "license_sha256": "1bd321a3b9cfa8d4af2105e20edd69d830df0b28e83a1b0255558f888e493981",
+      "status": "installed_bytes_verified",
+      "runtime_activation": "not_tested",
+      "runtime_discovery": "observed_in_acceptance_reviewer_catalog"
+    },
+    {
+      "name": "effective-agent-skills",
+      "source_path": "skills/skill-authoring/effective-agent-skills",
+      "installed_path": "/home/kali/.codex/skills/effective-agent-skills",
+      "upstream_files_sha256": {
+        "SKILL.md": "16545d0124875443925ddd9a46861073f575b4c49214d7d2d1071aae0aa9db08"
+      },
+      "license_sha256": "1bd321a3b9cfa8d4af2105e20edd69d830df0b28e83a1b0255558f888e493981",
+      "status": "installed_bytes_verified",
+      "runtime_activation": "not_tested",
+      "runtime_discovery": "observed_in_acceptance_reviewer_catalog"
+    }
+  ],
+  "blueprint": {
+    "original_path": "/home/kali/Downloads/Overseer_Software_Factory_Blueprint.txt",
+    "project_path": "docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt",
+    "sha256": "e860838ea6197d575c261d79cd8d97f2e3fb3aa456b660041f7d4bde1a34de9d",
+    "operation": "moved_verbatim",
+    "research_claims": "imported_not_reverified"
+  }
+}
