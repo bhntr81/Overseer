@@ -1,7 +1,10 @@
 """Durable FIFO for automatic sends; never interrupts existing terminal work."""
+import json
 import logging
 import re
+import time
 
+from .modelchoice import RESOLUTIONS, detect, providers
 from .policy import (
     ANSI, BLOCKED, COMPLETED, CONTINUE, DEFAULT_REPLY, STOP, classify, fingerprint, hold, next_prompt,
 )
@@ -21,6 +24,18 @@ def response(text):
     return '\n'.join(lines)
 
 
+def model_failure(snapshot):
+    """Return the provider failure visible in the current answer, or None."""
+    text = response(snapshot.text)
+    failure = detect(text)
+    if failure is None:
+        return None
+    # A quoted or historical error must not pause a pane that has moved on.
+    if COMPLETED.search(text[failure.end:]) or BLOCKED.search(text[failure.end:]):
+        return None
+    return failure
+
+
 def phase(snapshot):
     text = response(snapshot.text)
     if ACTIVE.search(text):
@@ -29,6 +44,8 @@ def phase(snapshot):
         return 'unknown'
     if STOP.search(text):
         return 'stopped'
+    if model_failure(snapshot):
+        return 'model_blocked'
     # A quoted or historical error must not enable retries.
     match = CAPACITY.search(text)
     if match and not COMPLETED.search(text[match.end():]) and not BLOCKED.search(text[match.end():]):
@@ -63,8 +80,49 @@ def _mark_stale(state, pane):
             entry['queue_reason'] = 'dead or stale process'
 
 
+def _resolutions(path):
+    """Read the operator's model resolutions written by the CLI."""
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _adopt_resolutions(state, path):
+    """Fold operator resolutions into the monitor's own decision records."""
+    decisions = state.setdefault('_model_decisions', {})
+    for pane, record in _resolutions(path.parent / RESOLUTIONS).items():
+        if not isinstance(record, dict):
+            continue
+        pending = decisions.get(pane)
+        if isinstance(pending, dict) and pending.get('key') == record.get('key'):
+            pending['resolved'] = record
+
+
+def _record_decision(decisions, snapshot, failure, allowlist):
+    """Record a pending model decision. Report whether it is new."""
+    record = decisions.get(snapshot.pane)
+    if isinstance(record, dict) and record.get('key') == failure.key \
+            and record.get('client_pid') == snapshot.pid:
+        return False
+    decisions[snapshot.pane] = {
+        'name': failure.name,
+        'phrase': failure.phrase,
+        'key': failure.key,
+        'detail': failure.detail,
+        'line': failure.line,
+        'client_pid': snapshot.pid,
+        'at': time.time(),
+        'providers': [entry['id'] for entry in allowlist],
+        'resolved': None,
+    }
+    return True
+
+
 def tick_queue(backend, policy, state, config, path, now, save):
     fallback = config.get('reply', DEFAULT_REPLY)
+    allowlist = providers(config)
     queue = state.setdefault('_queue', {'waiting': [], 'active': None})
     waiting = queue.setdefault('waiting', [])
     snapshots = {}
@@ -86,6 +144,8 @@ def tick_queue(backend, policy, state, config, path, now, save):
     if failed:
         save(path, state)
         return
+    _adopt_resolutions(state, path)
+    model_decisions = state['_model_decisions']
     phases = {key: phase(s) for key, s in snapshots.items()}
     active = queue.get('active')
     if active:
@@ -96,6 +156,10 @@ def tick_queue(backend, policy, state, config, path, now, save):
         if s is None:
             LOG.info('queue releases vanished, replaced, or excluded client %s', key)
             queue['active'] = None
+        elif phases[key] == 'model_blocked':
+            # A provider failure ends the turn. The pane is paused, not running.
+            LOG.info('queue releases %s: provider failure, model decision pending', s.pane)
+            queue['active'] = None
         elif phases[key] in {'finished', 'stopped', 'capacity'} and (
                 active.get('observed_running') or outcome(s) != active.get('outcome')):
             LOG.info('queue releases %s: %s', s.pane, phases[key])
@@ -104,15 +168,37 @@ def tick_queue(backend, policy, state, config, path, now, save):
             if phases[key] != 'active' and now - active['at'] >= 120 and not active.get('warned'):
                 LOG.warning('queue holds %s: delivery or completion remains unconfirmed; inspect this pane', s.pane)
                 active['warned'] = True
-    decisions = {}
     candidates = set()
+    eligible_map = {}
     for key, s in snapshots.items():
         entry = state.setdefault(key, {})
         capacity = phases[key] == 'capacity'
+        model_note = None
         entry['queue_kind'] = 'capacity' if capacity else 'continuation'
         if phases[key] == 'stopped':
             entry['queue_reason'] = 'client requested no further automatic continuation'
             continue
+        if phases[key] == 'model_blocked':
+            failure = model_failure(s)
+            if failure is None:
+                continue
+            record = model_decisions.get(s.pane)
+            resolved = (isinstance(record, dict) and record.get('key') == failure.key
+                        and isinstance(record.get('resolved'), dict))
+            entry['queue_kind'] = 'model_decision'
+            if resolved:
+                # The operator already chose for this exact failure.
+                model_note = 'model decision applied: %s/%s' % (
+                    record['resolved'].get('provider'), record['resolved'].get('model'))
+                entry['queue_reason'] = model_note
+                phases[key] = 'unknown'
+            else:
+                entry['queue_reason'] = 'model decision pending: %s' % failure.name
+                if _record_decision(model_decisions, s, failure, allowlist):
+                    LOG.warning('%s model decision pending: %s (%s); choose with: '
+                                'python3 -m overseer model-select %s',
+                                s.pane, failure.name, failure.detail, s.pane)
+                continue
         if not s.ready or phases[key] == 'active':
             entry.pop('fingerprint', None)
             continue
@@ -131,7 +217,9 @@ def tick_queue(backend, policy, state, config, path, now, save):
                 hold(entry, s.text, kind)
                 LOG.info('%s skipped: %s', s.pane, kind)
         entry['queue_reason'] = reason
-        decisions[key] = eligible
+        if model_note:
+            entry['queue_reason'] = model_note
+        eligible_map[key] = eligible
         # Capacity failures take a place immediately and wait their backoff at
         # the head; exhausted daily budgets must not starve unrelated projects.
         candidate = eligible or (capacity and reason in {'waiting for idle threshold', 'cooldown'})
@@ -146,7 +234,7 @@ def tick_queue(backend, policy, state, config, path, now, save):
     if queue.get('active') or any(p == 'active' for p in phases.values()) or not waiting:
         return
     key = waiting[0]
-    if not decisions.get(key):
+    if not eligible_map.get(key):
         return
     s = snapshots[key]
     entry = state[key]

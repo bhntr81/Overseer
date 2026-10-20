@@ -9,8 +9,9 @@ import signal
 import sys
 import time
 
+from .modelchoice import RESOLUTIONS, model_id, providers
 from .policy import DEFAULT_REPLY, Policy, hold, next_prompt
-from .tmux import Tmux, command
+from .tmux import CLIENTS, Tmux, command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,144 @@ def settings(path):
         raise ValueError("reply must be one nonempty line, at most 1000 characters")
     config["reply"] = reply
     return config
+
+
+def decisions(path):
+    """Read the monitor's model decision records."""
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError):
+        return {}
+    records = data.get("_model_decisions")
+    return records if isinstance(records, dict) else {}
+
+
+def pending_decisions(path):
+    """Return the decisions that still need an operator choice."""
+    return {pane: record for pane, record in decisions(path).items()
+            if isinstance(record, dict) and not isinstance(record.get("resolved"), dict)}
+
+
+def resolve_decision(path, pane, record, provider, model):
+    """Record the operator's choice where the monitor will read it."""
+    target = path.parent / RESOLUTIONS
+    data = {}
+    if target.exists():
+        try:
+            data = json.loads(target.read_text())
+        except (OSError, ValueError):
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data[pane] = {"key": record.get("key"), "provider": provider, "model": model, "at": time.time()}
+    save(target, data)
+
+
+def ask_provider(allowlist, record):
+    """Ask the operator which permitted provider to use."""
+    print("Model decision pending: %s (%s)" % (record.get("name"), record.get("detail")))
+    print("Permitted providers:")
+    for index, entry in enumerate(allowlist, 1):
+        models = [model_id(model) for model in entry["models"]]
+        summary = ", ".join(models) if len(models) <= 6 else "%d models" % len(models)
+        print("  %d) %s (%s) - %s" % (index, entry["id"], entry["label"], summary))
+    print("Choose a provider (number or id). Press enter to cancel:")
+    line = sys.stdin.readline()
+    answer = line.strip() if line else ""
+    if not answer:
+        return None
+    if answer.isdigit():
+        number = int(answer)
+        if 1 <= number <= len(allowlist):
+            return allowlist[number - 1]["id"]
+        print("no such provider", file=sys.stderr)
+        return None
+    return answer
+
+
+def ask_model(entry):
+    """Ask the operator which model of the chosen provider to use."""
+    print("Models for %s:" % entry["id"])
+    for index, model in enumerate(entry["models"], 1):
+        print("  %d) %s" % (index, model_id(model)))
+    print("Choose a model (number or id). Press enter for %s:" % model_id(entry["models"][0]))
+    line = sys.stdin.readline()
+    answer = line.strip() if line else ""
+    if not answer:
+        return model_id(entry["models"][0])
+    if answer.isdigit():
+        number = int(answer)
+        if 1 <= number <= len(entry["models"]):
+            return model_id(entry["models"][number - 1])
+        print("no such model", file=sys.stderr)
+        return None
+    return answer
+
+
+def model_select(args):
+    """Show a pending model decision and apply the operator's choice."""
+    config = settings(ROOT / "config.json")
+    allowlist = providers(config)
+    pending = pending_decisions(args.state)
+    if not args.pane:
+        if not pending:
+            print("No model decision is pending.")
+            return 0
+        for pane, record in sorted(pending.items()):
+            print("%s: %s (%s) - providers: %s" % (
+                pane, record.get("name"), record.get("detail"),
+                ", ".join(record.get("providers") or [])))
+            print("  resolve with: python3 -m overseer model-select %s" % pane)
+        return 0
+    record = pending.get(args.pane)
+    if record is None:
+        print("No model decision is pending for %s." % args.pane, file=sys.stderr)
+        return 1
+    choice = args.provider
+    if not choice:
+        choice = ask_provider(allowlist, record)
+        if not choice:
+            print("cancelled; nothing was changed")
+            return 1
+    entry = next((item for item in allowlist if item["id"] == choice), None)
+    if entry is None:
+        print("Provider %s is not permitted." % choice, file=sys.stderr)
+        return 1
+    model = args.model
+    if not model:
+        model = ask_model(entry)
+    if not model:
+        print("cancelled; nothing was changed")
+        return 1
+    if model not in [model_id(item) for item in entry["models"]]:
+        print("Model %s is not in the permitted list for %s." % (model, entry["id"]), file=sys.stderr)
+        return 1
+    if entry["client"] not in CLIENTS:
+        print("The monitor cannot watch %s sessions yet, so %s cannot be applied here." % (
+            entry["client"], model))
+        return 1
+    backend = Tmux(config.get("exclude", []))
+    try:
+        snapshot = backend.inspect(args.pane)
+    except (RuntimeError, OSError, ValueError) as error:
+        print("Cannot read %s: %s" % (args.pane, error), file=sys.stderr)
+        return 1
+    if snapshot.process != entry["client"]:
+        print("Pane %s runs %s, not %s. The model cannot be changed in place." % (
+            args.pane, snapshot.process, entry["client"]))
+        print("Move the work to that client, then re-enable monitoring:")
+        print("  python3 -m overseer start <name> %s --cwd <workspace>" % entry["client"])
+        print("  python3 -m overseer watch <pane>")
+        return 1
+    try:
+        reported = backend.select_model(args.pane, model)
+    except (RuntimeError, OSError, ValueError) as error:
+        print("Model change failed: %s" % error, file=sys.stderr)
+        return 1
+    resolve_decision(args.state, args.pane, record, entry["id"], model)
+    print("Applied %s/%s to %s. The client now reports %s." % (
+        entry["id"], model, args.pane, reported))
+    return 0
 
 
 def tick(backend, policy, state, config, path, now):
@@ -141,7 +280,8 @@ def main():
     monitor.add_argument("--config", type=Path, default=ROOT / "config.json")
     monitor.add_argument("--state", type=Path, default=STATE)
     monitor.add_argument("--once", action="store_true")
-    sub.add_parser("status")
+    status = sub.add_parser("status")
+    status.add_argument("--state", type=Path, default=STATE)
     for name in ("exclude", "include"):
         exclusion = sub.add_parser(name)
         exclusion.add_argument("pattern", help="pane ID, session/title substring, or quoted glob")
@@ -153,6 +293,11 @@ def main():
     start.add_argument("--cwd", type=Path, default=Path.cwd())
     start.add_argument("client", choices=["codex", "claude"])
     start.add_argument("client_args", nargs=argparse.REMAINDER)
+    select = sub.add_parser("model-select")
+    select.add_argument("pane", nargs="?", help="tmux pane ID, e.g. %%0")
+    select.add_argument("--provider", help="permitted provider id")
+    select.add_argument("--model", help="model id within that provider")
+    select.add_argument("--state", type=Path, default=STATE)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
@@ -164,7 +309,7 @@ def main():
             print("Exclusions: " + ", ".join(config.get("exclude", [])))
             print("FIFO queue: " + ("enabled" if config.get("serial_queue", False) else "disabled"))
             if config.get("serial_queue", False):
-                state = json.loads(STATE.read_text()) if STATE.exists() else {}
+                state = json.loads(args.state.read_text()) if args.state.exists() else {}
                 queue = state.get("_queue", {})
                 active = queue.get("active")
                 print("Active reservation: " + (active['key'] if active else "none"))
@@ -181,6 +326,11 @@ def main():
             for row in Tmux(config.get("exclude", [])).inventory():
                 status = "EXCLUDED" if row["excluded"] else "WATCHED" if row["enabled"] else "OFF"
                 print(f"{row['pane']} {status}: {row['session']} — {row['title']}")
+            for pane, record in sorted(pending_decisions(args.state).items()):
+                print(f"{pane} MODEL DECISION PENDING: {record.get('name')} "
+                      f"({record.get('detail')}) — providers: "
+                      f"{', '.join(record.get('providers') or [])}")
+                print(f"  resolve with: python3 -m overseer model-select {pane}")
         elif args.action in {"exclude", "include"}:
             path = ROOT / "config.json"
             config = settings(path)
@@ -195,6 +345,8 @@ def main():
             pane = command("display-message", "-p", "-t", args.pane, "#{pane_id}").strip()
             command("set-option", "-p", "-t", pane, "@overseer", "1" if args.action == "watch" else "0")
             print(f"{args.action}: {pane}")
+        elif args.action == "model-select":
+            return model_select(args)
         elif args.action == "start":
             shell_command = shlex.join([args.client, *args.client_args])
             pane = command("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", args.name,

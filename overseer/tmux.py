@@ -6,6 +6,10 @@ from pathlib import Path
 import subprocess
 import time
 
+from .modelchoice import find_entry, footer_model, footer_shows, model_id, selected_index
+
+CLIENTS = frozenset({"codex", "claude"})
+
 
 def command(*args):
     result = subprocess.run(["tmux", *args], text=True, capture_output=True, timeout=10)
@@ -28,7 +32,7 @@ class Snapshot:
     @property
     def ready(self):
         # Codex renders the composer as "›" or "»" depending on the build.
-        return (self.process in {"codex", "claude"}
+        return (self.process in CLIENTS
                 and self.mode == "0" and self.dead == "0"
                 and (self.cursor_line.strip() in {">", "❯", "›", "»"}
                      or (self.cursor_line.strip() in {"› Ask Codex to do anything",
@@ -75,12 +79,12 @@ class Tmux:
     def panes(self):
         return [row["pane"] for row in self.inventory() if row["enabled"] and not row["excluded"]]
 
-    def snapshot(self, pane):
+    def snapshot(self, pane, require_opt_in=True):
         metadata = command("display-message", "-p", "-t", pane,
                            "#{pane_id}\t#{pane_current_command}\t#{pane_pid}\t"
                            "#{cursor_y}\t#{pane_in_mode}\t#{pane_dead}\t#{@overseer}\t"
                            "#{cursor_x}\t#{@overseer_target}").rstrip("\n").split("\t")
-        if len(metadata) != 9 or metadata[6] != "1":
+        if len(metadata) != 9 or (require_opt_in and metadata[6] != "1"):
             raise RuntimeError("pane is no longer opted in")
         actual, process, pid, cursor_y, mode, dead, _, cursor_x, binding = metadata
         if binding:
@@ -90,6 +94,38 @@ class Tmux:
         cursor = int(cursor_y)
         cursor_line = lines[cursor] if cursor < len(lines) else ""
         return Snapshot(actual, process, pid, text, cursor_line, mode, dead, int(cursor_x))
+
+    def inspect(self, pane):
+        """Read a pane without requiring the opt-in. Sending still requires it."""
+        return self.snapshot(pane, require_opt_in=False)
+
+    def select_model(self, pane, model):
+        """Apply a model to a live client through the client's own picker."""
+        current = self.inspect(pane)
+        if not current.ready:
+            raise RuntimeError("pane is not ready for a model change")
+        command("send-keys", "-t", pane, "-l", "--", "/model")
+        # The client batches fast input, so the picker needs a moment to render.
+        time.sleep(1.0)
+        lines = command("capture-pane", "-p", "-t", pane).splitlines()
+        target = find_entry(lines, model)
+        if target is None:
+            command("send-keys", "-t", pane, "Escape")
+            raise RuntimeError("the client does not offer %s" % model_id(model))
+        highlighted = selected_index(lines)
+        if highlighted is None:
+            command("send-keys", "-t", pane, "Escape")
+            raise RuntimeError("the client picker did not show a selected entry")
+        for _ in range(max(0, target - highlighted)):
+            command("send-keys", "-t", pane, "Down")
+        time.sleep(0.2)
+        command("send-keys", "-t", pane, "Enter")
+        time.sleep(1.0)
+        after = command("capture-pane", "-p", "-t", pane)
+        if not footer_shows(after, model):
+            command("send-keys", "-t", pane, "Escape")
+            raise RuntimeError("the client did not report %s" % model_id(model))
+        return footer_model(after)
 
     def send(self, original, reply):
         if original.pane not in self.panes():

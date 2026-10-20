@@ -875,3 +875,30 @@ then run `python3 -m overseer watch %3`. No Codex configuration, auth file,
 client session, or pane content was changed. Remaining open work: `%0`'s
 bridged client is still dead and unwatched, and the factory still has no real
 provider adapter.
+
+### Pause a pane on a model failure and add an operator model choice
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. A client that reports an unsupported model, exhausted
+credits, or a failed login now pauses its pane instead of being retried or
+given a substituted model, and the operator chooses a provider and model.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+```
+
+Added `overseer/modelchoice.py` (failure detection, the provider allowlist
+read from `config.json`, and the pure picker-matching helpers), a
+`model_blocked` phase in `overseer/scheduler.py` that releases the FIFO
+reservation so one broken pane cannot starve the others, an `model-select`
+command and a `status` section in `overseer/__main__.py`, a client model
+picker driver in `overseer/tmux.py`, the `model_providers` and
+`allowed_providers` keys in `config.json`, and `tests/test_model_choice.py`.
+The suite grew from 93 to 105 tests, all passing, and the document reference
+checker still resolves every citation. The permitted providers and their model
+ids were verified locally with `codex debug models`, `claude --help`,
+`opencode models`, and `~/.grok/models_cache.json`. The feature does not
+substitute a model, does not retry a blocked pane, and cannot drive an
+`opencode` or `grok` session because the monitor only watches `codex` and
+`claude` clients.

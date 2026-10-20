@@ -134,6 +134,36 @@ Do not type in a watched pane while the bot is responding; desktop input and
 tmux writes cannot be made atomic together. Unwatch the pane first when taking
 over manually.
 
+## Model decisions
+
+When a client reports that its model, its account, or its credits cannot be
+used, the monitor does not retry and does not substitute a model. The affected
+pane is paused, its FIFO reservation is released so the other watched panes
+keep running, and the decision is recorded. The journal names the command:
+
+```text
+%3 model decision pending: unsupported_model (gpt-6-astra); choose with: python3 -m overseer model-select %3
+```
+
+`python3 -m overseer status` lists every pending decision. `python3 -m overseer
+model-select %3` asks which permitted provider and model to use; the
+non-interactive form is `python3 -m overseer model-select %3 --provider openai
+--model gpt-6-luna`. A choice is applied through the client's own model picker
+and confirmed from the pane's composer footer, so a pane that cannot serve the
+chosen model is reported instead of being forced. A provider whose client the
+monitor cannot watch is reported too: only Codex and Claude sessions are
+watched today.
+
+The permitted providers and their model identifiers live in `config.json` under
+`model_providers` and `allowed_providers`. They were verified locally with
+`codex debug models`, `claude --help`, `opencode models`, and
+`~/.grok/models_cache.json`, and they can go stale. No model name may be
+invented; a model outside the configured list is refused.
+
+This feature does not substitute a model automatically, does not retry a
+blocked pane, and does not drive a client that the account or provider cannot
+serve.
+
 ## Background service
 
 ```sh
