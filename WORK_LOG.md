@@ -2815,3 +2815,26 @@ citation of `overseer/factory.py`, `overseer/workdiff.py`, and the new test
 class in the pillar map was re-derived from a line map of the old and the new
 code and checked by hand after the last edit; the checker resolves 183
 references.
+
+### The factory agent directives added to the project entry point
+
+The user asked for the Overseer factory agent directives to be added to the
+project's `AGENTS.md`. The file is the navigation-first entry point the
+blueprint asks for, so the directives were appended there as a third section,
+`## Overseer factory agent directives`, with the two subsections the user
+named, `### Core execution mandates` and `### Verification and handoff
+protocol`. The four mandates are there in the user's words: no premature
+completion, the sandbox self-correction loop of at most three attempts,
+recursive prompt generation, and the file writing rules. The handoff protocol
+names the syntax or AST check, the unit or dry run, and the status block with
+its four keys.
+
+No code, test, schema, service, ledger, or pane was touched, so no pillar row
+in `docs/HARNESS_FRAMEWORK.md` changed and no verdict moved. The change is
+checked, not assumed: a structure check parsed the file and confirmed the
+code fences balance, the fence carries a language, the headings do not jump a
+level, the four numbered mandates each hold a bold label, the handoff block
+holds the four required keys, and no line has trailing whitespace; a fidelity
+check confirmed all twenty-three clauses of the user's text survive the
+reformatting. The suite runs 335 tests and the checker resolves 183
+references.
