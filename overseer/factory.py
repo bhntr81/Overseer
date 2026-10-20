@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import fcntl
 from overseer.codemap import assemble as assemble_codebase
 from overseer.codemap import summary as codebase_summary
+from overseer import handoff
 from overseer.isolation import run_isolation_probe
 from overseer.skills import provenance as skill_provenance
 from overseer.skills import unchecked as unchecked_provenance
@@ -1058,7 +1059,7 @@ class Factory:
         return env
 
     def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
-                          codebase=None, skills=None, workspace_diff=None):
+                          codebase=None, skills=None, workspace_diff=None, handoff_info=None):
         """Record what the controller supplied for this attempt, and why."""
         contract = spec.get('contract') or {}
         acceptance_ids = list(contract.get('acceptance_ids') or [])
@@ -1091,32 +1092,11 @@ class Factory:
                     attached_ids.add(attachment['record_id'])
         attached_decisions = [record for record in current_decisions
                               if record['record_id'] in attached_ids]
-        commands = []
-        for result in results:
-            if 'argv' not in result:
-                continue
-            commands.append({
-                'stage': result.get('stage'),
-                'argv': list(result['argv']),
-                'exit_code': result.get('exit_code'),
-                'timed_out': bool(result.get('timed_out')),
-                'elapsed_seconds': result.get('elapsed_seconds'),
-                'log': result.get('log'),
-            })
+        commands = handoff.commands(results)
         acceptance_source = 'contract' if acceptance_ids else 'absent'
         # The candidate revision is observed only when the attempt moved HEAD;
         # a worktree that was not committed is not a revision.
-        receipt = (workspace_diff or {}).get('receipt') or {}
-        if receipt.get('captured') and receipt.get('head_moved') and receipt.get('head_after'):
-            candidate = {'value': receipt['head_after'],
-                         'source': 'git rev-parse HEAD after the implementation command; HEAD '
-                                   'moved during the attempt'}
-        else:
-            candidate = {'value': None,
-                         'source': 'unmeasured: HEAD did not move during the attempt, and an '
-                                   'uncommitted worktree is not a revision'
-                                   if receipt.get('captured') else
-                                   'unmeasured: no workspace diff was captured'}
+        candidate = handoff.candidate_revision((workspace_diff or {}).get('receipt') or {})
         supplied = [
             {'item': 'objective',
              'source': "task specification field 'objective'",
@@ -1173,7 +1153,9 @@ class Factory:
             'mode': spec.get('mode') or 'command',
             'objective': spec.get('objective'),
             'workspace': workspace,
-            'repository': repository_identity(workspace),
+            'repository': (recall or {}).get('repository') or {
+                'present': False,
+                'reason': 'the attempt-start repository identity was not observed'},
             'acceptance_ids': acceptance_ids,
             'acceptance_ids_source': acceptance_source,
             'commands_actually_run': commands,
@@ -1276,11 +1258,35 @@ class Factory:
             },
             'skills': self._manifest_skills(skills),
             'workspace_diff': self._manifest_diff(workspace_diff),
+            'handoff': self._manifest_handoff(handoff_info),
             'candidate_revision': candidate,
             'unmeasured': [name for name in ('tokens', 'cost_usd', 'candidate_revision',
                                              'remaining_budget', 'unresolved_effects',
                                              'environment_digest')
                            if name != 'candidate_revision' or candidate['value'] is None],
+        }
+
+    @staticmethod
+    def _manifest_handoff(handoff_info):
+        """Return the manifest's handoff block, as the record states it."""
+        record = (handoff_info or {}).get('record') or {}
+        if not (handoff_info or {}).get('written'):
+            return {'written': False,
+                    'reason': (handoff_info or {}).get('reason')
+                    or 'no handoff record was written'}
+        action = (record.get('next_eligible_action') or {}).get('value') or {}
+        return {
+            'written': True, 'reason': None,
+            'path': handoff_info.get('path'), 'sha256': handoff_info.get('sha256'),
+            'state': record.get('state'),
+            'base_revision': (record.get('base_revision') or {}).get('value'),
+            'candidate_revision': (record.get('candidate_revision') or {}).get('value'),
+            'completed_acceptance_ids': (record.get('completed_acceptance_ids')
+                                         or {}).get('value'),
+            'failing_acceptance_ids': (record.get('failing_acceptance_ids') or {}).get('value'),
+            'not_run_acceptance_ids': (record.get('not_run_acceptance_ids') or {}).get('value'),
+            'next_eligible_action': action,
+            'unmeasured': record.get('unmeasured'),
         }
 
     @staticmethod
@@ -1386,6 +1392,35 @@ class Factory:
             else:
                 self.event(job_id, 'workspace_diff',
                            'no workspace diff captured: %s' % receipt.get('reason'))
+        return info
+
+    def _record_handoff(self, job_id, evidence, spec, spec_hash, epoch, results,
+                        diff_info, base_identity, state, detail):
+        """Write the blueprint's handoff record into the run evidence.
+
+        The record is context, never a gate: any failure to write it is
+        recorded with its reason and the attempt still reaches its final state.
+        Only the exception's type name is kept, because its message may carry
+        a path or content.
+        """
+        try:
+            record = handoff.build(job_id, evidence.name, spec, spec_hash, epoch, results,
+                                   (diff_info or {}).get('receipt') or {},
+                                   base_identity, state, detail)
+            path = evidence / 'handoff.json'
+            path.write_text(json.dumps(record, indent=2))
+            info = {'written': True, 'reason': None, 'record': record,
+                    'path': str(path),
+                    'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        except Exception as error:  # the record is evidence, never a gate
+            info = {'written': False, 'record': {},
+                    'reason': 'the handoff record could not be written: %s'
+                    % type(error).__name__}
+        with self.db:
+            if info.get('written'):
+                self.event(job_id, 'handoff', 'handoff.json sha256=%s' % info['sha256'])
+            else:
+                self.event(job_id, 'handoff', 'no handoff record: %s' % info.get('reason'))
         return info
 
     def cancel(self, job_id):
@@ -2065,7 +2100,8 @@ class Factory:
             recall_path.write_text(json.dumps(recalled, indent=2))
             recall_digest = hashlib.sha256(recall_path.read_bytes()).hexdigest()
             recall_info = {'records': recalled['records'], 'path': str(recall_path),
-                           'sha256': recall_digest}
+                           'sha256': recall_digest,
+                           'repository': recalled.get('repository')}
             child_env = self._recall_environment(recalled, recall_path)
             # The codebase context is assembled from the file tree before the
             # work starts, so the attempt can find the files and symbols it
@@ -2164,12 +2200,23 @@ class Factory:
                 raise
             diff_info = self._record_diff(job_id, evidence, spec, results, diff_patch,
                                           diff_receipt, diff_after)
+            epoch, _ = self._controller_values()
+            # The handoff record is the blueprint's own summary of this run's
+            # evidence. It is written before the manifest, so the manifest can
+            # carry its digest, and it never judges the attempt.
+            handoff_info = self._record_handoff(job_id, evidence, spec, row['spec_hash'],
+                                                epoch, results, diff_info,
+                                                recall_info.get('repository'),
+                                                final, detail)
             summary = {'id': job_id, 'run_id': run_id, 'state': final,
                 'detail': detail, 'spec_hash': row['spec_hash'], 'results': results,
                 'tokens': None, 'cost_usd': None}
             if diff_info.get('path'):
                 summary['workspace_diff'] = {key: diff_info.get(key) for key in
                                              ('path', 'sha256', 'patch_path', 'patch_sha256')}
+            if handoff_info.get('path'):
+                summary['handoff'] = {'path': handoff_info.get('path'),
+                                      'sha256': handoff_info.get('sha256')}
             if fixture_verification is not None:
                 summary['fixture_verification'] = fixture_verification
             if fake_verification is not None:
@@ -2177,10 +2224,9 @@ class Factory:
             # The context manifest records what the controller supplied for
             # this attempt. Its path and digest go into the ledger with the
             # final state change, in one transaction.
-            epoch, _ = self._controller_values()
             manifest = self._context_manifest(
                 job_id, run_id, spec, row['spec_hash'], results, epoch, recall_info,
-                codebase_info, skills_info, diff_info)
+                codebase_info, skills_info, diff_info, handoff_info)
             manifest_path = evidence / 'context.json'
             manifest_path.write_text(json.dumps(manifest, indent=2))
             manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()

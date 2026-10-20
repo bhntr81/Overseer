@@ -3686,6 +3686,270 @@ class WorkspaceDiffTests(unittest.TestCase):
         self.assertEqual(patch, b'')
         patch.decode('utf-8')
 
+class HandoffRecordTests(unittest.TestCase):
+    """The blueprint's handoff record for one attempt."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.repo = self.base / 'repo'
+        self.repo.mkdir()
+        self.git('init', '--quiet')
+        for name, data in {'keep.txt': b'a\nb\nc\n', 'pkg/mod.py': b'def f():\n    return 1\n'}.items():
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.commit('base')
+        self.f = Factory(self.base / 'state' / 'jobs.sqlite3')
+        self.addCleanup(self.f.close)
+
+    def git(self, *arguments, cwd=None):
+        result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
+                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                timeout=60)
+        return result
+
+    def commit(self, message):
+        self.git('add', '-A')
+        self.git('commit', '--quiet', '-m', message)
+
+    def spec(self, name, code, checks=None, timeout=5, **overrides):
+        spec = {'id': name, 'objective': 'change the workspace', 'workspace': str(self.repo),
+                'timeout_seconds': timeout, 'implementation': [sys.executable, '-c', code],
+                'checks': checks or [[sys.executable, '-c', 'pass']]}
+        spec.update(overrides)
+        return attach_contract(spec)
+
+    def run_record(self, spec, factory=None):
+        """Run the spec and return the result, the record, and the evidence directory."""
+        factory = factory or self.f
+        self.assertTrue(factory.submit(spec))
+        result = factory.run_one()
+        evidence = Path(result['evidence'])
+        record = json.loads((evidence / 'handoff.json').read_text())
+        return result, record, evidence
+
+    def manifest_of(self, result):
+        return json.loads((Path(result['evidence']) / 'context.json').read_text())
+
+    def assert_identifier_lists(self, record, expected):
+        """The three lists are disjoint and cover the contract's identifiers."""
+        completed = record['completed_acceptance_ids']['value']
+        failing = record['failing_acceptance_ids']['value']
+        not_run = record['not_run_acceptance_ids']['value']
+        self.assertEqual(sorted(completed + failing + not_run), sorted(expected))
+        self.assertEqual(set(completed) & set(failing), set())
+        self.assertEqual(set(completed) & set(not_run), set())
+        self.assertEqual(set(failing) & set(not_run), set())
+
+    def assert_every_null_is_named(self, record):
+        """Every null value is named in an unmeasured list and carries a reason."""
+        names = set(record.get('unmeasured') or [])
+        for name, field in record.items():
+            if not isinstance(field, dict) or 'value' not in field:
+                continue
+            if field['value'] is None:
+                self.assertIn(name, names, name)
+                self.assertTrue(field.get('source'), name)
+                self.assertTrue(field['source'].startswith(('unmeasured:', 'not applicable:')),
+                                '%s: %s' % (name, field['source']))
+            elif isinstance(field['value'], dict):
+                sub_names = set(field.get('unmeasured') or [])
+                for sub_name, sub_value in field['value'].items():
+                    if sub_value is None:
+                        self.assertIn(sub_name, sub_names, '%s.%s' % (name, sub_name))
+                        self.assertIn(sub_name, names, '%s.%s' % (name, sub_name))
+
+    def test_a_passing_attempt_writes_the_record_with_the_blueprint_fields(self):
+        result, record, evidence = self.run_record(self.spec('pass', "open('x.txt','w').write('x')"))
+        self.assertTrue((evidence / 'handoff.json').is_file())
+        self.assertEqual(record['kind'], 'handoff_record')
+        self.assertEqual(record['version'], 1)
+        self.assertEqual(record['job_id'], 'pass')
+        for field in ('objective', 'base_revision', 'candidate_revision',
+                      'completed_acceptance_ids', 'failing_acceptance_ids',
+                      'environment_state', 'commands_actually_run', 'unresolved_effects',
+                      'remaining_budget', 'next_eligible_action'):
+            self.assertIn(field, record)
+            self.assertIn('value', record[field])
+            self.assertIn('source', record[field])
+        summary = json.loads((evidence / 'summary.json').read_text())
+        self.assertEqual(record['state'], summary['state'])
+        self.assertEqual(record['detail'], summary['detail'])
+        self.assert_every_null_is_named(record)
+
+    def test_the_base_revision_is_the_attempt_start_commit(self):
+        start = self.git('rev-parse', 'HEAD').stdout.decode().strip()
+        code = ("import subprocess; from pathlib import Path; Path('keep.txt').write_text('z\\n'); "
+                "subprocess.run(['git', '-c', 'user.email=t@e', '-c', 'user.name=t', 'commit', "
+                "'-qam', 'attempt'], check=True)")
+        result, record, _ = self.run_record(self.spec('commit', code))
+        after = self.git('rev-parse', 'HEAD').stdout.decode().strip()
+        self.assertNotEqual(start, after)
+        self.assertEqual(record['base_revision']['value'], start)
+        self.assertEqual(record['candidate_revision']['value'], after)
+        self.assertIn('attempt start', record['base_revision']['source'])
+        manifest = self.manifest_of(result)
+        self.assertEqual(manifest['repository']['base_commit'], start)
+        self.assertEqual(manifest['handoff']['base_revision'], start)
+
+    def test_the_candidate_revision_is_unmeasured_when_head_did_not_move(self):
+        _, record, _ = self.run_record(self.spec('nomove', "open('x.txt','w').write('x')"))
+        self.assertIsNone(record['candidate_revision']['value'])
+        self.assertTrue(record['candidate_revision']['source'].startswith('unmeasured:'))
+        self.assertIn('candidate_revision', record['unmeasured'])
+
+    def test_the_failing_acceptance_identifier_is_reported_alone(self):
+        checks = [[sys.executable, '-c', 'pass'], [sys.executable, '-c', 'raise SystemExit(2)']]
+        _, record, _ = self.run_record(self.spec('failing', "open('x.txt','w').write('x')",
+                                                  checks=checks))
+        self.assertEqual(record['failing_acceptance_ids']['value'], ['A2'])
+        self.assertEqual(record['completed_acceptance_ids']['value'], ['A1'])
+        self.assert_identifier_lists(record, ['A1', 'A2'])
+
+    def test_the_checks_after_the_first_failure_are_not_run(self):
+        checks = [[sys.executable, '-c', 'raise SystemExit(2)'],
+                  [sys.executable, '-c', 'pass']]
+        _, record, _ = self.run_record(self.spec('stopped', "open('x.txt','w').write('x')",
+                                                  checks=checks))
+        self.assertEqual(record['failing_acceptance_ids']['value'], ['A1'])
+        self.assertEqual(record['completed_acceptance_ids']['value'], [])
+        self.assertEqual(record['not_run_acceptance_ids']['value'], ['A2'])
+        self.assert_identifier_lists(record, ['A1', 'A2'])
+
+    def test_a_failed_implementation_leaves_every_identifier_not_run(self):
+        _, record, _ = self.run_record(self.spec('impl', "raise SystemExit(3)"))
+        self.assertEqual(record['failing_acceptance_ids']['value'], [])
+        self.assertEqual(record['completed_acceptance_ids']['value'], [])
+        self.assertEqual(record['not_run_acceptance_ids']['value'], ['A1'])
+        action = record['next_eligible_action']['value']
+        self.assertEqual(action['action'], 'bounded_repair')
+        self.assertIn('implementation command', action['reason'])
+
+    def test_a_timed_out_acceptance_command_is_failing(self):
+        checks = [[sys.executable, '-c', 'import time; time.sleep(30)']]
+        _, record, _ = self.run_record(self.spec('slow', "open('x.txt','w').write('x')",
+                                                  checks=checks, timeout=2))
+        self.assertEqual(record['failing_acceptance_ids']['value'], ['A1'])
+        self.assertEqual(record['completed_acceptance_ids']['value'], [])
+        self.assert_identifier_lists(record, ['A1'])
+    def test_a_job_stored_before_the_contract_rule_names_no_identifiers(self):
+        spec = {'id': 'legacy', 'objective': 'an old job', 'workspace': str(self.repo),
+                'timeout_seconds': 5, 'implementation': [sys.executable, '-c', 'pass'],
+                'checks': [[sys.executable, '-c', 'pass']]}
+        store_legacy_job(self.f, spec)
+        result = self.f.run_one()
+        evidence = Path(result['evidence'])
+        record = json.loads((evidence / 'handoff.json').read_text())
+        self.assertEqual(record['acceptance_ids_source'], 'absent')
+        for field in ('completed_acceptance_ids', 'failing_acceptance_ids',
+                      'not_run_acceptance_ids'):
+            self.assertEqual(record[field]['value'], [])
+            self.assertTrue(record[field]['source'].startswith('unmeasured:'))
+        self.assertEqual(len(record['commands_actually_run']['value']), 2)
+
+    def test_the_environment_state_marks_tokens_cost_and_digest_unmeasured(self):
+        _, record, _ = self.run_record(self.spec('env', "open('x.txt','w').write('x')"))
+        environment = record['environment_state']['value']
+        self.assertIsNone(environment['tokens'])
+        self.assertIsNone(environment['cost_usd'])
+        self.assertIsNone(environment['environment_digest'])
+        for name in ('tokens', 'cost_usd', 'environment_digest'):
+            self.assertIn(name, record['environment_state']['unmeasured'])
+            self.assertIn(name, record['unmeasured'])
+        self.assertEqual(environment['mode'], 'command')
+        self.assertIsInstance(environment['epoch'], int)
+
+    def test_the_unresolved_effects_and_the_remaining_budget_are_unmeasured(self):
+        _, record, _ = self.run_record(self.spec('unmeasured', "open('x.txt','w').write('x')"))
+        for field in ('unresolved_effects', 'remaining_budget'):
+            self.assertIsNone(record[field]['value'])
+            self.assertTrue(record[field]['source'].startswith('unmeasured:'))
+            self.assertIn(field, record['unmeasured'])
+        self.assertIn('repair allowance', record['remaining_budget']['source'])
+
+    def test_the_next_eligible_action_is_one_of_three_closed_values(self):
+        _, record, _ = self.run_record(self.spec('action', "open('x.txt','w').write('x')"))
+        action = record['next_eligible_action']['value']
+        self.assertEqual(action['action'], 'product_review')
+        self.assertEqual(action['decided_by'], 'the successor')
+        self.assertTrue(action['reason'])
+        _, failed, _ = self.run_record(self.spec('action2', "raise SystemExit(1)"))
+        self.assertEqual(failed['next_eligible_action']['value']['action'], 'bounded_repair')
+        self.assertEqual(failed['next_eligible_action']['value']['decided_by'], 'the successor')
+        probe = {'state': 'passed', 'detail': 'probe', 'results': []}
+        with patch('overseer.factory.run_isolation_probe', return_value=probe):
+            for mode_spec in [{'id': 'fx', 'objective': 'a fixture', 'mode': 'fixture',
+                               'fixture': 'known_good'},
+                              {'id': 'fk', 'objective': 'a fake provider', 'mode': 'fake_provider',
+                               'scenario': 'success'}]:
+                result, controller, _ = self.run_record(mode_spec)
+                action = controller['next_eligible_action']['value']
+                self.assertEqual(action['action'], 'controller_decided')
+                self.assertEqual(action['decided_by'], 'the factory')
+                self.assertIn(mode_spec['mode'], action['reason'])
+                self.assert_every_null_is_named(controller)
+
+    def test_a_later_run_leaves_the_earlier_record_byte_identical(self):
+        first, _, first_evidence = self.run_record(self.spec('first', "open('a.txt','w').write('a')"))
+        before = (first_evidence / 'handoff.json').read_bytes()
+        second, record, second_evidence = self.run_record(self.spec('second', "open('b.txt','w').write('b')"))
+        self.assertEqual((first_evidence / 'handoff.json').read_bytes(), before)
+        self.assertNotEqual(first['run_id'], second['run_id'])
+        self.assertNotEqual(first_evidence, second_evidence)
+        self.assertEqual(record['job_id'], 'second')
+        self.assertEqual(record['run_id'], second['run_id'])
+
+    def test_a_failing_write_leaves_the_attempt_exactly_as_it_was(self):
+        with patch('overseer.factory.handoff.build', side_effect=RuntimeError('/secret/path')):
+            spec = self.spec('raises', "open('x.txt','w').write('x')")
+            self.assertTrue(self.f.submit(spec))
+            result = self.f.run_one()
+        evidence = Path(result['evidence'])
+        self.assertEqual(result['state'], 'passed')
+        self.assertFalse((evidence / 'handoff.json').exists())
+        manifest = self.manifest_of(result)
+        self.assertFalse(manifest['handoff']['written'])
+        self.assertIn('RuntimeError', manifest['handoff']['reason'])
+        self.assertNotIn('/secret/path', json.dumps(manifest))
+        self.assertIsNone(self.f.run_one())
+
+    def test_the_record_carries_no_output_and_names_every_unmeasured_field(self):
+        _, record, evidence = self.run_record(self.spec('quiet', "open('x.txt','w').write('x')"))
+        text = json.dumps(record)
+        self.assertNotIn('output_truncated', text)
+        self.assertNotIn('stdout', text)
+        self.assertNotIn('stderr', text)
+        for result in record['commands_actually_run']['value']:
+            self.assertNotIn('output', result)
+            self.assertNotIn('stdout', result)
+        self.assert_every_null_is_named(record)
+
+    def test_the_manifest_the_summary_and_the_event_agree_with_the_file(self):
+        result, record, evidence = self.run_record(self.spec('agree', "open('x.txt','w').write('x')"))
+        manifest = self.manifest_of(result)['handoff']
+        summary = json.loads((evidence / 'summary.json').read_text())['handoff']
+        digest = hashlib.sha256((evidence / 'handoff.json').read_bytes()).hexdigest()
+        self.assertEqual(manifest['sha256'], digest)
+        self.assertEqual(summary, {'path': manifest['path'], 'sha256': digest})
+        self.assertEqual(manifest['state'], record['state'])
+        self.assertEqual(manifest['base_revision'], record['base_revision']['value'])
+        self.assertEqual(manifest['candidate_revision'], record['candidate_revision']['value'])
+        self.assertEqual(manifest['completed_acceptance_ids'],
+                         record['completed_acceptance_ids']['value'])
+        self.assertEqual(manifest['failing_acceptance_ids'],
+                         record['failing_acceptance_ids']['value'])
+        self.assertEqual(manifest['not_run_acceptance_ids'],
+                         record['not_run_acceptance_ids']['value'])
+        self.assertEqual(manifest['next_eligible_action'],
+                         record['next_eligible_action']['value'])
+        self.assertEqual(manifest['unmeasured'], record['unmeasured'])
+        events = ' '.join(row['detail'] for row in self.f.db.execute(
+            'SELECT detail FROM events WHERE job_id=?', ('agree',)))
+        self.assertIn(digest, events)
+
+
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""
 

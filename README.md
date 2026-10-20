@@ -77,6 +77,27 @@ detected. When the attempt moved HEAD, the new HEAD is recorded as the
 candidate revision; otherwise it stays unmeasured. A workspace that is not a
 git repository, the fixture, fake-provider, and isolation-probe modes, and a
 capture that fails record why nothing was captured and run as before.
+Each completed run also leaves a `handoff.json` in its run evidence directory:
+the blueprint's handoff record for that attempt, carrying the objective, the
+base and candidate revisions, the completed, failing, and not-run acceptance
+identifiers, the environment state, the commands actually run, the unresolved
+effects, the remaining budget, and the next eligible action. The base revision
+is the commit observed at attempt start, before the implementation command, and
+the candidate revision is the commit the attempt made; when the attempt did not
+move HEAD there is no candidate revision and the field says so. The three
+identifier lists are disjoint and cover the contract's identifiers: an
+identifier whose command never ran, because the run stops at the first failing
+command, is in neither the completed nor the failing list. The next eligible
+action is one of three closed values, `product_review`, `bounded_repair`, or
+`controller_decided`, and it says whether the factory or the successor decides
+it. Every field the factory cannot observe is null with the reason that it
+could not be observed: tokens and cost are never estimated, the environment
+digest is never computed, and the unresolved effects and the remaining budget
+are not derived from a declaration. The record is scoped to one attempt by its
+run directory and names its job, run, and specification hash; a later run
+leaves an earlier record byte-identical. It is context and never a verdict:
+nothing judges an attempt by it, and the successor still has to check the
+ledger and the workspace against it and reconcile a disagreement.
 The [harness framework](docs/HARNESS_FRAMEWORK.md) maps that design onto the six
 harness pillars and the code that implements them.
 

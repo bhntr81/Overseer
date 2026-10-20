@@ -2838,3 +2838,137 @@ holds the four required keys, and no line has trailing whitespace; a fidelity
 check confirmed all twenty-three clauses of the user's text survive the
 reformatting. The suite runs 335 tests and the checker resolves 183
 references.
+
+### The blueprint's handoff record persisted for every attempt
+
+The user asked: "Execute the next authorized step from AGENTS.md: Persist the
+blueprint's handoff record in `docs/HARNESS_FRAMEWORK.md` (for the CONTEXT
+row) based on evidence from commit 9a88598—including candidate revision,
+completed/failing acceptance IDs, and next eligible action—leaving
+unobservable fields marked unmeasured. Verify execution with the test suite
+(`python3 scripts/check`) and `scripts/check-doc-references` before
+reporting." `AGENTS.md` asks for one pillar row, and this increment is filed
+against CONTEXT: the handoff record is the context of an attempt, the
+blueprint's own summary of what that attempt left behind. The prompt was
+written by the dedicated prompt-writing agent and executed by the primary
+agent; it is kept in `CONTEXT_HANDOFF_RECORD_NEXT_PROMPT.md` and committed
+with this increment.
+
+The blueprint's sentence is `docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt:299`: on
+handoff, persist objective, base and candidate revisions, completed acceptance
+IDs, failing IDs, environment state, commands actually run, unresolved effects,
+remaining budget, and next eligible action; the successor checks the ledger
+and the workspace before trusting the summary, and reconciles a disagreement.
+
+The three decisions the increment had to make were settled in the prompt and
+are recorded here. The record lives in a new `handoff.json` in the run's
+evidence directory, next to `context.json` and `summary.json`, and the
+manifest carries a `handoff` block that names the file, its digest, and the
+headline facts. The ledger records its path and digest without a schema
+change: `summary.json` gains a `handoff` entry and the `events` table gains
+one `handoff` row, beside the `context_manifest` event. The record is scoped
+to one attempt by its run directory; it names its `job_id`, `run_id`, and
+`spec_hash`, and a later run of the same job leaves an earlier record
+byte-identical.
+
+The rules are the blueprint's, and the record is honest about each of them.
+The objective is the specification's own field. The base revision is the
+commit observed at attempt start, before the implementation command. The
+candidate revision is the post-implementation HEAD when the attempt moved it,
+and is unmeasured with the reason when it did not, because an uncommitted
+worktree is not a revision. The acceptance identifiers are the contract's, one
+per acceptance command, and the run loop stops at the first failing command,
+so the record carries three disjoint lists — completed, failing, and not run —
+that together cover the contract's identifiers; an identifier whose command
+never ran is in neither the completed nor the failing list. The environment
+state carries the mode, the controller epoch, and the per-command timeout; the
+tokens and the cost are null and never estimated, and no environment digest is
+computed. The commands actually run are this run's results. The unresolved
+effects and the remaining budget are unmeasured: the contract's external
+effects are a declaration and not an observation, and the declared repair
+allowance is not the budget that remains, because the factory tracks no
+consumption. The next eligible action is one of three closed values —
+`product_review`, `bounded_repair`, or `controller_decided` — and it says
+whether the factory or the successor decides it, and it names the observed
+evidence: the exit code of the implementation command, or the identifier and
+exit code of the failing acceptance command, or the run's own detail.
+
+The finding the prompt-writing agent measured and the primary agent
+re-measured: the manifest's `repository` block was built by a fresh
+`repository_identity(workspace)` probe at manifest-write time, after the
+command loop, while the block's own source string said "git rev-parse HEAD
+observed at attempt start". In an attempt that commits, the manifest held the
+new commit under the label of the attempt-start one, while the recall's copy
+held the old one. The manifest now uses the attempt-start identity that the
+recall already holds, so the two artifacts cannot disagree and the source
+string is true. The record's base revision is that same observation.
+
+The record is context and never a verdict: the verifiers, the publish gate,
+the state machine, the ledger schema, the monitor, the codemap, the recall,
+the skills reader, and the workspace-diff capture semantics are unchanged, and
+a write that fails is recorded with its reason and leaves the attempt exactly
+as it was.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+grep -n "overseer.factory\|overseer.codemap" overseer/handoff.py
+grep -rn "TODO\|FIXME\|XXX" overseer/handoff.py overseer/factory.py
+```
+
+Fifteen tests were added in `HandoffRecordTests` and the suite runs 350
+tests. Each of the fourteen mutations was applied alone and failed the suite:
+M1 the base revision taken from a later probe
+(`test_the_base_revision_is_the_attempt_start_commit`); M2 the identifiers
+mapped off by one, so the implementation result names the first identifier
+(`test_the_failing_acceptance_identifier_is_reported_alone` and three more);
+M3 the not-run identifiers counted as failing
+(`test_the_checks_after_the_first_failure_are_not_run` and one more); M4 a
+failed implementation counted as a failing acceptance identifier
+(`test_a_failed_implementation_leaves_every_identifier_not_run` and three
+more); M5 a timed-out command not counted as failing
+(`test_a_timed_out_acceptance_command_is_failing`); M6 identifiers invented
+when the stored job names none
+(`test_a_job_stored_before_the_contract_rule_names_no_identifiers`); M7 tokens
+given a number
+(`test_the_environment_state_marks_tokens_cost_and_digest_unmeasured`); M8 the
+remaining budget filled with the declared repair allowance
+(`test_the_unresolved_effects_and_the_remaining_budget_are_unmeasured`); M9
+the action always `product_review`
+(`test_the_next_eligible_action_is_one_of_three_closed_values` and one more);
+M10 the record written to a path shared by every run, so a later run overwrites
+the earlier one (every test that reads the record, and
+`test_a_later_run_leaves_the_earlier_record_byte_identical` first); M11 the
+write of the record unguarded
+(`test_a_failing_write_leaves_the_attempt_exactly_as_it_was`); M12 the record
+carrying the command's output
+(`test_the_record_carries_no_output_and_names_every_unmeasured_field`); M13
+an unmeasured name dropped from the list
+(`test_a_passing_attempt_writes_the_record_with_the_blueprint_fields` and
+three more); M14 the manifest's handoff block carrying the wrong digest
+(`test_the_manifest_the_summary_and_the_event_agree_with_the_file`). The
+mutation set was run again, alone and reverted, against the final tree, and
+each of the fourteen still failed the suite with the test named above. M10
+was first written so that the later run overwrote the first run's directory,
+which failed only when the run identifiers sorted that way, so it was rewritten
+to a path shared by every run and now fails the same way every time.
+
+Every citation of the pillar map was re-derived by hand after the last edit:
+the eighty-five references that moved were remapped from a line map of the
+committed file and the new one, each was checked to still name the thing it
+claimed, and the new citations of `overseer/handoff.py` and of the lines that
+write the record were checked the same way. The checker resolves 189
+references.
+
+Four departures from the prompt, all recorded here. The module grew a third
+function, `candidate_revision(receipt)`, so that the manifest and the record
+share one rule and cannot drift; the manifest's copy now calls it. The
+`mode_result` and `attempt` blocks keep the value-and-source shape of every
+other field, with their own `unmeasured` lists, so that the rule "every null
+value is named in an unmeasured list and carries a reason" holds for them too;
+the prompt's shape left them as bare objects. The manifest's new keyword is
+`handoff_info` rather than `handoff`, because a keyword named `handoff` would
+shadow the module inside the method. The prompt's line references were
+measured at `9a88598` and were re-measured before anything was edited: all
+resolved, and three of them name the first line of a block rather than its
+first statement, which is correct.
