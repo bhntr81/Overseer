@@ -9,7 +9,7 @@ import signal
 import sys
 import time
 
-from .modelchoice import RESOLUTIONS, model_id, providers
+from .modelchoice import RESOLUTIONS, model_id, opencode_empty, providers, running_marker
 from .policy import DEFAULT_REPLY, Policy, hold, next_prompt
 from .route import resolve_route
 from .tmux import CLIENTS, Tmux, command
@@ -209,10 +209,17 @@ def tick(backend, policy, state, config, path, now):
             # Include pane process identity, so a replacement session starts fresh.
             key = f"{pane}:{snapshot.pid}"
             entry = state.setdefault(key, {})
+            if running_marker(snapshot.text):
+                # A running turn is never answered, and it proves a turn ran.
+                entry["ran_turn"] = True
+                entry.pop("fingerprint", None)
+                continue
             if not snapshot.ready:
                 entry.pop("fingerprint", None)
                 continue
-            eligible, reason = policy.consider(entry, snapshot.text, now)
+            completed = (snapshot.process == "opencode" and opencode_empty(snapshot.cursor_line)
+                         and bool(entry.get("ran_turn")))
+            eligible, reason = policy.consider(entry, snapshot.text, now, completed=completed)
             if not eligible:
                 LOG.debug("%s skipped: %s", pane, reason)
                 continue

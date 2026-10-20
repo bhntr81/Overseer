@@ -974,3 +974,33 @@ original, and only the `model` value changed, from `gpt-6-luna` to
 `gpt-5.6-terra`; `codex doctor` now reports `model gpt-5.6-terra · openai`.
 Running sessions keep their own model until they are switched, so this
 changes the default for new sessions only.
+
+### OpenCode turn completion and phase detection
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. The monitor's phase detection was written for the Codex
+terminal, so an OpenCode turn was never recognized: the running footer says
+`esc interrupt`, not `esc to interrupt`, and OpenCode has no `Worked for`
+footer to mark a finished turn. A running OpenCode turn therefore read as
+idle, and a finished one would never have released the queue reservation.
+
+The two OpenCode turn states were measured from the live session. While a
+turn runs, the footer shows `esc interrupt` and the hint about moving running
+work to the background, and the composer box is blank with the cursor on a
+border row. When the turn ends, the composer shows its idle
+`Ask anything…` placeholder again. A blank border row is a turn using the
+box, not an empty composer, so the readiness check now accepts only the
+placeholder.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+```
+
+The running marker makes a running OpenCode pane active, the idle placeholder
+makes a finished turn finished, and OpenCode draws no user-message boundary,
+so the tail of its screen is its current answer. A pane that was observed
+running is eligible for the next continuation once it finishes, and the queue
+reservation is released. The suite grew from 115 to 119 tests, all passing,
+and the document reference checker resolves all 87 citations. The live OpenCode
+session was still running its turn throughout this change.

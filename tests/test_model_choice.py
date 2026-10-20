@@ -46,6 +46,30 @@ APPLIED = [
     '  GPT-5.6-Terra medium · ~/Projects/clubwpt-ocr · Main [default]',
     COMPOSER,
 ]
+# An OpenCode screen while a turn runs, and the same screen once it ended.
+OPENCODE_RUNNING = [
+    ' ⠹ AGENTS and PLAYBOOK authorize +',
+    '  ┃',
+    '  ┃  $ curl -sSL https://example.com',
+    '     ⠋ General Subagent - Verify details',
+    '     Press ctrl+b to move running work to the background',
+    '  ┃',
+    '  ┃',
+    '  ┃',
+    '  ┃  Build · MiniMax M3.1 Flash Free OpenCode',
+    '  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+    '   ■■■⬝⬝⬝ esc interrupt         ↓ 1 subagent · 134.6K (13%)  ctrl+p commands',
+]
+OPENCODE_RUNNING_CURSOR = 6
+OPENCODE_IDLE = [
+    '  ┃',
+    '  ┃  Ask anything… "Fix broken tests"',
+    '  ┃',
+    '  ┃  Build · MiniMax M3.1 Flash Free OpenCode',
+    '  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+    '   ~/Projects/Crypto-Cooking                 shift+tab agents  ctrl+p commands',
+]
+OPENCODE_IDLE_CURSOR = 1
 
 
 MODEL_ERROR = (
@@ -244,8 +268,9 @@ class ModelChoiceTests(unittest.TestCase):
         self.assertTrue(empty.ready)
         draft = Snapshot('%0', 'opencode', '1', 'text', '┃  x', '0', '0')
         self.assertFalse(draft.ready)
+        # A blank border row is a turn using the box, not an empty composer.
         boxed = Snapshot('%0', 'opencode', '1', 'text', '┃', '0', '0')
-        self.assertTrue(boxed.ready)
+        self.assertFalse(boxed.ready)
 
     def test_picker_block_ignores_conversation_lines(self):
         screen = CONVERSATION + PICKER
@@ -319,6 +344,41 @@ class ModelChoiceTests(unittest.TestCase):
         self.assertIn('Escape', state['keys'])
         self.assertNotIn('Down', state['keys'])
         self.assertNotIn('s', state['keys'])
+
+    def opencode_screen(self, lines, cursor, pane='%0'):
+        return Snapshot(pane, 'opencode', '7', '\n'.join(lines), lines[cursor],
+                        '0', '0', 6)
+
+    def test_opencode_running_turn_is_active(self):
+        screen = self.opencode_screen(OPENCODE_RUNNING, OPENCODE_RUNNING_CURSOR)
+        self.assertEqual(phase(screen), 'active')
+
+    def test_opencode_finished_turn_is_finished(self):
+        screen = self.opencode_screen(OPENCODE_IDLE, OPENCODE_IDLE_CURSOR)
+        self.assertEqual(phase(screen), 'finished')
+
+    def test_opencode_turn_releases_the_reservation(self):
+        idle = self.opencode_screen(OPENCODE_IDLE, OPENCODE_IDLE_CURSOR)
+        running = self.opencode_screen(OPENCODE_RUNNING, OPENCODE_RUNNING_CURSOR)
+        self.screens['%0'] = idle
+        # A turn has already run, so the finished pane is eligible again.
+        self.state['%0:7'] = {'ran_turn': True}
+        self.run_tick(0)
+        self.assertEqual(self.backend.send.call_count, 1)
+        self.assertEqual(self.state['_queue']['active']['key'], '%0:7')
+        self.screens['%0'] = running
+        self.run_tick(10)
+        self.screens['%0'] = idle
+        self.run_tick(1000)
+        # The finished OpenCode pane released the slot; the other pane took it.
+        self.assertEqual(self.state['_queue']['active']['key'], '%1:1')
+
+    def test_opencode_pane_is_not_answered_while_it_runs(self):
+        self.screens['%0'] = self.opencode_screen(OPENCODE_RUNNING, OPENCODE_RUNNING_CURSOR)
+        self.state['%0:7'] = {'ran_turn': True}
+        self.run_tick(0)
+        sent = [call.args[0].pane for call in self.backend.send.call_args_list]
+        self.assertNotIn('%0', sent)
 
 
 if __name__ == '__main__':

@@ -5,7 +5,8 @@ import re
 import time
 
 from .modelchoice import (
-    RESOLUTIONS, detect, fallback_policy, next_hop, providers,
+    RESOLUTIONS, detect, fallback_policy, next_hop, opencode_answer, opencode_empty,
+    providers, running_marker,
 )
 from .policy import (
     ANSI, BLOCKED, COMPLETED, CONTINUE, DEFAULT_REPLY, STOP, classify, fingerprint, hold, next_prompt,
@@ -28,9 +29,17 @@ def response(text):
     return '\n'.join(lines)
 
 
+def current_answer(snapshot):
+    """Return the answer of the current turn."""
+    text = response(snapshot.text)
+    if snapshot.process == 'opencode':
+        return opencode_answer(text)
+    return text
+
+
 def model_failure(snapshot):
     """Return the provider failure visible in the current answer, or None."""
-    text = response(snapshot.text)
+    text = current_answer(snapshot)
     failure = detect(text)
     if failure is None:
         return None
@@ -41,8 +50,8 @@ def model_failure(snapshot):
 
 
 def phase(snapshot):
-    text = response(snapshot.text)
-    if ACTIVE.search(text):
+    text = current_answer(snapshot)
+    if ACTIVE.search(text) or running_marker(text):
         return 'active'
     if not snapshot.ready:
         return 'unknown'
@@ -55,6 +64,9 @@ def phase(snapshot):
     if match and not COMPLETED.search(text[match.end():]) and not BLOCKED.search(text[match.end():]):
         return 'capacity'
     if COMPLETED.search(text):
+        return 'finished'
+    if snapshot.process == 'opencode' and opencode_empty(snapshot.cursor_line):
+        # The turn ended and the composer went back to its idle placeholder.
         return 'finished'
     if classify(text)[0]:
         return 'finished'
@@ -255,6 +267,8 @@ def tick_queue(backend, policy, state, config, path, now, save):
                                 'python3 -m overseer model-select %s',
                                 s.pane, failure.name, failure.detail, s.pane)
                 continue
+        if phases[key] == 'active':
+            entry['ran_turn'] = True
         if not s.ready or phases[key] == 'active':
             entry.pop('fingerprint', None)
             continue
@@ -263,9 +277,11 @@ def tick_queue(backend, policy, state, config, path, now, save):
         if capacity and entry.get('capacity_attempts', 0) >= config.get('capacity_max_retries', 3):
             entry['queue_reason'] = 'capacity retry limit reached; manual intervention needed'
             continue
+        opencode_done = (s.process == 'opencode' and phases[key] == 'finished'
+                         and bool(entry.get('ran_turn')))
         eligible, reason = policy.consider(entry, s.text, now, capacity=capacity,
                                            retry_seconds=config.get('capacity_retry_seconds', 120),
-                                           resume=resume)
+                                           resume=resume, completed=opencode_done)
         if eligible and not capacity and not resume:
             prompt, kind = next_prompt(s.text, fallback)
             if prompt is None:

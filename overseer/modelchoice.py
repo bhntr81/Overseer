@@ -44,6 +44,10 @@ BOX = "┃"
 PICKER_HEADER = "Select Model and Effort"
 PICKER_FOOTER = "enter select"
 EFFORT_HEADER = "Select Reasoning Level"
+# The running footer of a client that draws its own composer, and the hint it
+# shows for work that can be moved to the background.
+RUNNING = re.compile(r"\besc interrupt\b|move running work to the background", re.IGNORECASE)
+ANSWER_LINES = 18
 EXHAUSTED = "CREDITS_EXHAUSTED_WAITING"
 DEFAULT_POLICY = {
     "primary": [],
@@ -274,8 +278,26 @@ def opencode_composer(text):
 
 
 def opencode_empty(text):
-    """Report whether an OpenCode composer row shows an empty input."""
+    """Report whether an OpenCode composer row shows an idle, empty composer.
+
+    A blank border row means a turn is using the box, so only the idle
+    placeholder counts as an empty composer.
+    """
     body = opencode_composer(text)
     if body is None:
         return False
-    return body == "" or body.startswith("Ask anything")
+    return body.startswith("Ask anything")
+
+
+def running_marker(text):
+    """Report whether a screen shows that a turn is running."""
+    return bool(RUNNING.search(text or ""))
+
+
+def opencode_answer(text):
+    """Return the current answer of an OpenCode screen.
+
+    OpenCode draws no user-message boundary to cut at, so the tail of the
+    screen is the current answer.
+    """
+    return "\n".join((text or "").splitlines()[-ANSWER_LINES:])

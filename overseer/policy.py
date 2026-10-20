@@ -168,13 +168,13 @@ def hold(state, text, reason):
     state["held_reason"] = reason
 
 
-def classify(text, continue_on_completion=False):
+def classify(text, continue_on_completion=False, completed=False):
     tail = tail_text(text)
     if STOP.search(tail):
         return False, "client requested no further automatic continuation"
     if BLOCKED.search(tail):
         return False, "active generation, permission, or sensitive action visible"
-    if continue_on_completion and COMPLETED.search(tail):
+    if continue_on_completion and (COMPLETED.search(tail) or completed):
         return True, "completed turn with empty composer"
     if not CONTINUE.search(tail):
         return False, "no recognized routine continuation question"
@@ -188,7 +188,8 @@ class Policy:
         self.max_per_day = max_per_day
         self.continue_on_completion = continue_on_completion
 
-    def consider(self, state, text, now, *, capacity=False, retry_seconds=120, resume=False):
+    def consider(self, state, text, now, *, capacity=False, retry_seconds=120, resume=False,
+                 completed=False):
         """Update observation state. Sending must be acknowledged separately."""
         digest = fingerprint(text)
         if state.get("fingerprint") != digest or now < state.get("stable_since", now):
@@ -198,7 +199,7 @@ class Policy:
         elif resume:
             eligible, reason = True, "routed session needs a continuation"
         else:
-            eligible, reason = classify(text, self.continue_on_completion)
+            eligible, reason = classify(text, self.continue_on_completion, completed)
         if not eligible:
             return False, reason
         if now - state["stable_since"] < (retry_seconds if capacity else self.idle_seconds):
