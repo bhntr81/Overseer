@@ -64,7 +64,14 @@ verified fact whose bound revision is no longer the workspace's base commit,
 are marked as unusable rather than handed over as settled. The recall is
 written to `recall.json` in the run evidence and passed to the worker through
 `OVERSEER_RECALL_PATH`, `OVERSEER_RECALL_COUNT`, `OVERSEER_RECALL_KINDS`, and
-`OVERSEER_RECALL_SUMMARY`. Nothing assembles context from a codebase yet.
+`OVERSEER_RECALL_SUMMARY`. The runner also assembles a codebase context from
+the workspace file tree: it selects the files the task commands name or whose
+path matches the task terms, extracts their structural symbols, and writes the
+map to `codebase.json` in the run evidence, which the worker receives through
+`OVERSEER_CODEBASE_PATH`, `OVERSEER_CODEBASE_FILES`,
+`OVERSEER_CODEBASE_SELECTED`, and `OVERSEER_CODEBASE_SUMMARY`. The map names
+files and symbols; it carries no file content, and every bound of the walk is
+explicit.
 A command-mode task must carry a `contract` block that states the
 role, risk tier, external effects, protected paths, approval requirements,
 acceptance identifiers, required capabilities, project constraints, measured

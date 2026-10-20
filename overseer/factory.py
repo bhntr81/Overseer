@@ -2,6 +2,8 @@
 import argparse
 from contextlib import contextmanager
 import fcntl
+from overseer.codemap import assemble as assemble_codebase
+from overseer.codemap import summary as codebase_summary
 from overseer.isolation import run_isolation_probe
 import hashlib
 import json
@@ -1015,7 +1017,18 @@ class Factory:
         env['OVERSEER_RECALL_SUMMARY'] = self._recall_summary(recall)
         return env
 
-    def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None):
+    @staticmethod
+    def _codebase_environment(context, path):
+        """Return the child environment that carries the codebase context."""
+        env = dict(os.environ)
+        env['OVERSEER_CODEBASE_PATH'] = str(path)
+        env['OVERSEER_CODEBASE_FILES'] = str(context.get('file_count') or 0)
+        env['OVERSEER_CODEBASE_SELECTED'] = str(len(context.get('selected') or []))
+        env['OVERSEER_CODEBASE_SUMMARY'] = codebase_summary(context)
+        return env
+
+    def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
+                          codebase=None):
         """Record what the controller supplied for this attempt, and why."""
         contract = spec.get('contract') or {}
         acceptance_ids = list(contract.get('acceptance_ids') or [])
@@ -1031,6 +1044,9 @@ class Factory:
         current_decisions = [record for record in recalled
                              if record['kind'] == 'decision' and record.get('status') == 'current']
         past_attempts = [record for record in recalled if record['kind'] == 'historical_attempt']
+        assembled = (codebase or {}).get('context') or {}
+        selected = list(assembled.get('selected') or [])
+        symbol_count = sum(len(entry.get('symbols') or []) for entry in selected)
         commands = []
         for result in results:
             if 'argv' not in result:
@@ -1054,9 +1070,14 @@ class Factory:
                        "the task specification's acceptance commands",
              'why': 'the acceptance commands define the required behaviour of the attempt'},
             {'item': 'relevant_code_and_interfaces',
-             'source': None,
-             'why': 'no context builder exists: nothing is assembled from a codebase, '
-                    'and no file or interface was read into this manifest'},
+             'source': ('the workspace file tree: %d files, %d selected for this task with '
+                        '%d structural symbols' % (assembled.get('file_count') or 0,
+                                                   len(selected), symbol_count))
+                       if assembled.get('assembled') else None,
+             'why': ('the repository map names the files and the symbols the attempt can read'
+                     if assembled.get('assembled') else
+                     'no codebase context was assembled: %s' % (
+                         assembled.get('reason') or 'the workspace holds no readable file'))},
             {'item': 'recent_verified_failures',
              'source': ('the memory ledger: %d historical attempt records' % len(past_attempts))
                        if past_attempts else None,
@@ -1110,6 +1131,20 @@ class Factory:
                 'note': ('the recalled records were consulted before the attempt and were '
                          'passed to the execution environment' if recalled else
                          'no memory record was relevant to this attempt'),
+            },
+            'codebase': {
+                'assembled': bool(assembled.get('assembled')),
+                'reason': assembled.get('reason'),
+                'file_count': assembled.get('file_count') or 0,
+                'truncated': bool(assembled.get('truncated')),
+                'selected': [{'path': entry['path'], 'score': entry.get('score'),
+                              'reason': entry.get('reason'),
+                              'symbols': [symbol['name']
+                                          for symbol in entry.get('symbols') or []]}
+                             for entry in selected],
+                'symbol_count': symbol_count,
+                'path': (codebase or {}).get('path'),
+                'sha256': (codebase or {}).get('sha256'),
             },
             'unmeasured': ['tokens', 'cost_usd', 'candidate_revision', 'remaining_budget',
                            'unresolved_effects', 'environment_digest'],
@@ -1794,10 +1829,22 @@ class Factory:
             recall_info = {'records': recalled['records'], 'path': str(recall_path),
                            'sha256': recall_digest}
             child_env = self._recall_environment(recalled, recall_path)
+            # The codebase context is assembled from the file tree before the
+            # work starts, so the attempt can find the files and symbols it
+            # needs. The map names files and symbols; it carries no content.
+            codebase = assemble_codebase(spec.get('workspace'), spec)
+            codebase_path = evidence / 'codebase.json'
+            codebase_path.write_text(json.dumps(codebase, indent=2))
+            codebase_digest = hashlib.sha256(codebase_path.read_bytes()).hexdigest()
+            codebase_info = {'context': codebase, 'path': str(codebase_path),
+                             'sha256': codebase_digest}
+            child_env.update(self._codebase_environment(codebase, codebase_path))
             self.db.execute("UPDATE jobs SET state='running',run_id=?,evidence=?,started=? WHERE id=?",
                             (run_id, str(evidence), time.time(), job_id))
             self.event(job_id, 'running', 'durable reservation before command launch')
             self.event(job_id, 'recall', f'recalled {len(recalled["records"])} memory records')
+            self.event(job_id, 'codebase', 'assembled %d workspace files, %d selected' % (
+                codebase.get('file_count') or 0, len(codebase.get('selected') or [])))
             self.db.commit()
             results = []
             final = 'failed'
@@ -1854,7 +1901,8 @@ class Factory:
             # final state change, in one transaction.
             epoch, _ = self._controller_values()
             manifest = self._context_manifest(
-                job_id, run_id, spec, row['spec_hash'], results, epoch, recall_info)
+                job_id, run_id, spec, row['spec_hash'], results, epoch, recall_info,
+                codebase_info)
             manifest_path = evidence / 'context.json'
             manifest_path.write_text(json.dumps(manifest, indent=2))
             manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()

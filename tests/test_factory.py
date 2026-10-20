@@ -1794,6 +1794,180 @@ class ContextTests(unittest.TestCase):
         self.assertEqual(result['state'], 'failed')
         self.assertEqual(self.recall_of(result)['counts']['decision'], 1)
 
+    def codebase_of(self, result):
+        return json.loads((Path(result['evidence']) / 'codebase.json').read_text())
+
+    def write_source(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+
+    def test_the_manifest_populates_the_relevant_code_and_interfaces(self):
+        self.write_source('widget.py', 'class Widget:\n    pass\n\n\ndef build():\n    return 1\n')
+        self.assertTrue(self.f.submit(self.command_spec('codebase')))
+        result = self.f.run_one()
+        manifest = self.manifest_of(result)
+        supplied = {entry['item']: entry for entry in manifest['supplied']}
+        entry = supplied['relevant_code_and_interfaces']
+        self.assertIsNotNone(entry['source'])
+        self.assertIn('file tree', entry['source'])
+        self.assertIn('repository map', entry['why'])
+        self.assertTrue(manifest['codebase']['assembled'])
+        self.assertGreater(manifest['codebase']['file_count'], 0)
+
+    def test_the_codebase_map_is_written_into_the_run_evidence_directory(self):
+        self.assertTrue(self.f.submit(self.command_spec('codebase-file')))
+        result = self.f.run_one()
+        manifest = self.manifest_of(result)
+        path = Path(manifest['codebase']['path'])
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.name, 'codebase.json')
+        self.assertEqual(manifest['codebase']['sha256'], hashlib.sha256(
+            path.read_bytes()).hexdigest())
+
+    def test_the_structural_symbols_of_a_python_file_are_assembled(self):
+        self.write_source('gadget.py',
+                          'class Gadget:\n'
+                          '    def spin(self):\n'
+                          '        return 1\n'
+                          '\n'
+                          '\n'
+                          'def assemble():\n'
+                          '    return Gadget()\n')
+        spec = self.command_spec('symbols')
+        spec['objective'] = 'assemble the gadget'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        selected = {entry['path']: entry for entry in self.codebase_of(result)['selected']}
+        self.assertIn('gadget.py', selected)
+        names = {symbol['name']: symbol for symbol in selected['gadget.py']['symbols']}
+        self.assertEqual(names['Gadget']['kind'], 'class')
+        self.assertEqual(names['Gadget.spin']['kind'], 'method')
+        self.assertEqual(names['assemble']['kind'], 'function')
+        self.assertEqual(names['Gadget']['line'], 1)
+        self.assertEqual(names['assemble']['line'], 6)
+
+    def test_a_file_the_task_commands_name_is_selected(self):
+        target = self.write_source('named.py', 'def named():\n    return 1\n')
+        spec = self.command_spec('named')
+        spec['implementation'] = [sys.executable, '-c',
+                                  "from pathlib import Path; Path('%s').read_text()" % target]
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        selected = {entry['path']: entry for entry in self.codebase_of(result)['selected']}
+        self.assertIn('named.py', selected)
+        self.assertEqual(selected['named.py']['reason'], 'the task commands name this file')
+
+    def test_a_file_whose_path_matches_the_task_terms_is_selected(self):
+        self.write_source('widget.py', 'def widget():\n    return 1\n')
+        self.write_source('unrelated.py', 'def other():\n    return 1\n')
+        spec = self.command_spec('terms')
+        spec['objective'] = 'repair the widget filter'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        selected = [entry['path'] for entry in self.codebase_of(result)['selected']]
+        self.assertIn('widget.py', selected)
+        self.assertNotIn('unrelated.py', selected)
+
+    def test_the_ignored_directories_are_not_in_the_map(self):
+        self.write_source('node_modules/left-pad/index.js', 'module.exports = 1\n')
+        self.write_source('.git/config', '[core]\n')
+        self.write_source('kept.py', 'def kept():\n    return 1\n')
+        self.assertTrue(self.f.submit(self.command_spec('ignored')))
+        result = self.f.run_one()
+        paths = {entry['path'] for entry in self.codebase_of(result)['selected']}
+        self.assertNotIn('node_modules/left-pad/index.js', paths)
+        self.assertNotIn('.git/config', paths)
+
+    def test_the_selection_is_bounded(self):
+        for index in range(20):
+            self.write_source('widget%02d.py' % index, 'def widget():\n    return 1\n')
+        spec = self.command_spec('bounded')
+        spec['objective'] = 'repair every widget'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        context = self.codebase_of(result)
+        self.assertLessEqual(len(context['selected']), context['limits']['max_selected'])
+        self.assertEqual(len(context['selected']), context['limits']['max_selected'])
+
+    def test_a_workspace_without_files_reports_the_real_reason(self):
+        empty = Path(self.tmp.name) / 'empty'
+        empty.mkdir()
+        spec = self.command_spec('empty')
+        spec['workspace'] = str(empty)
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        manifest = self.manifest_of(result)
+        self.assertFalse(manifest['codebase']['assembled'])
+        self.assertEqual(manifest['codebase']['file_count'], 0)
+        supplied = {entry['item']: entry for entry in manifest['supplied']}
+        self.assertIsNone(supplied['relevant_code_and_interfaces']['source'])
+        self.assertIn('no codebase context was assembled',
+                      supplied['relevant_code_and_interfaces']['why'])
+
+    def test_a_file_that_is_not_text_is_not_read(self):
+        target = self.root / 'binary.bin'
+        target.write_bytes(b'\x00\x01\x02binary')
+        spec = self.command_spec('binary')
+        spec['implementation'] = [sys.executable, '-c',
+                                  "from pathlib import Path; Path('%s').read_bytes()" % target]
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        selected = {entry['path']: entry for entry in self.codebase_of(result)['selected']}
+        self.assertEqual(selected['binary.bin']['structure_kind'], 'not text')
+        self.assertEqual(selected['binary.bin']['symbols'], [])
+
+    def test_the_worker_receives_the_codebase_context_in_its_environment(self):
+        self.write_source('widget.py', 'class Widget:\n    pass\n')
+        spec = self.command_spec('codebase-env', checks=[[sys.executable, '-c',
+                   "from pathlib import Path; text=Path('codebase_seen.txt').read_text(); "
+                   "assert 'widget.py' in text, text"]])
+        spec['objective'] = 'repair the widget filter'
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import os; from pathlib import Path; "
+                                  "Path('codebase_seen.txt').write_text('|'.join(["
+                                  "os.environ.get('OVERSEER_CODEBASE_PATH',''), "
+                                  "os.environ.get('OVERSEER_CODEBASE_FILES',''), "
+                                  "os.environ.get('OVERSEER_CODEBASE_SELECTED',''), "
+                                  "os.environ.get('OVERSEER_CODEBASE_SUMMARY','')]))"]
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        carried = (self.root / 'codebase_seen.txt').read_text().split('|')
+        self.assertEqual(carried[0], str(Path(result['evidence']) / 'codebase.json'))
+        self.assertGreater(int(carried[1]), 0)
+        self.assertGreaterEqual(int(carried[2]), 1)
+        self.assertIn('widget.py', carried[3])
+
+    def test_the_codebase_context_carries_no_file_content(self):
+        self.write_source('secret.py', 'TOKEN = "s3cret-value"\n')
+        spec = self.command_spec('no-content')
+        spec['objective'] = 'read the secret module'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        text = (Path(result['evidence']) / 'codebase.json').read_text()
+        self.assertNotIn('s3cret-value', text)
+        self.assertIn('secret.py', text)
+
+    def test_a_non_python_file_gets_its_declarations(self):
+        self.write_source('service.ts',
+                          'export interface Service {\n'
+                          '  run(): void;\n'
+                          '}\n'
+                          '\n'
+                          'export function startService(): void {\n'
+                          '}\n')
+        spec = self.command_spec('declarations')
+        spec['objective'] = 'inspect the service module'
+        self.assertTrue(self.f.submit(spec))
+        result = self.f.run_one()
+        selected = {entry['path']: entry for entry in self.codebase_of(result)['selected']}
+        self.assertIn('service.ts', selected)
+        names = {symbol['name']: symbol for symbol in selected['service.ts']['symbols']}
+        self.assertEqual(names['Service']['kind'], 'type')
+        self.assertEqual(names['startService']['kind'], 'function')
+
 
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""

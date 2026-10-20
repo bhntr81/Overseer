@@ -1962,3 +1962,47 @@ consumption, the record identifiers, and the digest of the recall file:
 ```
 
 The private factory ledger and the repository were not touched by that run.
+
+### Codebase context assembly for the CONTEXT pillar
+
+The user asked for the context side of the CONTEXT pillar: the manifest's
+`relevant_code_and_interfaces` must be populated from a repository map or file
+tree analysis instead of staying `None`, and a new attempt must be able to
+find the structural symbols, interfaces, and files it needs before it runs.
+This increment was written and executed by the primary agent without a
+separate prompt-writing agent, because another agent was committing to the
+same repository and one writer held the tree. That is a deviation from the
+standing workflow and is recorded here rather than papered over.
+
+The manifest said so plainly: "no context builder exists: nothing is
+assembled from a codebase, and no file or interface was read into this
+manifest". That is now false.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+```
+
+`overseer/codemap.py` assembles the context. It walks the workspace file
+tree with explicit bounds: at most 4000 files, a depth of 12, and the usual
+build and cache directories left out. It selects the files the task's own
+commands name and the files whose path matches the terms of the objective and
+the contract, at most 12 of them, and it extracts their structural symbols:
+Python files through the standard library parser, other files through a
+declared set of declaration forms. The map is written to `codebase.json` in
+the run evidence and handed to the worker through `OVERSEER_CODEBASE_PATH`,
+`OVERSEER_CODEBASE_FILES`, `OVERSEER_CODEBASE_SELECTED`, and a bounded
+`OVERSEER_CODEBASE_SUMMARY`. The manifest records the assembly, the selected
+files with their symbols, the digest of the map, and the real reason when
+nothing could be assembled.
+
+The map names files and symbols and carries no file content, which a test
+holds: a secret written into a workspace file does not appear in the map. A
+file that is binary, too large, or not text is left unread and the reason is
+recorded. The assembly changes what an attempt is informed by, not what it is
+judged by.
+
+The suite grew from 205 to 217 tests, all passing, and the document reference
+checker resolves all 127 citations. The CONTEXT row of the pillar map carries
+this increment, and the next CONTEXT increment is named: the map names the
+files but does not carry their code.
