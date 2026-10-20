@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from overseer.factory import (
-    CONTRACT_FIELDS, ENVELOPE_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID,
+    CONTRACT_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID,
     MEMORY_KINDS, PROVIDER_NAMES, REQUEST_INPUT_FIELDS, Factory, canonical,
     fixture_candidate_path, repository_identity, validate,
 )

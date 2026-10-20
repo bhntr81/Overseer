@@ -861,7 +861,7 @@ class Factory:
         if kind is not None and kind not in MEMORY_KINDS:
             raise ValueError('memory kind must be one of: ' + ', '.join(MEMORY_KINDS))
         rows = self.db.execute(
-            'SELECT * FROM memory_records WHERE job_id=? ORDER BY at, record_id',
+            'SELECT * FROM memory_records WHERE job_id=? ORDER BY at, rowid',
             (job_id,)).fetchall()
         records = [self._memory_record(row['record_id']) for row in rows]
         superseded_by = {}

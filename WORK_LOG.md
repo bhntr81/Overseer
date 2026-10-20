@@ -1672,3 +1672,43 @@ Not touched: the live tmux server and every pane, the running monitor service,
 the live factory ledger, `config.json`, the monitor's own modules,
 `docs/FACTORY_EXECUTION.md`, `factory/tasks/overseer-checks.json`, and
 `factory/routing-policy.json`.
+
+### Review correction: one citation that did not hold its claim
+
+The review of the context increment found one defect and several minor
+observations. The dedicated prompt-writing agent authored the corrective
+prompt and the primary agent executed it.
+
+The defect was in the STATE row of `docs/HARNESS_FRAMEWORK.md`: it cited
+`overseer/factory.py:425` for the memory records table, and that line is the
+approvals table. The memory records table is created at
+`overseer/factory.py:429` and at `overseer/factory.py:1467`, which is what the
+CONTEXT row already cited. The STATE row now cites `429`. The PERMISSIONS
+row's citation of `425` for the approvals table is unchanged and still
+resolves to that table. The reference checker did not catch this because it
+proves only that a path exists and a line is in range, never that the line
+says what the document claims.
+
+Three minor observations were also closed, all inside this increment's own
+files. The test file imported `ENVELOPE_FIELDS` and never used it; the import
+was dropped. `memory()` ordered records by `(at, record_id)`, and the record
+id is a random uuid, so two records written within the same clock tick could
+come back out of insertion order; it now orders by `(at, rowid)`. The
+reviewer also noted that `record_memory` ignores unknown keyword arguments
+and stores kind-irrelevant columns; that is left as it is, because the
+verified flag is derived from the kind rather than from input, so a caller
+still cannot mark a hypothesis verified, and the recorded columns are
+harmless for a record of another kind.
+
+```text
+python3 -m unittest discover -s tests -p 'test_factory.py' -v
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --check
+```
+
+Results, copied from the run: the factory suite ran 86 tests, OK; the full
+suite ran 172 tests, OK; the document reference checker reported `109
+references checked in HARNESS_FRAMEWORK.md`; `git diff --check` exited 0. Token
+usage and monetary cost were not supplied by the runtime and remain
+unavailable.
