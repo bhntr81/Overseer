@@ -5,6 +5,8 @@ import fcntl
 from overseer.codemap import assemble as assemble_codebase
 from overseer.codemap import summary as codebase_summary
 from overseer.isolation import run_isolation_probe
+from overseer.skills import provenance as skill_provenance
+from overseer.skills import unchecked as unchecked_provenance
 import hashlib
 import json
 import os
@@ -18,6 +20,8 @@ import time
 import uuid
 
 DEFAULT_DB = Path.home() / '.local/state/overseer/factory/jobs.sqlite3'
+# The skill provenance of this repository, read at the start of every attempt.
+SKILLS_PROVENANCE = Path(__file__).resolve().parent.parent / 'factory' / 'skills-provenance.json'
 LIVE = ('running', 'checking', 'needs_reconciliation')
 
 
@@ -392,8 +396,9 @@ def validate(spec):
 
 
 class Factory:
-    def __init__(self, path=DEFAULT_DB):
+    def __init__(self, path=DEFAULT_DB, skills_provenance=None):
         self.path = Path(path)
+        self.skills_provenance = Path(skills_provenance or SKILLS_PROVENANCE)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(self.path, timeout=10)
         self.db.row_factory = sqlite3.Row
@@ -1035,8 +1040,24 @@ class Factory:
             (context.get('selection') or {}).get('widened') or 0)
         return env
 
+    @staticmethod
+    def _skills_environment(skills, path):
+        """Return the child environment that carries the skill provenance.
+
+        Only facts the factory observed are carried: where the record is, the
+        digest of the provenance file, and how many skills were declared and
+        had their installed bytes verified. No variable names a skill as
+        active or supplied, because none is.
+        """
+        env = dict(os.environ)
+        env['OVERSEER_SKILLS_PATH'] = str(path)
+        env['OVERSEER_SKILLS_PROVENANCE_SHA256'] = skills.get('sha256') or ''
+        env['OVERSEER_SKILLS_DECLARED'] = str(skills.get('declared_count') or 0)
+        env['OVERSEER_SKILLS_VERIFIED'] = str(skills.get('installed_verified_count') or 0)
+        return env
+
     def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
-                          codebase=None):
+                          codebase=None, skills=None):
         """Record what the controller supplied for this attempt, and why."""
         contract = spec.get('contract') or {}
         acceptance_ids = list(contract.get('acceptance_ids') or [])
@@ -1239,8 +1260,34 @@ class Factory:
                 'path': (codebase or {}).get('path'),
                 'sha256': (codebase or {}).get('sha256'),
             },
+            'skills': self._manifest_skills(skills),
             'unmeasured': ['tokens', 'cost_usd', 'candidate_revision', 'remaining_budget',
                            'unresolved_effects', 'environment_digest'],
+        }
+
+    @staticmethod
+    def _manifest_skills(skills):
+        """Return the skills block of the manifest: declared, verified, none supplied."""
+        record = (skills or {}).get('record') or {}
+        return {
+            'path': (skills or {}).get('path'),
+            'sha256': (skills or {}).get('sha256'),
+            'provenance_path': record.get('path'),
+            'provenance_sha256': record.get('sha256'),
+            'present': bool(record.get('present')),
+            'valid': bool(record.get('valid')),
+            'reason': record.get('reason') if record else 'no skill provenance was read',
+            'declared_count': record.get('declared_count') or 0,
+            'installed_verified_count': record.get('installed_verified_count') or 0,
+            'supplied_count': record.get('supplied_count') or 0,
+            'activation_observed_count': record.get('activation_observed_count') or 0,
+            'rejected_count': record.get('rejected_count') or 0,
+            'skills': [{'name': skill['name'],
+                        'installed_verified': skill['installed_verified'],
+                        'supplied_to_attempt': skill['supplied_to_attempt'],
+                        'activation_observed': skill['activation_observed']}
+                       for skill in record.get('skills') or []],
+            'note': record.get('note'),
         }
 
     def cancel(self, job_id):
@@ -1933,12 +1980,33 @@ class Factory:
             codebase_info = {'context': codebase, 'path': str(codebase_path),
                              'sha256': codebase_digest}
             child_env.update(self._codebase_environment(codebase, codebase_path))
+            # The skill provenance is read and checked at the start of the
+            # attempt. It is context, not a gate: a missing or malformed file is
+            # recorded with its reason and the attempt still runs.
+            try:
+                skills = skill_provenance(self.skills_provenance)
+            except Exception as error:  # the provenance is context, never a gate
+                skills = unchecked_provenance(self.skills_provenance,
+                                              'the skill provenance could not be checked: %s'
+                                              % type(error).__name__)
+            skills_path = evidence / 'skills.json'
+            skills_path.write_text(json.dumps(skills, indent=2))
+            skills_digest = hashlib.sha256(skills_path.read_bytes()).hexdigest()
+            skills_info = {'record': skills, 'path': str(skills_path), 'sha256': skills_digest}
+            child_env.update(self._skills_environment(skills, skills_path))
             self.db.execute("UPDATE jobs SET state='running',run_id=?,evidence=?,started=? WHERE id=?",
                             (run_id, str(evidence), time.time(), job_id))
             self.event(job_id, 'running', 'durable reservation before command launch')
             self.event(job_id, 'recall', f'recalled {len(recalled["records"])} memory records')
             self.event(job_id, 'codebase', 'assembled %d workspace files, %d selected' % (
                 codebase.get('file_count') or 0, len(codebase.get('selected') or [])))
+            if skills['valid']:
+                self.event(job_id, 'skills', '%d skills declared, %d installed bytes verified, '
+                           'none supplied' % (skills['declared_count'],
+                                              skills['installed_verified_count']))
+            else:
+                self.event(job_id, 'skills', 'skill provenance not recorded: %s'
+                           % skills['reason'])
             self.db.commit()
             results = []
             final = 'failed'
@@ -1996,7 +2064,7 @@ class Factory:
             epoch, _ = self._controller_values()
             manifest = self._context_manifest(
                 job_id, run_id, spec, row['spec_hash'], results, epoch, recall_info,
-                codebase_info)
+                codebase_info, skills_info)
             manifest_path = evidence / 'context.json'
             manifest_path.write_text(json.dumps(manifest, indent=2))
             manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()

@@ -2599,3 +2599,119 @@ widened with no symbols and no excerpt, and takes a slot. The digest's
 truncation note is added after its limit, as it was before this increment.
 The citations of the map in the pillar map were re-derived by hand after the
 last edit; the checker resolves 155 references.
+
+### The skill provenance recorded in the context of every attempt
+
+The user asked: "Implement skills provenance integration for the CONTEXT
+pillar in the factory: 1. Update the manifest builder and run execution
+pipeline so that `factory/skills-provenance.json` is read and recorded in the
+context manifest for every attempt, identifying which skills were active or
+provided. 2. Expose the skill provenance details via environment variables or
+manifest records in the run evidence directory. 3. Add comprehensive unit
+tests in tests/test_factory.py covering skill provenance parsing and manifest
+integration. 4. Run python3 scripts/check and python3
+scripts/check-doc-references to ensure 100% test pass rates and valid
+citations, update WORK_LOG.md, and commit clean." It was also the CONTEXT
+row's named next increment. The prompt was written by the dedicated
+prompt-writing agent and executed by the primary agent from `dba883a`; it is
+kept in `CONTEXT_SKILLS_PROVENANCE_NEXT_PROMPT.md` and committed with this
+increment.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+grep -n "^from overseer.factory\|^import overseer.factory" overseer/skills.py
+```
+
+The request asked which skills were active or provided. The factory runs
+argument-vector commands, passes no skill to them, and cannot see whether a
+client loaded one, so the honest answer is recorded in three layers and never
+a fourth: the skills the file declares, the skills whose installed files match
+the recorded hashes at the start of the attempt, and the skills Overseer
+supplied to the attempt, which is none. Every skill carries
+`supplied_to_attempt` and `activation_observed` as false, and the file's own
+status and runtime text is copied only under `declared_` keys, as the file's
+statement. A file that says a skill is active does not make it so; a test
+holds that.
+
+A new module, `overseer/skills.py`, reads and validates the file. Its size is
+checked before it is opened, at most 64 KiB; a file with more than 32 skills is
+rejected whole, so a truncated list is never shown as the whole; a bad entry is
+rejected with its reason and its siblings are kept; only the listed fields are
+copied, an unknown top-level key is named and not copied, and the blueprint
+block, which holds a host path outside the repository, is not copied. The
+installed check opens no secret-named file, follows no symlink out of the
+installed directory, checks the size before it opens a file, and keeps only
+the outcome and, for a mismatch, the observed digest. The license file is not
+checked, because the provenance names no path for it.
+
+Every attempt writes `skills.json` into its run evidence, records one `skills`
+event, hands the worker `OVERSEER_SKILLS_PATH`,
+`OVERSEER_SKILLS_PROVENANCE_SHA256`, `OVERSEER_SKILLS_DECLARED`, and
+`OVERSEER_SKILLS_VERIFIED`, and its manifest carries a `skills` block with the
+digests, the counts, and the per-skill layers. The manifest's supplied list is
+unchanged, because no skill is supplied. A missing or malformed provenance file
+is recorded with its reason and does not block the attempt. The factory takes
+the provenance path as a keyword, so every test that asserts a skill fact
+builds its own file and installed directory. The other context tests use the
+repository's file and so read the host's installed skill files, read-only,
+without asserting what they find.
+
+Thirteen tests were added and the suite runs 310 tests. Each mutation was
+applied alone and failed the suite: M1 supplied derived from the status and M2
+activation copied from the file
+(`test_a_file_that_says_a_skill_is_active_does_not_make_it_so`); M3 the whole
+entry copied (that test and
+`test_only_the_listed_fields_of_the_provenance_are_copied`); M4 the size checked
+after reading, M7 a malformed file failing the attempt, and M9 the first 32
+skills kept
+(`test_a_provenance_file_that_cannot_be_used_is_recorded_and_the_attempt_runs`);
+M5 a symlink followed out of the skill
+(`test_a_missing_file_and_a_symlink_out_of_the_skill_are_not_verified`); M6 a
+path or dotted file key accepted and M8 rejected entries counted as declared
+(`test_a_bad_skill_entry_is_rejected_and_its_siblings_are_kept`); M10 verified
+when any file matches, which first survived and is now held by
+`test_a_skill_is_verified_only_when_every_file_matches`; M11 the skills left
+unsorted (two tests); M12 a supplied item added for skills (two tests); M13 an
+`OVERSEER_SKILLS_ACTIVE` variable (`test_the_attempt_sees_the_skill_provenance`).
+
+The CONTEXT row's next increment is now the handoff record of the blueprint.
+Every citation of `overseer/factory.py` and `overseer/skills.py` in the pillar
+map was re-derived from a line map of the old and the new code and checked by
+hand after the last edit; the checker resolves 166 references.
+
+### Review correction: a provenance file could block the job, and formats let a newline through
+
+A fresh reviewer read the increment against the prompt and found that a
+provenance file could raise out of the reader and block the job, and that the
+tests passed nine of ten of its mutations. The findings were checked by
+running them, and they were true.
+
+JSON allows a lone surrogate, and an `installed_path` made of one raised a
+`UnicodeEncodeError` from the path functions, which is not an `OSError`; the
+exception left the dispatch transaction open, the job stayed queued, and the
+next run raised from the database. Text that cannot be encoded as UTF-8 is now
+rejected as a field, the check of an installed file treats any `OSError` or
+`ValueError` as unreadable, and the factory catches anything the reader raises
+and records that the provenance could not be checked, so the attempt runs.
+
+The formats were matched with `match` and `$`, which accepts a trailing
+newline, so a skill named `alpha` and one named `alpha` with a newline both
+passed, and a revision kept its newline. Every format is now matched whole. A
+`schema_version` of `1.0` was accepted; only the integer 1 is. A rejected file
+key was copied into its reason, and every unknown top-level key name was
+listed whatever its length or characters; a rejected value is no longer
+echoed, and only plain key names are listed, at most 32, the rest counted. A
+top-level field or a revision that is not copied now says so in the record's
+notes. The read of the provenance file and of an installed file is now bounded
+as well as its size checked, so a file that grows after its size was taken is
+not read whole.
+
+Nine tests were added, and the test that every rejection has its own reason
+now expects the two bad file keys to share one, because the key is no longer
+echoed. Twenty-five mutations were applied one at a time, M1 to M13 of the
+prompt, with M4 rewritten as a read before the size check and M7 as a factory
+that fails on a bad file, the reviewer's ten, and three that undo the
+corrections; each fails the suite. The suite runs 319 tests. The citations of
+the factory and the reader were re-derived from a line map and checked by hand
+after the last edit; the checker resolves 166 references.

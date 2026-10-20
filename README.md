@@ -50,6 +50,18 @@ Downloads. The [original blueprint](docs/SOFTWARE_FACTORY_BLUEPRINT.md) is retai
 for history. [Selected third-party skills](docs/FACTORY_SKILLS.md) support prompt
 writing, bounded loops, and skill authoring. [Execution record and commands](docs/FACTORY_EXECUTION.md)
 distinguish the implemented local task runner from planned provider automation.
+At the start of every attempt the factory reads and validates
+`factory/skills-provenance.json`, checks each declared skill's installed files
+against the recorded SHA-256 hashes, and writes the result to `skills.json` in
+the run evidence. The worker receives `OVERSEER_SKILLS_PATH`,
+`OVERSEER_SKILLS_PROVENANCE_SHA256`, `OVERSEER_SKILLS_DECLARED`, and
+`OVERSEER_SKILLS_VERIFIED`, and the context manifest carries a `skills` block.
+Three layers are recorded: declared by the file, installed with matching bytes,
+and supplied to the attempt, which is always false because the factory runs
+argument-vector commands and passes no skill to them. Whether a client loaded a
+skill is not observed, and nothing records a skill as active. A missing or
+malformed provenance file is recorded with its reason and does not block the
+attempt.
 The [harness framework](docs/HARNESS_FRAMEWORK.md) maps that design onto the six
 harness pillars and the code that implements them.
 

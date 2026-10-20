@@ -3021,6 +3021,370 @@ class ContextTests(unittest.TestCase):
                          before['excerpt_bytes']
                          + (second['app.py'].get('excerpt') or {}).get('bytes', 0))
 
+    def install_skill(self, name, body=None):
+        """Install one skill file under the test root and return its declared entry."""
+        directory = self.root / 'installed' / name
+        directory.mkdir(parents=True, exist_ok=True)
+        data = (body or ('# %s\n' % name)).encode()
+        (directory / 'SKILL.md').write_bytes(data)
+        return {'name': name, 'source_path': 'skills/%s' % name,
+                'installed_path': str(directory),
+                'upstream_files_sha256': {'SKILL.md': hashlib.sha256(data).hexdigest()},
+                'license_sha256': 'a' * 64, 'status': 'installed_bytes_verified',
+                'runtime_activation': 'not_tested', 'runtime_discovery': 'observed'}
+
+    def provenance_file(self, skills, **top):
+        data = {'schema_version': 1, 'recorded_at': '2026-10-19T00:00:00+00:00',
+                'repository': 'https://example.invalid/skills', 'revision': 'b' * 40,
+                'license': 'MIT', 'skills': skills}
+        data.update(top)
+        path = self.root / 'provenance' / 'skills-provenance.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data) if not isinstance(data, str) else data)
+        return path
+
+    def skills_factory(self, provenance_path):
+        factory = Factory(self.root / 'skills-state' / 'jobs.sqlite3',
+                          skills_provenance=provenance_path)
+        self.addCleanup(factory.close)
+        return factory
+
+    def run_with_skills(self, provenance_path, name='skills', spec=None):
+        factory = self.skills_factory(provenance_path)
+        self.assertTrue(factory.submit(spec or self.command_spec(name)))
+        result = factory.run_one()
+        skills = json.loads((Path(result['evidence']) / 'skills.json').read_text())
+        self.skill_events = [row['detail'] for row in factory.db.execute(
+            "SELECT detail FROM events WHERE job_id=? AND state='skills'", (result['id'],))]
+        return result, skills
+
+    def test_declared_skills_with_matching_bytes_are_recorded_and_none_supplied(self):
+        from overseer.skills import provenance
+        path = self.provenance_file([self.install_skill('beta'), self.install_skill('alpha')])
+        record = provenance(path)
+        self.assertTrue(record['valid'])
+        self.assertEqual((record['declared_count'], record['installed_verified_count'],
+                          record['supplied_count'], record['activation_observed_count']),
+                         (2, 2, 0, 0))
+        self.assertEqual([skill['name'] for skill in record['skills']], ['alpha', 'beta'])
+        for skill in record['skills']:
+            self.assertFalse(skill['supplied_to_attempt'])
+            self.assertFalse(skill['activation_observed'])
+            self.assertEqual([item['outcome'] for item in skill['files']], ['match'])
+        self.assertEqual(record['sha256'], hashlib.sha256(path.read_bytes()).hexdigest())
+
+    def test_a_mismatched_installed_file_is_not_verified(self):
+        from overseer.skills import provenance
+        entry = self.install_skill('alpha')
+        (Path(entry['installed_path']) / 'SKILL.md').write_text('changed\n')
+        record = provenance(self.provenance_file([entry, self.install_skill('beta')]))
+        alpha = record['skills'][0]
+        self.assertEqual(alpha['files'][0]['outcome'], 'mismatch')
+        self.assertEqual(alpha['files'][0]['observed'],
+                         hashlib.sha256(b'changed\n').hexdigest())
+        self.assertFalse(alpha['installed_verified'])
+        self.assertEqual(record['installed_verified_count'], 1)
+
+    def test_a_skill_is_verified_only_when_every_file_matches(self):
+        from overseer.skills import provenance
+        entry = self.install_skill('alpha')
+        extra = Path(entry['installed_path']) / 'README.md'
+        extra.write_text('readme\n')
+        entry['upstream_files_sha256']['README.md'] = hashlib.sha256(b'other\n').hexdigest()
+        skill = provenance(self.provenance_file([entry]))['skills'][0]
+        self.assertEqual([(item['name'], item['outcome']) for item in skill['files']],
+                         [('README.md', 'mismatch'), ('SKILL.md', 'match')])
+        self.assertFalse(skill['installed_verified'])
+
+    def test_a_missing_file_and_a_symlink_out_of_the_skill_are_not_verified(self):
+        from overseer.skills import provenance
+        missing = self.install_skill('alpha')
+        (Path(missing['installed_path']) / 'SKILL.md').unlink()
+        outside = self.install_skill('beta')
+        secret = self.root / 'elsewhere.txt'
+        secret.write_text('OUTSIDE_CONTENT\n')
+        link = Path(outside['installed_path']) / 'SKILL.md'
+        link.unlink()
+        link.symlink_to(secret)
+        outside['upstream_files_sha256'] = {
+            'SKILL.md': hashlib.sha256(b'OUTSIDE_CONTENT\n').hexdigest()}
+        path = self.provenance_file([missing, outside])
+        record = provenance(path)
+        outcomes = {skill['name']: skill['files'][0]['outcome'] for skill in record['skills']}
+        self.assertEqual(outcomes, {'alpha': 'missing', 'beta': 'outside'})
+        self.assertEqual(record['installed_verified_count'], 0)
+        result, skills = self.run_with_skills(path, 'skills-outside')
+        self.assertNotIn('OUTSIDE_CONTENT', json.dumps(skills))
+
+    def test_a_provenance_file_that_cannot_be_used_is_recorded_and_the_attempt_runs(self):
+        from overseer.skills import MAX_PROVENANCE_BYTES, MAX_SKILLS, provenance
+        cases = {
+            'missing': None,
+            'json': 'not json',
+            'object': '[1, 2]',
+            'schema': json.dumps({'schema_version': 2, 'skills': []}),
+            'list': json.dumps({'schema_version': 1, 'skills': {}}),
+            'many': json.dumps({'schema_version': 1,
+                                'skills': [{'name': 's%d' % i} for i in range(MAX_SKILLS + 1)]}),
+            'large': json.dumps({'schema_version': 1, 'skills': [],
+                                 'pad': 'x' * MAX_PROVENANCE_BYTES}),
+        }
+        reasons = set()
+        for name, text in cases.items():
+            path = self.root / 'bad' / ('%s.json' % name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if text is not None:
+                path.write_text(text)
+            record = provenance(path)
+            self.assertFalse(record['valid'], name)
+            self.assertEqual(record['skills'], [], name)
+            reasons.add(record['reason'])
+            result, skills = self.run_with_skills(path, 'skills-bad-%s' % name)
+            self.assertEqual(result['state'], 'passed', name)
+            self.assertEqual(skills['reason'], record['reason'])
+            self.assertEqual(self.manifest_of(result)['skills']['reason'], record['reason'])
+            self.assertEqual(self.skill_events,
+                             ['skill provenance not recorded: %s' % record['reason']])
+        self.assertEqual(len(reasons), len(cases))
+        large = self.root / 'bad' / 'large.json'
+        with patch('pathlib.Path.read_bytes', side_effect=AssertionError('read')) as read:
+            self.assertIn('larger than', provenance(large)['reason'])
+        read.assert_not_called()
+
+    def test_a_bad_skill_entry_is_rejected_and_its_siblings_are_kept(self):
+        from overseer.skills import provenance
+        good = self.install_skill('good')
+        bad = []
+        for change in ({'name': 'Bad Name'}, {'name': 'good'},
+                       {'upstream_files_sha256': {'../x': 'c' * 64}},
+                       {'upstream_files_sha256': {'.env': 'c' * 64}},
+                       {'upstream_files_sha256': {'SKILL.md': 'abc'}},
+                       {'installed_path': 'relative/path'}, {'status': None},
+                       {'source_path': 'a\nb'}):
+            entry = dict(self.install_skill('spare'), **change)
+            if 'name' not in change:
+                entry['name'] = 'spare-%d' % len(bad)
+            bad.append(entry)
+        record = provenance(self.provenance_file([good] + bad))
+        self.assertEqual([skill['name'] for skill in record['skills']], ['good'])
+        self.assertEqual(record['declared_count'], 1)
+        self.assertEqual(record['rejected_count'], len(bad))
+        self.assertEqual([item['index'] for item in record['rejected']],
+                         list(range(1, len(bad) + 1)))
+        reasons = [item['reason'] for item in record['rejected']]
+        # The two bad file keys share one reason: the rejected key is not echoed.
+        self.assertEqual(reasons[2], reasons[3])
+        self.assertEqual(len(set(reasons)), len(bad) - 1)
+        self.assertIn('declared twice', reasons[1])
+        self.assertNotIn('../x', json.dumps(record))
+
+    def test_only_the_listed_fields_of_the_provenance_are_copied(self):
+        entry = dict(self.install_skill('alpha'), token='UNIQUE_SECRET')
+        path = self.provenance_file([entry], api_key='UNIQUE_SECRET2',
+                                    blueprint={'original_path': '/home/x/UNIQUE_PATH'})
+        spec = self.command_spec('skills-fields')
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import os, json; from pathlib import Path; "
+                                  "Path('skills_env.json').write_text(json.dumps(dict(os.environ)))"]
+        spec['checks'] = [[sys.executable, '-c', 'pass']]
+        result, skills = self.run_with_skills(path, spec=spec)
+        environment = (self.root / 'skills_env.json').read_text()
+        context = (Path(result['evidence']) / 'context.json').read_text()
+        for text in (json.dumps(skills), context, environment):
+            for secret in ('UNIQUE_SECRET', 'UNIQUE_PATH'):
+                self.assertNotIn(secret, text)
+        self.assertEqual(skills['other_keys'], ['api_key', 'blueprint'])
+
+    def test_a_file_that_says_a_skill_is_active_does_not_make_it_so(self):
+        entry = dict(self.install_skill('alpha'), status='active', runtime_activation='loaded')
+        result, skills = self.run_with_skills(self.provenance_file([entry]), 'skills-active')
+        skill = skills['skills'][0]
+        self.assertFalse(skill['supplied_to_attempt'])
+        self.assertFalse(skill['activation_observed'])
+        self.assertEqual((skill['declared_status'], skill['declared_runtime_activation']),
+                         ('active', 'loaded'))
+        self.assertNotIn('status', skill)
+        self.assertNotIn('runtime_activation', skill)
+        manifest = self.manifest_of(result)['skills']
+        self.assertEqual((manifest['supplied_count'], manifest['activation_observed_count']),
+                         (0, 0))
+
+    def test_the_attempt_sees_the_skill_provenance(self):
+        path = self.provenance_file([self.install_skill('alpha'), self.install_skill('beta')])
+        (Path(self.install_skill('beta')['installed_path']) / 'SKILL.md').write_text('moved\n')
+        spec = self.command_spec('skills-env')
+        spec['implementation'] = [sys.executable, '-c',
+                                  "import os, json; from pathlib import Path; "
+                                  "Path('skills_env.json').write_text(json.dumps({k: v for k, v "
+                                  "in os.environ.items() if k.startswith('OVERSEER_SKILLS')}))"]
+        spec['checks'] = [[sys.executable, '-c', 'pass']]
+        result, skills = self.run_with_skills(path, spec=spec)
+        seen = json.loads((self.root / 'skills_env.json').read_text())
+        manifest = self.manifest_of(result)['skills']
+        self.assertEqual(sorted(seen), ['OVERSEER_SKILLS_DECLARED', 'OVERSEER_SKILLS_PATH',
+                                        'OVERSEER_SKILLS_PROVENANCE_SHA256',
+                                        'OVERSEER_SKILLS_VERIFIED'])
+        self.assertEqual(seen['OVERSEER_SKILLS_PATH'], manifest['path'])
+        self.assertEqual(seen['OVERSEER_SKILLS_DECLARED'], '2')
+        self.assertEqual(seen['OVERSEER_SKILLS_VERIFIED'], '1')
+        self.assertEqual(seen['OVERSEER_SKILLS_PROVENANCE_SHA256'], skills['sha256'])
+        self.assertEqual(manifest['sha256'],
+                         hashlib.sha256(Path(manifest['path']).read_bytes()).hexdigest())
+        self.assertEqual(manifest['provenance_sha256'], skills['sha256'])
+        self.assertEqual(self.skill_events,
+                         ['2 skills declared, 1 installed bytes verified, none supplied'])
+
+    def test_the_skill_provenance_is_deterministic_and_sorted(self):
+        from overseer.skills import provenance
+        path = self.provenance_file([self.install_skill('zeta'), self.install_skill('alpha'),
+                                     self.install_skill('mid')])
+        first = provenance(path)
+        self.assertEqual(json.dumps(first, sort_keys=True),
+                         json.dumps(provenance(path), sort_keys=True))
+        self.assertEqual([skill['name'] for skill in first['skills']], ['alpha', 'mid', 'zeta'])
+
+    def test_the_manifest_carries_the_skills_and_keeps_its_supplied_list(self):
+        path = self.provenance_file([self.install_skill('alpha')])
+        result, skills = self.run_with_skills(path, 'skills-manifest')
+        manifest = self.manifest_of(result)
+        block = manifest['skills']
+        for field in ('path', 'sha256', 'provenance_path', 'provenance_sha256', 'present',
+                      'valid', 'reason', 'declared_count', 'installed_verified_count',
+                      'supplied_count', 'activation_observed_count', 'rejected_count',
+                      'skills', 'note'):
+            self.assertIn(field, block)
+        self.assertEqual(block['skills'], [{'name': 'alpha', 'installed_verified': True,
+                                            'supplied_to_attempt': False,
+                                            'activation_observed': False}])
+        self.assertNotIn('skills', [item['item'] for item in manifest['supplied']])
+        self.assertIn('supplies no skill', block['note'])
+
+    def test_the_repository_provenance_parses(self):
+        from overseer.factory import SKILLS_PROVENANCE
+        from overseer.skills import provenance
+        record = provenance(SKILLS_PROVENANCE)
+        self.assertTrue(record['valid'])
+        self.assertEqual(record['declared_count'], 3)
+        self.assertEqual(record['rejected_count'], 0)
+
+    def test_a_run_leaves_the_provenance_and_the_installed_files_unchanged(self):
+        entry = self.install_skill('alpha')
+        path = self.provenance_file([entry])
+        installed = Path(entry['installed_path']) / 'SKILL.md'
+        before = (path.read_bytes(), installed.read_bytes())
+        self.run_with_skills(path, 'skills-unchanged')
+        self.assertEqual((path.read_bytes(), installed.read_bytes()), before)
+
+    def test_text_that_cannot_be_a_path_is_rejected_and_never_raises(self):
+        from overseer.skills import provenance
+        entry = dict(self.install_skill('alpha'), installed_path='/tmp/\ud800x')
+        path = self.root / 'provenance' / 'skills-provenance.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'schema_version': 1, 'skills': [entry]}))
+        record = provenance(path)
+        self.assertTrue(record['valid'])
+        self.assertEqual(record['declared_count'], 0)
+        self.assertEqual(record['rejected_count'], 1)
+
+    def test_a_reader_that_raises_does_not_block_the_attempt(self):
+        path = self.provenance_file([self.install_skill('alpha')])
+        factory = self.skills_factory(path)
+        self.assertTrue(factory.submit(self.command_spec('skills-raise')))
+        with patch('overseer.factory.skill_provenance', side_effect=UnicodeEncodeError(
+                'utf-8', 'x', 0, 1, 'bad')):
+            result = factory.run_one()
+        self.assertEqual(result['state'], 'passed')
+        skills = json.loads((Path(result['evidence']) / 'skills.json').read_text())
+        self.assertFalse(skills['valid'])
+        self.assertEqual(skills['reason'],
+                         'the skill provenance could not be checked: UnicodeEncodeError')
+        self.assertEqual(self.manifest_of(result)['skills']['reason'], skills['reason'])
+        self.assertIsNone(factory.run_one())
+
+    def test_a_trailing_newline_never_passes_a_format(self):
+        from overseer.skills import provenance
+        good = self.install_skill('good')
+        name = dict(self.install_skill('alpha'), name='alpha\n')
+        key = self.install_skill('beta')
+        key['upstream_files_sha256'] = {'SKILL.md\n': key['upstream_files_sha256']['SKILL.md']}
+        digest = self.install_skill('gamma')
+        digest['upstream_files_sha256']['SKILL.md'] += '\n'
+        license_hash = dict(self.install_skill('delta'), license_sha256='a' * 64 + '\n')
+        record = provenance(self.provenance_file([good, name, key, digest, license_hash],
+                                                 revision='b' * 40 + '\n'))
+        self.assertEqual([skill['name'] for skill in record['skills']], ['good'])
+        self.assertEqual(record['rejected_count'], 4)
+        self.assertIsNone(record['revision'])
+        self.assertIn('the revision is not 40 lowercase hex characters and was not copied',
+                      record['notes'])
+
+    def test_the_schema_version_must_be_the_integer_one(self):
+        from overseer.skills import provenance
+        for value in (True, 1.0, '1'):
+            record = provenance(self.provenance_file([], schema_version=value))
+            self.assertFalse(record['valid'], value)
+
+    def test_a_top_level_field_is_copied_only_as_short_text(self):
+        from overseer.skills import provenance
+        record = provenance(self.provenance_file([], repository='a\nb', license=5,
+                                                 recorded_at='x' * 300))
+        self.assertEqual((record['repository'], record['license'], record['recorded_at']),
+                         (None, None, None))
+        self.assertEqual(len([note for note in record['notes'] if 'not copied' in note]), 3)
+
+    def test_unknown_keys_are_listed_only_when_plain_and_bounded(self):
+        from overseer.skills import MAX_OTHER_KEYS, provenance
+        # A key that is not plain is counted, never listed.
+        extra = {'a-plain': 1, 'sk-SECRET\x01': 1, 'x' * 200: 1}
+        record = provenance(self.provenance_file([], **extra))
+        self.assertEqual(record['other_keys'], ['a-plain'])
+        self.assertEqual(record['other_keys_unlisted'], 2)
+        self.assertNotIn('SECRET', json.dumps(record))
+        many = {'k%02d' % index: 1 for index in range(MAX_OTHER_KEYS + 3)}
+        record = provenance(self.provenance_file([], **many))
+        self.assertEqual(len(record['other_keys']), MAX_OTHER_KEYS)
+        self.assertEqual(record['other_keys_unlisted'], 3)
+
+    def test_the_installed_check_withholds_secrets_directories_and_large_files(self):
+        from overseer.skills import MAX_SKILL_FILE_BYTES, provenance
+        entry = self.install_skill('alpha')
+        directory = Path(entry['installed_path'])
+        (directory / 'id_rsa').write_text('PRIVATE_KEY_TEXT\n')
+        (directory / 'docs').mkdir()
+        (directory / 'big.md').write_bytes(b'x' * (MAX_SKILL_FILE_BYTES + 1))
+        entry['upstream_files_sha256'].update({
+            'id_rsa': hashlib.sha256(b'PRIVATE_KEY_TEXT\n').hexdigest(),
+            'docs': 'c' * 64,
+            'big.md': hashlib.sha256(b'x' * (MAX_SKILL_FILE_BYTES + 1)).hexdigest()})
+        with patch('overseer.skills.open', create=True, wraps=open) as opened:
+            skill = provenance(self.provenance_file([entry]))['skills'][0]
+        outcomes = {item['name']: item['outcome'] for item in skill['files']}
+        self.assertEqual(outcomes, {'SKILL.md': 'match', 'big.md': 'too_large',
+                                    'docs': 'not_a_file', 'id_rsa': 'secret_name'})
+        self.assertFalse(skill['installed_verified'])
+        opened_paths = [str(call.args[0]) for call in opened.call_args_list]
+        self.assertFalse(any(name.endswith(('id_rsa', 'big.md')) for name in opened_paths))
+
+    def test_a_large_provenance_file_is_never_opened(self):
+        from overseer.skills import MAX_PROVENANCE_BYTES, provenance
+        path = self.root / 'provenance' / 'large.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'schema_version': 1, 'skills': [],
+                                    'pad': 'x' * MAX_PROVENANCE_BYTES}))
+        with patch('builtins.open', side_effect=AssertionError('opened')), \
+                patch('io.open', side_effect=AssertionError('opened')):
+            self.assertIn('larger than', provenance(path)['reason'])
+
+    def test_the_rejected_list_is_bounded(self):
+        from overseer import skills
+        bad = [{'name': 'Bad %d' % index} for index in range(5)]
+        with patch.object(skills, 'MAX_REJECTED', 2):
+            record = skills.provenance(self.provenance_file(bad))
+        self.assertEqual(len(record['rejected']), 2)
+        self.assertEqual(record['rejected_count'], 5)
+        self.assertTrue(record['rejected_truncated'])
+
+
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""
 

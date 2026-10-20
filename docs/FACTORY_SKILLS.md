@@ -50,7 +50,9 @@ remain authoritative. Skills do not add permission to run external effects.
 Use the loop contract's objective, preservation constraints, exact checks, and stop
 condition in existing task records. Keep attempt budgets, dispatch ownership,
 protected verification, and model eligibility in the controller. The current local
-runner does not automatically load or enforce these skills.
+runner does not automatically load or enforce these skills. The factory now
+records the provenance and checks the installed bytes for each attempt, and it
+still loads and supplies none of them.
 
 Before expanding use, test one realistic request and one near-miss for each skill
 in a fresh session, inspect actual activation, then assess the produced artifact
