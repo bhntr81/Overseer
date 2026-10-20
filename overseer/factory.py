@@ -7,6 +7,7 @@ from overseer.codemap import summary as codebase_summary
 from overseer.isolation import run_isolation_probe
 from overseer.skills import provenance as skill_provenance
 from overseer.skills import unchecked as unchecked_provenance
+from overseer import workdiff
 import hashlib
 import json
 import os
@@ -1057,7 +1058,7 @@ class Factory:
         return env
 
     def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
-                          codebase=None, skills=None):
+                          codebase=None, skills=None, workspace_diff=None):
         """Record what the controller supplied for this attempt, and why."""
         contract = spec.get('contract') or {}
         acceptance_ids = list(contract.get('acceptance_ids') or [])
@@ -1103,6 +1104,19 @@ class Factory:
                 'log': result.get('log'),
             })
         acceptance_source = 'contract' if acceptance_ids else 'absent'
+        # The candidate revision is observed only when the attempt moved HEAD;
+        # a worktree that was not committed is not a revision.
+        receipt = (workspace_diff or {}).get('receipt') or {}
+        if receipt.get('captured') and receipt.get('head_moved') and receipt.get('head_after'):
+            candidate = {'value': receipt['head_after'],
+                         'source': 'git rev-parse HEAD after the implementation command; HEAD '
+                                   'moved during the attempt'}
+        else:
+            candidate = {'value': None,
+                         'source': 'unmeasured: HEAD did not move during the attempt, and an '
+                                   'uncommitted worktree is not a revision'
+                                   if receipt.get('captured') else
+                                   'unmeasured: no workspace diff was captured'}
         supplied = [
             {'item': 'objective',
              'source': "task specification field 'objective'",
@@ -1261,8 +1275,35 @@ class Factory:
                 'sha256': (codebase or {}).get('sha256'),
             },
             'skills': self._manifest_skills(skills),
-            'unmeasured': ['tokens', 'cost_usd', 'candidate_revision', 'remaining_budget',
-                           'unresolved_effects', 'environment_digest'],
+            'workspace_diff': self._manifest_diff(workspace_diff),
+            'candidate_revision': candidate,
+            'unmeasured': [name for name in ('tokens', 'cost_usd', 'candidate_revision',
+                                             'remaining_budget', 'unresolved_effects',
+                                             'environment_digest')
+                           if name != 'candidate_revision' or candidate['value'] is None],
+        }
+
+    @staticmethod
+    def _manifest_diff(workspace_diff):
+        """Return the workspace_diff block of the manifest, as the receipt records it."""
+        receipt = (workspace_diff or {}).get('receipt') or {}
+        if not receipt.get('captured'):
+            return {'captured': False,
+                    'reason': receipt.get('reason') or 'no workspace diff was captured'}
+        return {
+            'captured': True, 'reason': None,
+            'path': workspace_diff.get('path'), 'sha256': workspace_diff.get('sha256'),
+            'patch_path': workspace_diff.get('patch_path'),
+            'patch_sha256': workspace_diff.get('patch_sha256'),
+            'head_before': receipt.get('head_before'), 'head_after': receipt.get('head_after'),
+            'head_moved': receipt.get('head_moved'), 'stats': receipt.get('stats'),
+            'paths': receipt.get('paths'),
+            'files': [{key: entry.get(key) for key in
+                       ('path', 'status', 'content', 'insertions', 'deletions')}
+                      for entry in (receipt.get('files') or [])[:workdiff.MAX_LISTED]],
+            'pre_existing': receipt.get('pre_existing'),
+            'changed_by_checks': receipt.get('changed_by_checks'),
+            'note': receipt.get('note'),
         }
 
     @staticmethod
@@ -1289,6 +1330,63 @@ class Factory:
                        for skill in record.get('skills') or []],
             'note': record.get('note'),
         }
+
+    @staticmethod
+    def _diff_step(call, *arguments):
+        """Run one step of the workspace diff; any exception becomes a recorded reason.
+
+        Only the exception's type name is kept, because its message may carry a
+        path or content. The capture is context: it never changes the attempt.
+        """
+        try:
+            return call(*arguments)
+        except Exception as error:  # the capture is evidence, never a gate
+            return workdiff.unchecked('the workspace diff could not be captured: %s'
+                                      % type(error).__name__)
+
+    def _diff_capture(self, before, workspace):
+        """Return the patch, the receipt, and the after snapshot of the attempt."""
+        try:
+            return workdiff.capture(before, workspace)
+        except Exception as error:  # the capture is evidence, never a gate
+            return '', workdiff.unchecked('the workspace diff could not be captured: %s'
+                                          % type(error).__name__), None
+
+    def _record_diff(self, job_id, evidence, spec, results, patch, receipt, after):
+        """Write diff.patch and diff.json into the run evidence, and return their digests."""
+        mode = spec.get('mode') or 'command'
+        if mode != 'command':
+            receipt = workdiff.unchecked('the %s mode runs in the evidence directory, not a '
+                                         'workspace' % mode)
+        elif receipt is None:
+            receipt = workdiff.unchecked('the implementation command did not run')
+        elif receipt.get('captured') and len(results) > 1 and after is not None:
+            receipt['changed_by_checks'] = self._diff_step(workdiff.changed_since, after,
+                                                           spec['workspace'])
+            if isinstance(receipt['changed_by_checks'], dict) \
+                    and receipt['changed_by_checks'].get('captured') is False:
+                receipt['changed_by_checks'] = {'reason': receipt['changed_by_checks']['reason']}
+        info = {'receipt': receipt}
+        if receipt.get('captured'):
+            patch_path = evidence / 'diff.patch'
+            patch_path.write_bytes(patch.encode('utf-8'))
+            info['patch_path'] = str(patch_path)
+            info['patch_sha256'] = hashlib.sha256(patch_path.read_bytes()).hexdigest()
+        receipt_path = evidence / 'diff.json'
+        receipt_path.write_text(json.dumps(receipt, indent=2))
+        info['path'] = str(receipt_path)
+        info['sha256'] = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+        with self.db:
+            if receipt.get('captured'):
+                stats = receipt['stats']
+                self.event(job_id, 'workspace_diff',
+                           '%d files changed, %d in the patch, +%d -%d'
+                           % (stats['files_changed'], stats['files_in_patch'],
+                              stats['insertions'], stats['deletions']))
+            else:
+                self.event(job_id, 'workspace_diff',
+                           'no workspace diff captured: %s' % receipt.get('reason'))
+        return info
 
     def cancel(self, job_id):
         with self.db:
@@ -2011,6 +2109,8 @@ class Factory:
             results = []
             final = 'failed'
             detail = 'not completed'
+            diff_before = diff_receipt = diff_after = None
+            diff_patch = ''
             fixture_verification = None
             fake_verification = None
             try:
@@ -2037,7 +2137,15 @@ class Factory:
                     for index, argv in enumerate([spec['implementation'], *spec['checks']]):
                         if index:
                             self.transition(job_id, 'checking', f'acceptance command {index}')
+                        if index == 0:
+                            # The before snapshot is taken immediately before the
+                            # implementation command, so a change made earlier is
+                            # not attributed to the attempt.
+                            diff_before = self._diff_step(workdiff.snapshot, spec['workspace'])
                         result = self.execute(job_id, argv, spec['workspace'], spec['timeout_seconds'], evidence/f'{index:02d}.log', env=child_env)
+                        if index == 0:
+                            diff_patch, diff_receipt, diff_after = self._diff_capture(
+                                diff_before, spec['workspace'])
                         result['stage'] = 'implementation' if index == 0 else 'acceptance'
                         results.append(result)
                         (evidence/'results.json').write_text(json.dumps(results, indent=2))
@@ -2048,12 +2156,20 @@ class Factory:
                         final, detail = 'passed', 'implementation and all acceptance commands exited successfully; product review still required'
             except (OSError, ValueError) as error:
                 detail = f'command setup failed: {error}'
+                if diff_before is not None and diff_receipt is None:
+                    diff_patch, diff_receipt, diff_after = self._diff_capture(
+                        diff_before, spec['workspace'])
             except BaseException:
                 self.transition(job_id, 'needs_reconciliation', 'worker interrupted; inspect evidence before any retry')
                 raise
+            diff_info = self._record_diff(job_id, evidence, spec, results, diff_patch,
+                                          diff_receipt, diff_after)
             summary = {'id': job_id, 'run_id': run_id, 'state': final,
                 'detail': detail, 'spec_hash': row['spec_hash'], 'results': results,
                 'tokens': None, 'cost_usd': None}
+            if diff_info.get('path'):
+                summary['workspace_diff'] = {key: diff_info.get(key) for key in
+                                             ('path', 'sha256', 'patch_path', 'patch_sha256')}
             if fixture_verification is not None:
                 summary['fixture_verification'] = fixture_verification
             if fake_verification is not None:
@@ -2064,7 +2180,7 @@ class Factory:
             epoch, _ = self._controller_values()
             manifest = self._context_manifest(
                 job_id, run_id, spec, row['spec_hash'], results, epoch, recall_info,
-                codebase_info, skills_info)
+                codebase_info, skills_info, diff_info)
             manifest_path = evidence / 'context.json'
             manifest_path.write_text(json.dumps(manifest, indent=2))
             manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()

@@ -3385,6 +3385,307 @@ class ContextTests(unittest.TestCase):
         self.assertTrue(record['rejected_truncated'])
 
 
+
+class WorkspaceDiffTests(unittest.TestCase):
+    """The patch receipt of what an attempt left in its git workspace."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.repo = self.base / 'repo'
+        self.repo.mkdir()
+        self.git('init', '--quiet')
+        self.files = {'keep.txt': b'a\nb\nc\n', 'gone.txt': b'gone\n',
+                      'nonl.txt': b'no newline', 'pkg/mod.py': b'def f():\n    return 1\n'}
+        for name, data in self.files.items():
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.commit('base')
+        self.f = Factory(self.base / 'state' / 'jobs.sqlite3')
+        self.addCleanup(self.f.close)
+
+    def git(self, *arguments, cwd=None):
+        result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
+                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                timeout=60)
+        return result
+
+    def commit(self, message):
+        self.git('add', '-A')
+        self.git('commit', '--quiet', '-m', message)
+
+    def spec(self, name, code, checks=None, timeout=5):
+        spec = {'id': name, 'objective': 'change the workspace', 'workspace': str(self.repo),
+                'timeout_seconds': timeout, 'implementation': [sys.executable, '-c', code],
+                'checks': checks or [[sys.executable, '-c', 'pass']]}
+        return attach_contract(spec)
+
+    def run_spec(self, spec, factory=None):
+        factory = factory or self.f
+        self.assertTrue(factory.submit(spec))
+        result = factory.run_one()
+        evidence = Path(result['evidence'])
+        receipt = json.loads((evidence / 'diff.json').read_text())
+        patch_path = evidence / 'diff.patch'
+        patch = patch_path.read_bytes() if patch_path.exists() else None
+        return result, receipt, patch
+
+    def check_counts(self, receipt):
+        stats = receipt['stats']
+        self.assertEqual(stats['files_changed'],
+                         stats['files_in_patch'] + sum(stats['files_withheld'].values())
+                         + stats['files_omitted'] + stats['files_beyond_bound'])
+        in_patch = [entry for entry in receipt['files'] if entry['content'] == 'in_patch']
+        self.assertEqual(stats['insertions'], sum(entry['insertions'] for entry in in_patch))
+        self.assertEqual(stats['deletions'], sum(entry['deletions'] for entry in in_patch))
+        # The counts describe the files in the patch; a withheld file carries none.
+        for entry in receipt['files']:
+            if entry['content'] != 'in_patch':
+                self.assertEqual(entry['insertions'], 0, entry['path'])
+                self.assertEqual(entry['deletions'], 0, entry['path'])
+        return {entry['path']: entry for entry in receipt['files']}
+
+    def applies(self, patch, before_files, after_root, paths):
+        """Apply a patch to a copy of the before state; return whether it reproduces after."""
+        copy = self.base / ('copy-%d' % len(list(self.base.iterdir())))
+        copy.mkdir()
+        self.git('init', '--quiet', cwd=copy)
+        for name, data in before_files.items():
+            path = copy / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        (copy / 'p.patch').write_bytes(patch)
+        check = self.git('apply', '--check', 'p.patch', cwd=copy)
+        self.assertEqual(check.returncode, 0, check.stderr)
+        self.assertEqual(self.git('apply', 'p.patch', cwd=copy).returncode, 0)
+        for name in paths:
+            mine, theirs = copy / name, Path(after_root) / name
+            self.assertEqual(mine.exists(), theirs.exists(), name)
+            if theirs.exists():
+                self.assertEqual(mine.read_bytes(), theirs.read_bytes(), name)
+
+    def test_a_modified_added_and_deleted_file_are_in_an_exact_patch(self):
+        code = ("from pathlib import Path; Path('keep.txt').write_text('a\\nB\\nc\\n'); "
+                "Path('new.txt').write_text('hello\\n'); Path('gone.txt').unlink()")
+        result, receipt, patch = self.run_spec(self.spec('three', code))
+        self.assertEqual(result['state'], 'passed')
+        files = self.check_counts(receipt)
+        self.assertEqual({name: entry['status'] for name, entry in files.items()},
+                         {'keep.txt': 'modified', 'new.txt': 'added', 'gone.txt': 'deleted'})
+        self.assertTrue(receipt['stats']['complete'])
+        self.assertEqual((receipt['stats']['insertions'], receipt['stats']['deletions']), (2, 2))
+        self.assertEqual(receipt['stats']['patch_sha256'], hashlib.sha256(patch).hexdigest())
+        self.applies(patch, self.files, self.repo, ['keep.txt', 'new.txt', 'gone.txt'])
+
+    def test_a_file_without_a_final_newline_carries_the_marker(self):
+        code = "from pathlib import Path; Path('nonl.txt').write_text('no newline here')"
+        _, receipt, patch = self.run_spec(self.spec('nonl', code))
+        self.assertIn(b'\\ No newline at end of file\n', patch)
+        self.applies(patch, self.files, self.repo, ['nonl.txt'])
+
+    def test_a_change_made_before_the_attempt_is_not_attributed_to_it(self):
+        (self.repo / 'keep.txt').write_text('a\nUSER EDIT\nc\n')
+        (self.repo / 'mine.txt').write_text('user notes\n')
+        (self.repo / 'pkg/mod.py').write_text('def f():\n    return 2  # user\n')
+        before = {name: (self.repo / name).read_bytes() for name in ('keep.txt', 'pkg/mod.py')}
+        code = ("from pathlib import Path; p = Path('pkg/mod.py'); "
+                "p.write_text(p.read_text() + 'def g():\\n    return 3\\n')")
+        _, receipt, patch = self.run_spec(self.spec('pre', code))
+        files = self.check_counts(receipt)
+        self.assertEqual(list(files), ['pkg/mod.py'])
+        self.assertEqual(receipt['pre_existing']['count'], 2)
+        self.assertEqual(sorted(receipt['pre_existing']['paths']), ['keep.txt', 'mine.txt'])
+        self.assertNotIn(b'USER EDIT', patch)
+        self.assertNotIn(b'user notes', patch)
+        changed_lines = [line for line in patch.splitlines()
+                         if line[:1] in (b'+', b'-') and not line.startswith((b'+++', b'---'))]
+        self.assertEqual(changed_lines, [b'+def g():', b'+    return 3'])
+        self.applies(patch, {**self.files, **before}, self.repo, ['pkg/mod.py'])
+
+    def test_a_commit_made_by_the_attempt_is_in_the_patch_and_names_the_revision(self):
+        code = ("import subprocess; from pathlib import Path; Path('keep.txt').write_text('z\\n'); "
+                "subprocess.run(['git', '-c', 'user.email=t@e', '-c', 'user.name=t', 'commit', "
+                "'-qam', 'attempt'], check=True)")
+        result, receipt, patch = self.run_spec(self.spec('commit', code))
+        head = self.git('rev-parse', 'HEAD').stdout.decode().strip()
+        self.assertTrue(receipt['head_moved'])
+        self.assertEqual(receipt['head_after'], head)
+        self.assertIn(b'+z', patch)
+        manifest = json.loads((Path(result['evidence']) / 'context.json').read_text())
+        self.assertEqual(manifest['candidate_revision']['value'], head)
+        self.assertNotIn('candidate_revision', manifest['unmeasured'])
+        _, _, _ = self.run_spec(self.spec('nocommit', "open('keep.txt', 'a').write('y\\n')"))
+        later = self.f.inspect('nocommit')
+        manifest = json.loads((Path(later['evidence']) / 'context.json').read_text())
+        self.assertIsNone(manifest['candidate_revision']['value'])
+        self.assertIn('candidate_revision', manifest['unmeasured'])
+
+    def test_a_binary_file_and_a_symlink_are_withheld_with_the_reason(self):
+        outside = self.base / 'outside.txt'
+        outside.write_text('OUTSIDE_TARGET_CONTENT\n')
+        code = ("import os; from pathlib import Path; Path('data.bin').write_bytes(b'\\x00\\x01'); "
+                "os.symlink(%r, 'link')" % str(outside))
+        _, receipt, patch = self.run_spec(self.spec('binary', code))
+        files = self.check_counts(receipt)
+        self.assertEqual(files['data.bin']['content'], 'binary')
+        self.assertEqual(files['data.bin']['after_sha256'], hashlib.sha256(b'\x00\x01').hexdigest())
+        self.assertEqual(files['link']['content'], 'symlink')
+        self.assertFalse(receipt['stats']['complete'])
+        text = json.dumps(receipt) + patch.decode()
+        self.assertNotIn('OUTSIDE_TARGET_CONTENT', text)
+        self.assertNotIn(str(outside), text)
+
+    def test_a_secret_named_file_is_listed_without_content_or_hash(self):
+        code = ("from pathlib import Path; Path('config').mkdir(); "
+                "Path('config/secrets.json').write_text('UNIQUE_' + 'SECRET_VALUE')")
+        result, receipt, patch = self.run_spec(self.spec('secret', code))
+        files = self.check_counts(receipt)
+        self.assertEqual(files['config/secrets.json']['content'], 'secret_name')
+        digest = hashlib.sha256(b'UNIQUE_SECRET_VALUE').hexdigest()
+        evidence = Path(result['evidence'])
+        events = ' '.join(row['detail'] for row in self.f.db.execute(
+            'SELECT detail FROM events WHERE job_id=?', ('secret',)))
+        for text in (patch.decode(), (evidence / 'diff.json').read_text(),
+                     (evidence / 'context.json').read_text(), events):
+            self.assertNotIn('UNIQUE_SECRET_VALUE', text)
+            self.assertNotIn(digest, text)
+
+    def test_the_patch_bounds_hold_at_a_file_boundary(self):
+        from overseer import workdiff
+        code = ("from pathlib import Path\n"
+                "Path('big.txt').write_text('x' * (%d + 10))\n"
+                "for i in range(6):\n"
+                "    Path('f%%d.txt' %% i).write_text(('line %%d\\n' %% i) * 400)\n"
+                % workdiff.MAX_FILE_BYTES)
+        with patch.object(workdiff, 'MAX_PATCH_BYTES', 9000):
+            _, receipt, diff = self.run_spec(self.spec('bounds', code))
+        files = self.check_counts(receipt)
+        self.assertEqual(files['big.txt']['content'], 'too_large')
+        contents = [files['f%d.txt' % i]['content'] for i in range(6)]
+        self.assertIn('omitted_by_bound', contents)
+        first = contents.index('omitted_by_bound')
+        self.assertEqual(contents[:first], ['in_patch'] * first)
+        self.assertEqual(set(contents[first:]), {'omitted_by_bound'})
+        self.assertFalse(receipt['stats']['complete'])
+        self.assertLessEqual(len(diff), 9000)
+        self.assertTrue(diff.endswith(b'\n'))
+        self.assertEqual(diff.count(b'diff --git'), first)
+        with patch.object(workdiff, 'MAX_DIFF_FILES', 3):
+            _, receipt, _ = self.run_spec(self.spec('many', "\n".join(
+                "open('m%d.txt', 'w').write('m')" % i for i in range(5))))
+        self.check_counts(receipt)
+        self.assertEqual(receipt['stats']['files_beyond_bound'], 2)
+        self.assertEqual(len(receipt['files']), 3)
+
+    def test_the_capture_never_writes_to_git(self):
+        def state():
+            refs = self.git('for-each-ref').stdout
+            return ((self.repo / '.git' / 'index').read_bytes(),
+                    (self.repo / '.git' / 'HEAD').read_bytes(), refs)
+        time.sleep(1.1)  # an index refresh would now rewrite the index's timestamps
+        (self.repo / 'keep.txt').touch()
+        before = state()
+        code = "from pathlib import Path; Path('keep.txt').write_text('changed\\n')"
+        self.run_spec(self.spec('readonly', code))
+        self.assertEqual(state(), before)
+        self.assertEqual(self.git('stash', 'list').stdout, b'')
+
+    def test_a_workspace_that_is_not_git_runs_as_before(self):
+        plain = self.base / 'plain'
+        plain.mkdir()
+        spec = self.spec('plain', "open('x.txt', 'w').write('x')")
+        spec['workspace'] = str(plain)
+        result, receipt, patch = self.run_spec(spec)
+        self.assertEqual(result['state'], 'passed')
+        self.assertFalse(receipt['captured'])
+        self.assertEqual(receipt['reason'], 'the workspace is not a git work tree')
+        self.assertIsNone(patch)
+
+    def test_the_modes_that_run_in_the_evidence_directory_capture_nothing(self):
+        specs = [{'id': 'fx', 'objective': 'verify a trusted fixture candidate',
+                  'mode': 'fixture', 'fixture': 'known_good'},
+                 {'id': 'fk', 'objective': 'exercise the deterministic fake provider',
+                  'mode': 'fake_provider', 'scenario': 'success'},
+                 {'id': 'iso', 'objective': 'probe the boundary', 'mode': 'isolation_probe'}]
+        probe = {'state': 'passed', 'detail': 'probe', 'results': []}
+        with patch('overseer.factory.run_isolation_probe', return_value=probe):
+            for spec in specs:
+                result, receipt, patch_bytes = self.run_spec(spec)
+                self.assertFalse(receipt['captured'], spec['mode'])
+                self.assertIn('runs in the evidence directory', receipt['reason'])
+                self.assertIsNone(patch_bytes)
+                manifest = json.loads((Path(result['evidence']) / 'context.json').read_text())
+                self.assertFalse(manifest['workspace_diff']['captured'])
+
+    def test_a_failing_or_timed_out_implementation_still_captures(self):
+        code = ("from pathlib import Path; Path('keep.txt').write_text('half\\n'); "
+                "raise SystemExit(3)")
+        result, receipt, patch = self.run_spec(self.spec('fails', code))
+        self.assertEqual(result['state'], 'failed')
+        self.assertIn(b'+half', patch)
+        code = ("import time; from pathlib import Path; Path('new.txt').write_text('t\\n'); "
+                "time.sleep(30)")
+        result, receipt, patch = self.run_spec(self.spec('slow', code, timeout=2))
+        self.assertIn('timed out', result['detail'])
+        self.assertIn('new.txt', self.check_counts(receipt))
+
+    def test_a_change_made_by_a_check_is_listed_apart(self):
+        checks = [[sys.executable, '-c', "open('check_wrote.txt', 'w').write('c')"]]
+        code = "open('new.txt', 'w').write('n\\n')"
+        _, receipt, patch = self.run_spec(self.spec('checks', code, checks=checks))
+        self.assertEqual(receipt['changed_by_checks'],
+                         {'count': 1, 'paths': [{'path': 'check_wrote.txt', 'status': 'added'}]})
+        self.assertNotIn(b'check_wrote', patch)
+        self.assertIn(b'new.txt', patch)
+
+    def test_the_capture_is_deterministic(self):
+        from overseer import workdiff
+        before = workdiff.snapshot(str(self.repo))
+        (self.repo / 'keep.txt').write_text('d\n')
+        (self.repo / 'new.txt').write_text('n\n')
+        first = workdiff.capture(before, str(self.repo))
+        second = workdiff.capture(before, str(self.repo))
+        self.assertEqual(first[0], second[0])
+        self.assertEqual(json.dumps(first[1], sort_keys=True),
+                         json.dumps(second[1], sort_keys=True))
+
+    def test_the_manifest_and_the_summary_match_the_receipt(self):
+        code = "open('new.txt', 'w').write('n\\n')"
+        result, receipt, patch = self.run_spec(self.spec('manifest', code))
+        evidence = Path(result['evidence'])
+        manifest = json.loads((evidence / 'context.json').read_text())['workspace_diff']
+        summary = json.loads((evidence / 'summary.json').read_text())['workspace_diff']
+        self.assertEqual(manifest['stats'], receipt['stats'])
+        self.assertEqual(manifest['paths'], receipt['paths'])
+        self.assertEqual(manifest['sha256'],
+                         hashlib.sha256((evidence / 'diff.json').read_bytes()).hexdigest())
+        self.assertEqual(manifest['patch_sha256'], hashlib.sha256(patch).hexdigest())
+        self.assertEqual(summary, {key: manifest[key] for key in
+                                   ('path', 'sha256', 'patch_path', 'patch_sha256')})
+        self.assertIn('renames are not detected', manifest['note'])
+
+    def test_a_capture_that_raises_does_not_block_the_attempt(self):
+        code = "open('new.txt', 'w').write('n\\n')"
+        with patch('overseer.workdiff.capture', side_effect=RuntimeError('/secret/path')):
+            result, receipt, diff = self.run_spec(self.spec('raises', code))
+        self.assertEqual(result['state'], 'passed')
+        self.assertEqual(receipt['reason'], 'the workspace diff could not be captured: '
+                                            'RuntimeError')
+        self.assertNotIn('/secret/path', json.dumps(receipt))
+        self.assertIsNone(diff)
+        self.assertIsNone(self.f.run_one())
+
+    def test_a_path_that_is_not_utf8_is_listed_and_withheld(self):
+        code = "open(b'caf\\xe9.txt', 'wb').write(b'x\\n')"
+        result, receipt, patch = self.run_spec(self.spec('latin', code))
+        files = self.check_counts(receipt)
+        self.assertEqual(list(files), ['caf\\xe9.txt'])
+        self.assertEqual(files['caf\\xe9.txt']['content'], 'path_not_utf8')
+        self.assertEqual(patch, b'')
+        patch.decode('utf-8')
+
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""
 

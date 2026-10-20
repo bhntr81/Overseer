@@ -62,6 +62,21 @@ argument-vector commands and passes no skill to them. Whether a client loaded a
 skill is not observed, and nothing records a skill as active. A missing or
 malformed provenance file is recorded with its reason and does not block the
 attempt.
+Each command-mode attempt in a git workspace also leaves a patch receipt in its
+run evidence: `diff.patch`, a git-style patch that `git apply` accepts, and
+`diff.json`, its stats, per-file statuses, top-level path summary, and digest;
+the context manifest carries the same block. The workspace is snapshotted
+immediately before the implementation command and again after it returns,
+whatever its exit, and only the paths whose state changed between the two are
+in the patch, so edits present before the attempt are not attributed to it; a
+file the checks change afterwards is listed apart. Git is only read. Secret,
+binary, oversized, symlinked, and non-UTF-8 content is withheld with the
+reason, the patch holds at most 1 MiB and is cut only at a file boundary, and
+at most 200 files are listed. Ignored files are not seen and renames are not
+detected. When the attempt moved HEAD, the new HEAD is recorded as the
+candidate revision; otherwise it stays unmeasured. A workspace that is not a
+git repository, the fixture, fake-provider, and isolation-probe modes, and a
+capture that fails record why nothing was captured and run as before.
 The [harness framework](docs/HARNESS_FRAMEWORK.md) maps that design onto the six
 harness pillars and the code that implements them.
 

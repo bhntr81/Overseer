@@ -2715,3 +2715,103 @@ that fails on a bad file, the reviewer's ten, and three that undo the
 corrections; each fails the suite. The suite runs 319 tests. The citations of
 the factory and the reader were re-derived from a line map and checked by hand
 after the last edit; the checker resolves 166 references.
+
+### The workspace diff of an attempt captured as a patch receipt
+
+The user asked: "Implement workspace diff and patch receipt capture for the
+CONTEXT and EVIDENCE pillars in the factory: 1. Update the run execution and
+manifest pipeline so that the exact git diff (patch) of any changes made to the
+workspace during an attempt is automatically captured and stored in the run
+evidence directory (e.g., as `diff.patch`). 2. Record diff statistics, modified
+file lists, and path summaries in the context manifest. 3. Add comprehensive
+unit tests in tests/test_factory.py covering diff capture, patch generation,
+and manifest integration. 4. Run python3 scripts/check and python3
+scripts/check-doc-references to ensure 100% test pass rates and valid
+citations, update WORK_LOG.md, and commit clean." `AGENTS.md` asks for one
+pillar row, and this increment is filed against EVIDENCE: a patch of what an
+attempt changed is a receipt of its result, the verification record of the
+blueprint. CONTEXT is touched only where the manifest must stay honest, by the
+manifest's `workspace_diff` block and the candidate revision. The prompt was
+written by the dedicated prompt-writing agent and executed by the primary agent
+from `c1c9637`; it is kept in `EVIDENCE_WORKSPACE_DIFF_NEXT_PROMPT.md` and
+committed with this increment.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+grep -n "^from overseer.factory\|^import overseer.factory" overseer/workdiff.py
+grep -n "'add'\|'stash'\|'apply'\|'reset'\|'checkout'\|update-index" overseer/workdiff.py
+```
+
+The attempt's change is what differs between a snapshot taken immediately
+before the implementation command and one taken immediately after it returns,
+whatever its exit. A path dirty or untracked at the start keeps its before
+bytes in memory only, so a path the attempt edits again is patched from that
+content, not from HEAD, and an untouched earlier edit is only listed as
+pre-existing; a path clean at the start is patched from the before head's blob,
+so a commit the attempt made is inside the patch. Paths are compared by their
+git blob ids, computed in Python for the worktree, so a change is found without
+reading the head blob. What the checks change afterwards is listed apart, by
+path and status. When HEAD moved, the new HEAD is recorded as the candidate
+revision and leaves the manifest's unmeasured list; otherwise it stays there,
+because an uncommitted worktree is not a revision.
+
+Git is only read. Every call goes through one runner with a timeout, a bounded
+output, `GIT_OPTIONAL_LOCKS=0` so `git status` does not refresh the index, no
+system configuration, pager, or prompt, and the fsmonitor and the untracked
+cache off. The patch is built in Python as a git-style unified diff, with the
+mode lines, the new and deleted file headers, and the marker of a missing final
+newline, and a test applies it with `git apply` to a copy of the before state
+and compares the bytes. Secret-named files are listed without content or hash;
+binary files by their hashes; symlinks without their target; oversized files,
+pre-existing files whose bytes were not held, paths that are not UTF-8 or need
+quoting, and every file past the patch bound are withheld with the reason. The
+patch holds at most 1 MiB and is cut only at a file boundary, at most 200 files
+are listed and the rest counted, and the stats count only what the patch holds
+and say whether it is complete. A workspace that is not a git repository, the
+three modes that run in the evidence directory, and any exception inside the
+capture, recorded by its type name only, leave the attempt as it was.
+
+Four departures from the prompt, all read-only: `rev-parse --show-prefix` and
+`--show-object-format`, `ls-tree`, and `diff-tree --name-only` are run as well
+as the commands the prompt listed, because the workspace may be a subdirectory,
+the blob of a clean path must be found, and the paths a commit changed must be
+seen; a repository that does not use SHA-1 object ids records that and captures
+nothing; and `capture` returns the after snapshot with the patch and the
+receipt, so the changes of the checks are compared with the same state.
+
+Sixteen tests were added in `WorkspaceDiffTests` and the suite runs 335 tests.
+Each mutation was applied alone and failed the suite: M1 the before snapshot
+dropped (`test_a_change_made_before_the_attempt_is_not_attributed_to_it` and
+two more); M2 untracked files skipped (eight tests); M3 `git add -N` and M4
+`GIT_OPTIONAL_LOCKS` removed (`test_the_capture_never_writes_to_git`); M5 a
+secret's content and M6 its hash
+(`test_a_secret_named_file_is_listed_without_content_or_hash`); M7 truncation
+unrecorded (two tests); M8 a patch cut mid-file
+(`test_the_patch_bounds_hold_at_a_file_boundary`); M9 a non-git workspace
+raising (`test_a_workspace_that_is_not_git_runs_as_before`); M10 the capture
+taken after the checks (`test_a_change_made_by_a_check_is_listed_apart`); M11
+a candidate revision without a moved HEAD
+(`test_a_commit_made_by_the_attempt_is_in_the_patch_and_names_the_revision`);
+M12 withheld files counted in the insertions (four tests); M13 the missing
+newline marker (`test_a_file_without_a_final_newline_carries_the_marker`); M14 a
+symlink followed (`test_a_binary_file_and_a_symlink_are_withheld_with_the_reason`);
+M15 the guard removed (`test_a_capture_that_raises_does_not_block_the_attempt`);
+M16 a non-UTF-8 path written into the patch
+(`test_a_path_that_is_not_utf8_is_listed_and_withheld`).
+
+The mutation set was run again, alone and reverted, against the final tree, and
+each of the sixteen still failed the suite with the test named above. Three of
+the mutations only fail when they are applied faithfully, and the record says
+so: the before snapshot must be dropped rather than ignored, the non-git
+workspace must raise rather than be handled, and the withheld files must be
+counted as files of the patch. The count helper now also holds that a withheld
+file carries no insertions and no deletions, so a mutation that gives one a
+count fails as well.
+
+The CONTEXT row's named handoff record now has the candidate revision in one
+case, when HEAD moved; its next increment is otherwise unchanged. Every
+citation of `overseer/factory.py`, `overseer/workdiff.py`, and the new test
+class in the pillar map was re-derived from a line map of the old and the new
+code and checked by hand after the last edit; the checker resolves 183
+references.
