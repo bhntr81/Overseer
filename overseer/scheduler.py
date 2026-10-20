@@ -9,7 +9,8 @@ from .modelchoice import (
     providers, running_marker,
 )
 from .policy import (
-    ANSI, BLOCKED, COMPLETED, CONTINUE, DEFAULT_REPLY, STOP, classify, fingerprint, hold, next_prompt,
+    ANSI, BLOCKED, COMPLETED, CONTINUE, DEFAULT_REPLY, STEP_DONE_MARK, STOP, classify,
+    current_turn, fingerprint, hold, next_prompt, stop_requested,
 )
 from .route import resolve_route
 from .tmux import CLIENTS
@@ -21,12 +22,7 @@ CAPACITY = re.compile(r'^\s*■ Selected model is at capacity\. Please try a dif
 
 def response(text):
     """Exclude preceding turns, but retain the current answer above its composer."""
-    lines = ANSI.sub('', text).splitlines()
-    for i in range(len(lines) - 1, -1, -1):
-        line = lines[i].strip()
-        if line.startswith(('› ', '❯ ', '> ')) and line not in {'› Ask Codex to do anything'}:
-            return '\n'.join(lines[i + 1:])
-    return '\n'.join(lines)
+    return current_turn(text)
 
 
 def current_answer(snapshot):
@@ -55,7 +51,7 @@ def phase(snapshot):
         return 'active'
     if not snapshot.ready:
         return 'unknown'
-    if STOP.search(text):
+    if stop_requested(text, tail_only=False):
         return 'stopped'
     if model_failure(snapshot):
         return 'model_blocked'
@@ -76,7 +72,7 @@ def phase(snapshot):
 def outcome(snapshot):
     """Fingerprint the answer through its outcome, excluding mutable UI tips."""
     text = response(snapshot.text)
-    matches = [m for pattern in (CAPACITY, COMPLETED, STOP, CONTINUE)
+    matches = [m for pattern in (CAPACITY, COMPLETED, STOP, STEP_DONE_MARK, CONTINUE)
                for m in pattern.finditer(text)]
     return fingerprint(text[:max(m.end() for m in matches)]) if matches else None
 
@@ -324,8 +320,8 @@ def tick_queue(backend, policy, state, config, path, now, save):
     if config['dry_run']:
         if entry.get('previewed') != entry['fingerprint']:
             _, kind = ('', 'routine continuation') if phases[key] == 'capacity' else next_prompt(s.text, fallback)
-            if kind == 'report-based prompt':
-                LOG.info('%s would send report-based prompt in FIFO queue (dry run)', s.pane)
+            if kind in {'report-based prompt', 'writer handoff prompt'}:
+                LOG.info('%s would send %s in FIFO queue (dry run)', s.pane, kind)
             else:
                 LOG.info('%s would run next in FIFO queue (dry run)', s.pane)
             entry['previewed'] = entry['fingerprint']
@@ -365,8 +361,8 @@ def tick_queue(backend, policy, state, config, path, now, save):
     save(path, state)
     try:
         backend.send(s, outgoing)
-        if kind == 'report-based prompt':
-            LOG.info('%s sent report-based prompt', s.pane)
+        if kind in {'report-based prompt', 'writer handoff prompt'}:
+            LOG.info('%s sent %s', s.pane, kind)
         elif kind == 'routed continuation':
             LOG.info('%s dispatched the routed continuation', s.pane)
         else:

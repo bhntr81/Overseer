@@ -239,7 +239,7 @@ def tick(backend, policy, state, config, path, now):
                 continue
             if config["dry_run"]:
                 if entry.get("previewed") != entry["fingerprint"]:
-                    action = "report-based prompt" if kind == "report-based prompt" else "routine continuation"
+                    action = kind if kind in {"report-based prompt", "writer handoff prompt"} else "routine continuation"
                     LOG.info("%s would send %s (dry run)", pane, action)
                     entry["previewed"] = entry["fingerprint"]
                 continue
@@ -248,8 +248,8 @@ def tick(backend, policy, state, config, path, now):
             policy.acknowledge(entry, snapshot.text, now)
             save(path, state)
             backend.send(snapshot, prompt)
-            if kind == "report-based prompt":
-                LOG.info("%s sent report-based prompt", pane)
+            if kind in {"report-based prompt", "writer handoff prompt"}:
+                LOG.info("%s sent %s", pane, kind)
             else:
                 LOG.info("%s sent routine continuation", pane)
         except (RuntimeError, OSError, ValueError) as error:

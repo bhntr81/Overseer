@@ -227,6 +227,43 @@ class SchedulerTests(unittest.TestCase):
         self.assertNotIn('last_sent', self.state['%0:0'])
         self.assertEqual(self.state['%0:0']['held_reason'], 'invalid output report')
 
+    STEP = ('OVERSEER_REPORT {"status":"step_done","objective":"code the writer loop",'
+            '"remaining":"widen the codebase selection","done":"d","evidence":"e"}\n')
+
+    def test_a_finished_step_is_handed_to_the_writer_once(self):
+        self.change('%1', 'OVERSEER_DONE\n' + DONE)
+        self.change('%0', self.STEP + 'OVERSEER_DONE\n' + QUESTION)
+        self.assertEqual(phase(self.screens['%0']), 'finished')
+        self.run_tick(0)
+        self.assertEqual(self.backend.send.call_count, 1)
+        pane, sent = self.backend.send.call_args.args
+        self.assertEqual(pane.pane, '%0')
+        self.assertIn('prompt-writing agent', sent)
+        self.assertIn('widen the codebase selection', sent)
+        self.state['_queue'].pop('active', None)
+        self.run_tick(1000)
+        self.assertEqual(self.backend.send.call_count, 1)
+
+    def test_needs_input_after_a_step_report_stops_the_pane(self):
+        self.change('%1', 'OVERSEER_DONE\n' + DONE)
+        self.change('%0', self.STEP + 'OVERSEER_NEEDS_INPUT\n' + QUESTION)
+        self.assertEqual(phase(self.screens['%0']), 'stopped')
+        self.run_tick(0)
+        self.backend.send.assert_not_called()
+
+    def test_needs_input_far_above_in_a_step_answer_stops_the_pane(self):
+        self.change('%1', 'OVERSEER_DONE\n' + DONE)
+        self.change('%0', self.STEP + 'OVERSEER_NEEDS_INPUT\n' + 'detail line\n' * 80
+                    + 'OVERSEER_STEP_DONE\n' + QUESTION)
+        self.assertEqual(phase(self.screens['%0']), 'stopped')
+        self.run_tick(0)
+        self.backend.send.assert_not_called()
+
+    def test_a_step_marker_alone_gives_the_answer_an_outcome(self):
+        from overseer.scheduler import outcome
+        self.change('%0', 'Finished.\nOVERSEER_STEP_DONE\n›')
+        self.assertIsNotNone(outcome(self.screens['%0']))
+
     def test_done_report_does_not_send(self):
         self.change('%0', 'OVERSEER_REPORT {"status":"needs_input","objective":"x","remaining":"y","done":"z","evidence":"e"}\n' + QUESTION)
         self.run_tick(0)

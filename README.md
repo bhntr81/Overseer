@@ -200,12 +200,25 @@ report. The included reply tells the client to follow
 `/home/kali/Programming/Projects/AGENTS.md` and the coder optimization playbook, do the next
 authorized step, and print one visible `OVERSEER_REPORT` line. That line starts
 with `OVERSEER_REPORT` and a JSON object. The keys are `status`, `objective`,
-`remaining`, `done`, and `evidence`. `status` is `continue`, `done`, or
-`needs_input`. `continue` needs a nonempty objective and remaining step.
+`remaining`, `done`, and `evidence`. `status` is `continue`, `step_done`,
+`done`, or `needs_input`. `continue` and `step_done` need a nonempty objective
+and remaining step. `step_done` means that a step's own stopping condition was
+met and that the objective still has the next step named in `remaining`: a
+prompt's stopping condition ends that prompt, not the objective. The reply and
+every prompt Overseer composes say so, and they tell the client to give each
+executed step's results to the dedicated prompt-writing agent, which writes the
+next bounded prompt that the client then executes.
 Overseer reads the latest report on the visible screen, copies those fields
 into the next one-line prompt, and submits that prompt. It does not ask another
-model to invent the prompt, and it does not execute terminal text. A `done` or
-`needs_input` report stops further automatic prompts for that screen. An invalid
+model to invent the prompt, and it does not execute terminal text. A
+`step_done` report gets a writer-handoff prompt: give this step's results to
+the dedicated prompt-writing agent, have it write one bounded next prompt for
+the named step, then execute and verify that prompt, or report `needs_input`
+if no separate writer can be used. Overseer instructs that handoff; it cannot
+see or verify that a separate writer ran or that its prompt was executed, and
+it reads only the next report. A `done` report means the objective is
+finished and stops further automatic prompts for that screen, even when its
+`remaining` is not empty; a `needs_input` report always stops. An invalid
 report, or a continue report with no objective or remaining step, also stops
 that screen instead of falling back to `reply`. Project-specific agent and model
 requirements still apply. Draft-only requests do not grant execution authority.
@@ -345,9 +358,22 @@ continue?” and “Shall I proceed?”. With `continue_on_completion: true` (en
 it also recognizes Codex's completed-turn footer, `Worked for … • …`, when the
 composer is empty. Eligible screens that contain an `OVERSEER_REPORT` line
 receive a prompt built from that report. Eligible screens without one receive
-`reply`. A standalone `OVERSEER_DONE` or `OVERSEER_NEEDS_INPUT` response stops
-further automatic continuation of that screen, as does a report whose status is
-`done` or `needs_input`. The report has to stay on one visible line because the
+`reply`. `OVERSEER_NEEDS_INPUT` always stops further automatic continuation of
+that screen, as does a report whose status is `done` or `needs_input`.
+`OVERSEER_NEEDS_INPUT` anywhere in the current answer stops it, not only in
+the last lines. `OVERSEER_DONE` stops it too, unless the line directly above
+the marker, blank lines aside, is a `step_done` report of the current answer:
+then the marker ends the step, not the objective, and the screen gets the
+writer-handoff prompt. `OVERSEER_STEP_DONE` under a `step_done` report of the
+current answer does the same; on its own it is neither a stop nor a reason to
+send. A report of an earlier turn, above the last submitted prompt, never
+counts, so a stale step report cannot override a newer stop, and a step report
+quoted with prose after it does not override `OVERSEER_DONE`. The prompts
+quote the marker names, so a wrapped echo of a sent prompt cannot start a line
+with one. A handoff
+goes through the same idle threshold, permission and generation checks,
+already-sent and held screens, cooldown, and daily limit as any other prompt,
+and a step report with no remaining step stops it. The report has to stay on one visible line because the
 monitor captures the current pane, not scrollback. Permission wording, generation
 markers, and the other skip rules still apply to the whole visible screen,
 including text inside a report. Idle alone without a recognized
@@ -355,7 +381,8 @@ question/completion marker does not trigger a reply.
 
 If a client appears to ignore a continuation, inspect its response in the pane.
 `sent routine continuation` means the configured instruction was typed.
-`sent report-based prompt` means the typed line was built from the visible
+`sent writer handoff prompt` means the typed line handed a finished step to
+the prompt writer. `sent report-based prompt` means the typed line was built from the visible
 report. Neither journal line includes the prompt or the report, and neither
 proves that the client submitted, executed, or finished the work. `skipped:
 invalid output report`, `skipped: report has no remaining work`, and `skipped:

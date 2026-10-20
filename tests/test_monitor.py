@@ -90,6 +90,65 @@ class MonitorTests(unittest.TestCase):
         self.assertLessEqual(len(sent), 1000)
         self.assertNotIn("\n", sent)
 
+    def test_writer_handoff_is_sent_once(self):
+        report = (
+            'OVERSEER_REPORT {"status":"step_done","objective":"code the writer loop",'
+            '"remaining":"widen the codebase selection","done":"d","evidence":"e"}\n'
+            'OVERSEER_DONE\n›'
+        )
+        screen = Snapshot("%0", "codex", "123", report, "›", "0", "0")
+        backend = Mock()
+        backend.panes.return_value = ["%0"]
+        backend.snapshot.return_value = screen
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            config = {"dry_run": False, "reply": "Please continue."}
+            tick(backend, Policy(idle_seconds=0), {}, config, path, 0)
+            tick(backend, Policy(idle_seconds=0), json.loads(path.read_text()), config, path, 2000)
+        self.assertEqual(backend.send.call_count, 1)
+        sent = backend.send.call_args.args[1]
+        self.assertIn("prompt-writing agent", sent)
+        self.assertIn("widen the codebase selection", sent)
+        self.assertNotEqual(sent, "Please continue.")
+
+    def step_screen(self, remaining="widen the codebase selection", before=""):
+        report = (before + 'OVERSEER_REPORT {"status":"step_done","objective":"code the writer loop",'
+                  '"remaining":"%s","done":"d","evidence":"e"}\nOVERSEER_DONE\n›' % remaining)
+        return Snapshot("%0", "codex", "123", report, "›", "0", "0")
+
+    def run_ticks(self, screens, policy, config):
+        backend = Mock()
+        backend.panes.return_value = ["%0"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            state = {}
+            for now, screen in enumerate(screens):
+                backend.snapshot.return_value = screen
+                tick(backend, policy, state, config, path, now * 2000)
+        return backend
+
+    def test_a_stale_step_report_does_not_override_a_newer_done(self):
+        older = self.step_screen().text
+        screen = Snapshot("%0", "codex", "123", older.rstrip("›")
+                          + "› please fix the typo and stop\nFixed. Objective complete.\n"
+                          "OVERSEER_DONE\n›", "›", "0", "0")
+        backend = self.run_ticks([screen], Policy(idle_seconds=0),
+                                 {"dry_run": False, "reply": "Please continue."})
+        backend.send.assert_not_called()
+
+    def test_the_monitor_bounds_handoffs_by_the_daily_limit(self):
+        screens = [self.step_screen("step %d" % index) for index in range(3)]
+        backend = self.run_ticks(screens, Policy(idle_seconds=0, cooldown_seconds=0, max_per_day=1),
+                                 {"dry_run": False, "reply": "Please continue."})
+        self.assertEqual(backend.send.call_count, 1)
+
+    def test_a_dry_run_names_the_writer_handoff(self):
+        with self.assertLogs("overseer", level="INFO") as logs:
+            backend = self.run_ticks([self.step_screen()], Policy(idle_seconds=0),
+                                     {"dry_run": True, "reply": "Please continue."})
+        backend.send.assert_not_called()
+        self.assertTrue(any("would send writer handoff prompt" in line for line in logs.output))
+
     def test_invalid_report_is_not_sent_or_counted(self):
         screen = Snapshot("%0", "codex", "123", "OVERSEER_REPORT {not json}\nWould you like me to continue?\n›", "›", "0", "0")
         backend = Mock()

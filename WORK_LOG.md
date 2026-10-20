@@ -2334,3 +2334,143 @@ Every citation of the factory and the map in the pillar map was checked by
 hand against the line it names after the last edit, and the reference checker
 resolves 138 of them; the count fell by two because two corrected citations
 now name lines that were already cited.
+
+### The prompt-writer loop coded into the monitor
+
+The user's instruction: "its not your fault but make sure this gets coded into
+the program to do it this way". The way is the standing loop of
+`/home/kali/Programming/Projects/AGENTS.md`: after a step is executed, its
+results go to the dedicated prompt-writing agent, which writes the next
+bounded prompt, which the primary agent executes. A prompt's stopping
+condition ends that prompt, not the objective.
+
+The observed failure: a pane finished one increment, printed the next
+increment it had named, and ended with `OVERSEER_DONE`, and Overseer stopped.
+The monitor treated every `OVERSEER_DONE` and every `done` report as the end of
+the objective, and no prompt it sent had a status for a finished step of an
+unfinished objective. The prompt for this increment was written by the
+dedicated prompt-writing agent and executed by the primary agent, and it is
+kept in `WRITER_LOOP_NEXT_PROMPT.md`. It is filed against the CONTEXT row,
+which owns the continuation instruction and the prompt assembly.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+git diff --stat
+```
+
+The report gains the status `step_done`: the step is finished and
+`remaining` names the next step. It needs a nonempty objective and remaining,
+like `continue`; with either blank no handoff is composed, and the reason is
+that the report has no remaining work. A `step_done` report gets a
+writer-handoff prompt that tells the pane to give the step's results to the
+dedicated prompt-writing agent, have it write one bounded next prompt for the
+named step, execute and verify it, and report `needs_input` if no separate
+writer can be used. A `done` report keeps its meaning, the objective is
+finished, and still stops even when its `remaining` is not empty: the program
+takes it at its word and does not guess. `needs_input` always stops.
+
+One function, `stop_requested`, now decides the stop for both the classifier
+and the queue's phase, so the two cannot disagree. `OVERSEER_NEEDS_INPUT`
+always stops. `OVERSEER_DONE` stops unless the latest valid report on the
+screen is `step_done`, because the structured report names the next step and
+the bare marker does not. A new marker, `OVERSEER_STEP_DONE`, does the same
+under a `step_done` report and is neither a stop nor a reason to send on its
+own. The permission and generation patterns are checked before the handoff and
+still win. The handoff goes through `Policy.consider` in the monitor and in the
+queue, so the idle threshold, the already-sent and held screens, the cooldown,
+and the daily limit bound the loop.
+
+The report tail of every composed prompt and the configured `reply` now
+state the loop and the rule; only the `reply` key of `config.json` changed. The
+reply is 937 characters and the tail 443, and neither matches the permission
+pattern. With every report field at 5000 characters both composers still return
+one line of at most 1000 characters that keeps the rule and the first 40
+characters of the remaining step. The dry-run and sent logs name a handoff as
+`writer handoff prompt`; the prompt allowed only the dry-run log in
+`__main__.py`, and the sent logs of the monitor and the queue were changed as
+well, because a handoff logged as a routine continuation would misstate what
+was typed.
+
+Fourteen tests were added, eleven for the policy, two for the queue, and one
+for the monitor; the suite runs 264 tests and the 250 earlier tests pass
+unchanged. Each mutation of the prompt was applied alone and failed the suite:
+M1 `step_done` treated as a stop (ten tests, among them
+`test_a_step_done_report_yields_the_writer_handoff`); M2 `needs_input`
+overridden (`test_needs_input_is_never_overridden`,
+`test_needs_input_after_a_step_report_stops_the_pane`); M3 a handoff with an
+empty remaining (`test_no_handoff_is_composed_with_an_empty_remaining`); M4 the
+handoff past the bounds of `Policy.consider` (`test_the_handoff_loop_is_bounded`
+and the two end-to-end tests); M5 a legacy `done` with a remaining step taken
+as a handoff (`test_a_legacy_done_report_still_stops` and four more); M6 the
+queue's phase on the raw stop pattern
+(`test_a_finished_step_is_handed_to_the_writer_once`); M7 the handoff before
+the permission check (`test_blocked_text_still_wins_over_a_handoff`); M8 a
+`step_done` report composed with the continue template (three tests); M9 the
+handoff taken from an older report (`test_the_latest_report_wins`); M10 the old
+status list in the tail (three tests) and in the reply
+(`test_every_prompt_states_the_loop`); M11 a `step_done` report answered with
+the fallback reply (five tests); M12 `OVERSEER_DONE` ignored without a
+`step_done` report (six tests).
+
+What it does not do: Overseer instructs the handoff. It cannot see or verify
+that a separate prompt-writing agent ran, wrote the next prompt, or that the
+prompt was executed; it reads only the next report, and the pillar map says so
+under what it does not claim.
+
+Every citation of `overseer/policy.py`, `overseer/scheduler.py`, and
+`overseer/__main__.py` in the pillar map was re-derived from a line map of the
+old and the new code, each moved line checked to hold the same text, and the
+new ones checked by hand. Three had drifted before this increment and were
+corrected: the queue pointed at `_missing_process`, the single-writer lock at a
+log line, and the command surface at a line inside `run`. The reference
+checker resolves 144 references.
+
+### Review correction: a stale or echoed report could override a stop
+
+A fresh reviewer read the handoff against the prompt and found four ways in
+which a screen that should stop got a prompt. They were checked by running
+them, and they were true.
+
+A step report of an earlier turn overrode the `OVERSEER_DONE` of the newest
+turn, because the report was read from the whole screen; the monitor sent the
+old step's handoff once per cooldown. A report and every marker override now
+count only in the current turn, the text after the last submitted prompt line,
+which the queue already used; that function moved from the scheduler into the
+policy, and the scheduler's `response` calls it. A handoff composed from a
+report of an earlier turn is withheld with its own reason.
+
+The prompts named `OVERSEER_STEP_DONE` mid-sentence, and a client that wraps
+its echo of a sent prompt could put the marker at the start of a line, so the
+monitor's own typed text became its signal to send again. The marker names in
+the report tail and the reply are now quoted; a test wraps the reply, the
+handoff, and the continue prompt at every width from 30 to 240 and finds no
+marker at a line start.
+
+A step report quoted in the answer, with prose after it, overrode the
+`OVERSEER_DONE` that ended the answer. The prompt's rule, that the latest valid
+report decides, was narrowed: a bare `OVERSEER_DONE` ends only the step when
+the line directly above it, blank lines aside, is that step report.
+`OVERSEER_STEP_DONE` stays enough under a step report of the current turn.
+
+`OVERSEER_NEEDS_INPUT` above the last eighteen lines no longer stopped the
+monitor, because its stop check reads only the tail and the handoff added a
+reason to send. `OVERSEER_NEEDS_INPUT` anywhere in the current turn now stops,
+in the safe direction.
+
+The reviewer's mutations found seven more gaps in the tests: the outcome
+fingerprint of the step marker, the marker condition of the handoff, a report
+above the tail, the dry-run log, the objective in the handoff, the stop check of
+the queue's phase, and the daily limit in the monitor. Fourteen tests were added
+for the four defects and the gaps, and one new test was changed: the test that
+the permission text wins over a handoff put the permission line between the
+report and `OVERSEER_DONE`, which the narrowed rule now stops before the
+permission check is reached, so it uses `OVERSEER_STEP_DONE` and still proves
+that the permission text wins. Twenty-six mutations were applied one at a time,
+M1 to M12 of the prompt with M10 also on the reply, the reviewer's N2 to N8, and
+five that undo the corrections; each fails the suite. The suite runs 278 tests.
+
+A `continue` report of an earlier turn still drives a prompt in the queue, as
+it did before the handoff existed; that is not changed here. The citations of
+the policy and the scheduler were re-derived by hand after the last edit, and
+the reference checker resolves 147 references.

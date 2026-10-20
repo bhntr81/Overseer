@@ -27,7 +27,28 @@ BLOCKED = re.compile(
 )
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 STOP = re.compile(r"^\s*(?:[•*-]\s*)?OVERSEER_(?:DONE|NEEDS_INPUT)\b", re.MULTILINE)
+DONE_MARK = re.compile(r"^\s*(?:[•*-]\s*)?OVERSEER_DONE\b", re.MULTILINE)
+NEEDS_INPUT_MARK = re.compile(r"^\s*(?:[•*-]\s*)?OVERSEER_NEEDS_INPUT\b", re.MULTILINE)
+# A finished step of a larger objective. Its stopping condition ended that
+# prompt, not the objective.
+STEP_DONE_MARK = re.compile(r"^\s*(?:[•*-]\s*)?OVERSEER_STEP_DONE\b", re.MULTILINE)
+STOP_REASON = "client requested no further automatic continuation"
+HANDOFF_REASON = "finished step; writer handoff due"
 COMPLETED = re.compile(r"Worked for .+ •", re.IGNORECASE)
+
+
+def current_turn(text):
+    """Return the current answer: the text after the last submitted prompt line.
+
+    A report or a marker of an earlier turn belongs to that turn. The answer
+    above an empty composer is kept.
+    """
+    lines = ANSI.sub("", text).splitlines()
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index].strip()
+        if line.startswith(("› ", "❯ ", "> ")) and line not in {"› Ask Codex to do anything"}:
+            return "\n".join(lines[index + 1:])
+    return "\n".join(lines)
 
 
 def tail_text(text):
@@ -41,11 +62,12 @@ def fingerprint(text):
 REPORT_MARK = "OVERSEER_REPORT"
 MAX_PROMPT = 1000
 _REPORT_TAIL = (
-    "When that step is finished, print one visible line that starts with "
-    "OVERSEER_REPORT and a JSON object with status, objective, remaining, done, and evidence. "
-    "status must be continue, done, or needs_input. "
-    "Put the next unfinished step in remaining. "
-    "If authorized work is finished or cannot proceed, use done or needs_input and do not invent work."
+    "When that step is finished, print one visible line starting OVERSEER_REPORT "
+    "and a JSON object with status, objective, remaining, done, and evidence. "
+    "status is continue, step_done, done, or needs_input. "
+    "A prompt's stopping condition ends that prompt, not the objective: if a next step "
+    "remains, use step_done, put it in remaining, and end with \"OVERSEER_STEP_DONE\". "
+    "Use done only when the objective has no actionable next step; do not invent work."
 )
 
 
@@ -58,7 +80,12 @@ def _sendable(text):
 
 
 def _report_state(text):
-    """Return absent, invalid, stop, empty, or ready plus fields from the latest report."""
+    """Return absent, invalid, stop, empty, ready, or handoff plus fields from the latest report.
+
+    A step_done report is a finished step of an objective that still has a
+    named next step, so it becomes a writer handoff. A done report means the
+    objective is finished and is taken at its word, whatever its remaining says.
+    """
     cleaned = ANSI.sub("", text)
     found = False
     payload = None
@@ -86,7 +113,7 @@ def _report_state(text):
     status = payload.get("status")
     if status in {"done", "needs_input"}:
         return "stop", None
-    if status != "continue":
+    if status not in {"continue", "step_done"}:
         return "invalid", None
     fields = {}
     for name, required in (("objective", True), ("remaining", True), ("done", False), ("evidence", False)):
@@ -105,7 +132,58 @@ def _report_state(text):
             fields[name] = ""
             continue
         fields[name] = collapsed
-    return "ready", fields
+    return ("handoff" if status == "step_done" else "ready"), fields
+
+
+def _done_follows_step_report(turn):
+    """Return whether the last OVERSEER_DONE of a turn directly follows a step report.
+
+    A bare OVERSEER_DONE ends only the step when the line above it, blank lines
+    aside, is the turn's latest report and that report is step_done. A report
+    quoted earlier in the answer, with prose after it, does not override the
+    marker.
+    """
+    if _report_state(turn)[0] != "handoff":
+        return False
+    lines = turn.splitlines()
+    marks = [index for index, line in enumerate(lines) if DONE_MARK.match(line)]
+    if not marks:
+        return False
+    index = marks[-1] - 1
+    while index >= 0 and not lines[index].strip():
+        index -= 1
+    return index >= 0 and _report_state(lines[index])[0] == "handoff"
+
+
+def handoff_due(text, markers):
+    """Return whether a finished step of the current turn asks for a writer handoff.
+
+    The step report must belong to the current turn. OVERSEER_STEP_DONE under
+    it is enough; a bare OVERSEER_DONE must directly follow it.
+    """
+    turn = current_turn(text)
+    if _report_state(turn)[0] != "handoff":
+        return False
+    if STEP_DONE_MARK.search(markers) and STEP_DONE_MARK.search(turn):
+        return True
+    return bool(DONE_MARK.search(markers)) and _done_follows_step_report(turn)
+
+
+def stop_requested(text, tail_only=True):
+    """Return the fixed reason the screen asks Overseer to stop, or None.
+
+    OVERSEER_NEEDS_INPUT anywhere in the current turn always stops, whatever
+    the tail shows. OVERSEER_DONE stops unless it directly follows a step_done
+    report of the current turn: the structured report names the next step and
+    the bare marker does not, so the more specific statement decides.
+    """
+    turn = current_turn(text)
+    markers = tail_text(text) if tail_only else ANSI.sub("", text)
+    if NEEDS_INPUT_MARK.search(markers) or NEEDS_INPUT_MARK.search(turn):
+        return STOP_REASON
+    if DONE_MARK.search(markers) and not _done_follows_step_report(turn):
+        return STOP_REASON
+    return None
 
 
 def _compose(fields):
@@ -120,6 +198,44 @@ def _compose(fields):
         if evidence:
             parts.append(f"Evidence: {evidence}.")
         parts.append(f"Do only this next: {remaining}.")
+        parts.append(_REPORT_TAIL)
+        prompt = " ".join(parts)
+        if _sendable(prompt):
+            return prompt
+        if len(remaining) > 40:
+            remaining = remaining[:max(40, len(remaining) - 40)].rstrip()
+        elif evidence:
+            evidence = ""
+        elif done:
+            done = ""
+        elif len(objective) > 20:
+            objective = objective[:max(20, len(objective) - 20)].rstrip()
+        else:
+            return None
+
+
+def _compose_handoff(fields):
+    """Return the writer-handoff prompt for a finished step, or None.
+
+    Overseer instructs the handoff. It cannot see or verify that a separate
+    prompt-writing agent ran, wrote the next prompt, or that the prompt was
+    executed; it reads only the next report.
+    """
+    objective = fields["objective"][:160]
+    remaining = fields["remaining"][:220]
+    done = fields["done"][:120]
+    evidence = fields["evidence"][:120]
+    while True:
+        parts = ["Automatic continuation. The last step is finished; its stopping condition "
+                 "ended that prompt, not the objective.", f"Objective: {objective}."]
+        if done:
+            parts.append(f"Step done: {done}.")
+        if evidence:
+            parts.append(f"Evidence: {evidence}.")
+        parts.append("Give these results to the dedicated prompt-writing agent and have it "
+                     f"write one bounded next prompt for: {remaining}.")
+        parts.append("Then execute that prompt, verify it, and report. "
+                     "If no separate writer can be used, report needs_input.")
         parts.append(_REPORT_TAIL)
         prompt = " ".join(parts)
         if _sendable(prompt):
@@ -156,6 +272,15 @@ def next_prompt(text, fallback, *, capacity=False):
         return None, "output report requested no further continuation"
     if kind == "empty":
         return None, "report has no remaining work"
+    if kind == "handoff":
+        if _report_state(current_turn(text))[0] != "handoff":
+            # A step report of an earlier turn names a step that was already
+            # handed over, or overtaken.
+            return None, "step report belongs to an earlier turn"
+        prompt = _compose_handoff(fields)
+        if prompt is None:
+            return None, "invalid output report"
+        return prompt, "writer handoff prompt"
     prompt = _compose(fields)
     if prompt is None:
         return None, "invalid output report"
@@ -170,10 +295,13 @@ def hold(state, text, reason):
 
 def classify(text, continue_on_completion=False, completed=False):
     tail = tail_text(text)
-    if STOP.search(tail):
-        return False, "client requested no further automatic continuation"
+    stop = stop_requested(text)
+    if stop:
+        return False, stop
     if BLOCKED.search(tail):
         return False, "active generation, permission, or sensitive action visible"
+    if handoff_due(text, tail):
+        return True, HANDOFF_REASON
     if continue_on_completion and (COMPLETED.search(tail) or completed):
         return True, "completed turn with empty composer"
     if not CONTINUE.search(tail):
