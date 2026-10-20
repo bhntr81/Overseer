@@ -212,7 +212,7 @@ def _validate_protected_paths(paths, workspace):
 
 
 def validate_contract(contract, spec):
-    """Validate the optional contract block of a command-mode task spec.
+    """Validate the required contract block of a command-mode task spec.
 
     The block is recorded, not enforced: it states a risk tier, protected
     paths, approval requirements, acceptance identifiers, and a budget, and

@@ -91,7 +91,7 @@ which the operator moved, so the runner does not refuse it but its recorded
 workspace no longer exists.
 
 The private runtime ledger was neither opened in place, nor written, nor
-migrated by hand. Everything above was established by copying the ledger file
+migrated by hand. The ledger facts above were established by copying the ledger file
 to a temporary directory and querying the copy read-only.
 
 After an interrupted worker, use `reconcile`, inspect its evidence/workspace and
@@ -106,10 +106,10 @@ tests successfully. The suite covers immutable submission, real file changes,
 independent failed checks, timeout, bounded logs, FIFO, cancellation, worker lock,
 setup failure, and actual worker death. Existing monitor/queue/transport tests pass.
 
-The suite is now 92 factory tests and 172 tests in total, all passing, with the
-contract block required for new command-mode submissions. The figures above are
-the counts observed when those slices were built; the current counts are the
-ones the local check command reports.
+This increment's counts were 92 factory tests and 178 tests in total, all
+passing, with the contract block required for new command-mode submissions.
+The figures above are the counts observed when those slices were built, and
+other work in this repository may change the total.
 
 Persisted runs:
 

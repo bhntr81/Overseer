@@ -672,7 +672,7 @@ class FactoryTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
-    """The optional contract block: validated, recorded, never enforced."""
+    """The required contract block: validated, recorded, never enforced."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

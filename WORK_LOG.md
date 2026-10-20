@@ -1887,3 +1887,12 @@ The suite grew from 178 to 192 tests, all passing, and the document reference
 checker resolves all 112 citations. The live tmux server, every pane, and the
 running sessions of other projects were not touched; no work was routed
 anywhere.
+
+Another writer was active in this repository while this increment was being
+finished. It was editing `config.json`, `overseer/__main__.py`,
+`overseer/scheduler.py`, `overseer/tmux.py`, and `tests/test_exclusions.py`,
+and it added `tests/test_scope.py`, for work of its own on scoped pane
+targeting. None of those files were touched, staged, or committed here, and
+the tree was left exactly as found. The full suite passed at 192 tests while
+that work was in the tree, which is higher than the 178 this increment
+measured, because the other writer's new tests are counted there too.
