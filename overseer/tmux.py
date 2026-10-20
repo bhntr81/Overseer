@@ -6,9 +6,11 @@ from pathlib import Path
 import subprocess
 import time
 
-from .modelchoice import find_entry, footer_model, footer_shows, model_id, selected_index
+from .modelchoice import (
+    find_entry, footer_model, footer_shows, model_id, opencode_empty, selected_index,
+)
 
-CLIENTS = frozenset({"codex", "claude"})
+CLIENTS = frozenset({"codex", "claude", "opencode"})
 
 
 def command(*args):
@@ -31,13 +33,16 @@ class Snapshot:
 
     @property
     def ready(self):
+        if self.process not in CLIENTS or self.mode != "0" or self.dead != "0":
+            return False
+        if self.process == "opencode":
+            # OpenCode draws a bordered box; the cursor sits on its text row.
+            return opencode_empty(self.cursor_line)
         # Codex renders the composer as "›" or "»" depending on the build.
-        return (self.process in CLIENTS
-                and self.mode == "0" and self.dead == "0"
-                and (self.cursor_line.strip() in {">", "❯", "›", "»"}
-                     or (self.cursor_line.strip() in {"› Ask Codex to do anything",
-                                                     "» Ask Codex to do anything"}
-                         and self.cursor_x == 2)))
+        return (self.cursor_line.strip() in {">", "❯", "›", "»"}
+                or (self.cursor_line.strip() in {"› Ask Codex to do anything",
+                                                "» Ask Codex to do anything"}
+                    and self.cursor_x == 2))
 
 
 def bridged_process(bridge_pid, binding):

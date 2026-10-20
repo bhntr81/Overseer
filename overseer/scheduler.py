@@ -4,10 +4,14 @@ import logging
 import re
 import time
 
-from .modelchoice import RESOLUTIONS, detect, providers
+from .modelchoice import (
+    RESOLUTIONS, detect, fallback_policy, next_hop, providers,
+)
 from .policy import (
     ANSI, BLOCKED, COMPLETED, CONTINUE, DEFAULT_REPLY, STOP, classify, fingerprint, hold, next_prompt,
 )
+from .route import resolve_route
+from .tmux import CLIENTS
 
 LOG = logging.getLogger('overseer')
 ACTIVE = re.compile(r'^\s*[•·].*\b(?:esc to (?:interrupt|cancel)|ctrl.c to (?:interrupt|cancel))\b', re.I | re.M)
@@ -92,12 +96,16 @@ def _resolutions(path):
 def _adopt_resolutions(state, path):
     """Fold operator resolutions into the monitor's own decision records."""
     decisions = state.setdefault('_model_decisions', {})
+    routes = state.setdefault('_routes', {})
     for pane, record in _resolutions(path.parent / RESOLUTIONS).items():
         if not isinstance(record, dict):
             continue
         pending = decisions.get(pane)
         if isinstance(pending, dict) and pending.get('key') == record.get('key'):
             pending['resolved'] = record
+        moved = record.get('route')
+        if isinstance(moved, dict) and moved.get('pane') and moved['pane'] not in routes:
+            routes[moved['pane']] = {'resume': True, 'at': time.time(), 'from': pane}
 
 
 def _record_decision(decisions, snapshot, failure, allowlist):
@@ -118,6 +126,32 @@ def _record_decision(decisions, snapshot, failure, allowlist):
         'resolved': None,
     }
     return True
+
+
+def _route_to(snapshot, provider, config, decisions, failure, routes):
+    """Move a pane's work to another client. Report whether it worked."""
+    try:
+        moved = resolve_route(snapshot.pane, provider, config)
+    except (RuntimeError, OSError, ValueError) as error:
+        LOG.warning('%s routing to %s failed: %s', snapshot.pane, provider, error)
+        return None
+    moved.update({'at': time.time(), 'key': failure.key})
+    decisions[snapshot.pane] = {
+        'name': failure.name,
+        'phrase': failure.phrase,
+        'key': failure.key,
+        'detail': failure.detail,
+        'line': failure.line,
+        'client_pid': snapshot.pid,
+        'at': time.time(),
+        'providers': [provider],
+        'resolved': {'provider': provider, 'model': moved.get('model', 'default'),
+                     'at': time.time(), 'route': moved},
+    }
+    routes[moved['pane']] = {'resume': True, 'at': time.time(), 'from': snapshot.pane}
+    LOG.warning('%s routed to %s in %s (pane %s); the new session resumes the work',
+                snapshot.pane, provider, moved['session'], moved['pane'])
+    return moved
 
 
 def tick_queue(backend, policy, state, config, path, now, save):
@@ -146,6 +180,7 @@ def tick_queue(backend, policy, state, config, path, now, save):
         return
     _adopt_resolutions(state, path)
     model_decisions = state['_model_decisions']
+    routes = state.setdefault('_routes', {})
     phases = {key: phase(s) for key, s in snapshots.items()}
     active = queue.get('active')
     if active:
@@ -173,6 +208,8 @@ def tick_queue(backend, policy, state, config, path, now, save):
     for key, s in snapshots.items():
         entry = state.setdefault(key, {})
         capacity = phases[key] == 'capacity'
+        route_entry = routes.get(s.pane)
+        resume = bool(isinstance(route_entry, dict) and route_entry.get('resume'))
         model_note = None
         entry['queue_kind'] = 'capacity' if capacity else 'continuation'
         if phases[key] == 'stopped':
@@ -187,11 +224,30 @@ def tick_queue(backend, policy, state, config, path, now, save):
                         and isinstance(record.get('resolved'), dict))
             entry['queue_kind'] = 'model_decision'
             if resolved:
+                applied = record['resolved']
+                if applied.get('route'):
+                    # The work moved to another client. This pane stays paused.
+                    entry['queue_reason'] = 'routed to %s (%s)' % (
+                        applied.get('provider'), applied['route'].get('session'))
+                    continue
                 # The operator already chose for this exact failure.
                 model_note = 'model decision applied: %s/%s' % (
-                    record['resolved'].get('provider'), record['resolved'].get('model'))
+                    applied.get('provider'), applied.get('model'))
                 entry['queue_reason'] = model_note
                 phases[key] = 'unknown'
+            elif failure.name == 'credit_exhausted':
+                hop = next_hop(config, failure.name, s.process)
+                if hop and _route_to(s, hop, config, model_decisions, failure, routes):
+                    entry['queue_reason'] = 'routed to %s' % hop
+                    continue
+                # The last tier is exhausted. Wait; do not retry and do not
+                # fall back to a lower model.
+                status = fallback_policy(config)['exhausted_status']
+                entry['queue_reason'] = status
+                if _record_decision(model_decisions, s, failure, allowlist):
+                    LOG.warning('%s %s: %s (%s); waiting for the credits to reset',
+                                s.pane, status, failure.detail, failure.name)
+                continue
             else:
                 entry['queue_reason'] = 'model decision pending: %s' % failure.name
                 if _record_decision(model_decisions, s, failure, allowlist):
@@ -208,8 +264,9 @@ def tick_queue(backend, policy, state, config, path, now, save):
             entry['queue_reason'] = 'capacity retry limit reached; manual intervention needed'
             continue
         eligible, reason = policy.consider(entry, s.text, now, capacity=capacity,
-                                           retry_seconds=config.get('capacity_retry_seconds', 120))
-        if eligible and not capacity:
+                                           retry_seconds=config.get('capacity_retry_seconds', 120),
+                                           resume=resume)
+        if eligible and not capacity and not resume:
             prompt, kind = next_prompt(s.text, fallback)
             if prompt is None:
                 eligible = False
@@ -259,6 +316,10 @@ def tick_queue(backend, policy, state, config, path, now, save):
         except (RuntimeError, OSError, ValueError):
             return
     outgoing, kind = (fallback, 'routine continuation') if phases[key] == 'capacity' else next_prompt(s.text, fallback)
+    route_entry = routes.get(s.pane)
+    if isinstance(route_entry, dict) and route_entry.get('resume'):
+        # A newly routed session gets the configured continuation to start.
+        outgoing, kind = fallback, 'routed continuation'
     if outgoing is None:
         waiting.pop(0)
         hold(entry, s.text, kind)
@@ -272,11 +333,16 @@ def tick_queue(backend, policy, state, config, path, now, save):
     policy.acknowledge(entry, s.text, now)
     if phases[key] == 'capacity':
         entry['capacity_attempts'] = entry.get('capacity_attempts', 0) + 1
+    if isinstance(route_entry, dict) and route_entry.get('resume'):
+        route_entry['resume'] = False
+        route_entry['resumed_at'] = now
     save(path, state)
     try:
         backend.send(s, outgoing)
         if kind == 'report-based prompt':
             LOG.info('%s sent report-based prompt', s.pane)
+        elif kind == 'routed continuation':
+            LOG.info('%s dispatched the routed continuation', s.pane)
         else:
             LOG.info('%s dispatched from FIFO queue', s.pane)
     except (RuntimeError, OSError, ValueError) as error:

@@ -188,13 +188,17 @@ class Policy:
         self.max_per_day = max_per_day
         self.continue_on_completion = continue_on_completion
 
-    def consider(self, state, text, now, *, capacity=False, retry_seconds=120):
+    def consider(self, state, text, now, *, capacity=False, retry_seconds=120, resume=False):
         """Update observation state. Sending must be acknowledged separately."""
         digest = fingerprint(text)
         if state.get("fingerprint") != digest or now < state.get("stable_since", now):
             state.update(fingerprint=digest, stable_since=now)
-        eligible, reason = ((True, "model capacity retry") if capacity
-                            else classify(text, self.continue_on_completion))
+        if capacity:
+            eligible, reason = True, "model capacity retry"
+        elif resume:
+            eligible, reason = True, "routed session needs a continuation"
+        else:
+            eligible, reason = classify(text, self.continue_on_completion)
         if not eligible:
             return False, reason
         if now - state["stable_since"] < (retry_seconds if capacity else self.idle_seconds):

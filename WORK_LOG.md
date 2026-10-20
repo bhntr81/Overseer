@@ -902,3 +902,31 @@ ids were verified locally with `codex debug models`, `claude --help`,
 substitute a model, does not retry a blocked pane, and cannot drive an
 `opencode` or `grok` session because the monitor only watches `codex` and
 `claude` clients.
+
+### Credit fallback policy, OpenCode as a driven client, and the %3 route
+
+The dedicated prompt-writing agent authored the bounded prompt; the primary
+agent executed it. `config.json` gained a `fallback_policy`: `primary` is the
+paid tier, `zero_credit` is the tier that takes over when the paid credits are
+gone, `excluded_models` names model ids that are offered nowhere, and
+`exhausted_status` is the literal `CREDITS_EXHAUSTED_WAITING`. `gpt-6-luna` is
+excluded, on the operator's stated judgment that it is not a coding model; that
+is the operator's reason, not a measured result.
+
+```text
+python3 scripts/check
+python3 scripts/check-doc-references
+```
+
+OpenCode is now a driven client. Its composer was measured directly from a
+throwaway session that was started and killed again: the client is a bordered
+box whose cursor row is `┃  <text>`, empty when the text is the `Ask anything`
+placeholder, and its model row reads `┃  <agent> · <model>`. Added
+`overseer/route.py` for moving work between clients, an OpenCode branch in
+`Snapshot.ready`, the credit branch in `overseer/scheduler.py` that routes a
+credit failure to the zero-credit tier once and pauses the failed pane, and the
+`CREDITS_EXHAUSTED_WAITING` state for when that tier is exhausted too. A
+routed pane stays paused and the new session receives the configured
+continuation. The suite grew from 105 to 110 tests, all passing, and the
+document reference checker resolves all 83 citations. The six migrated
+sessions and their clients were not touched.

@@ -148,21 +148,52 @@ keep running, and the decision is recorded. The journal names the command:
 `python3 -m overseer status` lists every pending decision. `python3 -m overseer
 model-select %3` asks which permitted provider and model to use; the
 non-interactive form is `python3 -m overseer model-select %3 --provider openai
---model gpt-6-luna`. A choice is applied through the client's own model picker
+--model gpt-5.6-terra`. A choice is applied through the client's own model picker
 and confirmed from the pane's composer footer, so a pane that cannot serve the
-chosen model is reported instead of being forced. A provider whose client the
-monitor cannot watch is reported too: only Codex and Claude sessions are
-watched today.
+chosen model is reported instead of being forced. When the chosen provider uses
+a different client, the work is routed: a new session is started for that client
+in the same working directory and the pane it came from stays paused.
+
+### Credit fallback hierarchy
+
+`config.json` carries a `fallback_policy`:
+
+- **Primary, the paid tier.** `primary` names the providers that carry normal
+  coding work.
+- **Fallback 1, zero paid credits.** When a client reports exhausted credits,
+  `zero_credit` names the provider that takes over. The monitor routes the work
+  automatically: it starts that client in the pane's working directory, enrolls
+  it, and sends the configured continuation so the work resumes. The pane that
+  failed stays paused.
+- **Fallback 2, every credit maxed out.** When the zero-credit tier reports the
+  same failure, the pane is paused with the status `CREDITS_EXHAUSTED_WAITING`.
+  Nothing is retried, no lower tier is used, and no model is substituted. The
+  pause ends by itself when the client stops showing the error, which is what
+  waiting for the credits to reset means here.
+
+```text
+%3 CREDITS_EXHAUSTED_WAITING: insufficient credit (credit_exhausted); waiting for the credits to reset
+```
+
+`excluded_models` names model ids that are offered nowhere: they are absent
+from the provider lists, from the interactive picker, and from every automatic
+choice. The current exclusion is `gpt-6-luna`, on the operator's stated
+judgment that it is not a coding model. That is the operator's reason, not a
+measured result.
 
 The permitted providers and their model identifiers live in `config.json` under
 `model_providers` and `allowed_providers`. They were verified locally with
 `codex debug models`, `claude --help`, `opencode models`, and
 `~/.grok/models_cache.json`, and they can go stale. No model name may be
-invented; a model outside the configured list is refused.
+invented; a model outside the configured list is refused. Codex, Claude, and
+OpenCode sessions can be watched and driven; a Grok session cannot, because the
+monitor does not recognize its composer, and it is reported instead of being
+forced.
 
 This feature does not substitute a model automatically, does not retry a
 blocked pane, and does not drive a client that the account or provider cannot
-serve.
+serve. A route creates a new session; it never restarts or replaces an existing
+one, and it never sends text to a pane other than the one it just created.
 
 ## Background service
 

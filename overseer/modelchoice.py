@@ -40,6 +40,14 @@ QUOTED = re.compile(r"'([^']+)'")
 SELECTED = re.compile(r"^[>❯»›]\s")
 FOOTER = "default]"
 RESOLUTIONS = "model-resolutions.json"
+BOX = "┃"
+EXHAUSTED = "CREDITS_EXHAUSTED_WAITING"
+DEFAULT_POLICY = {
+    "primary": [],
+    "zero_credit": [],
+    "excluded_models": [],
+    "exhausted_status": EXHAUSTED,
+}
 
 
 @dataclass(frozen=True)
@@ -102,6 +110,65 @@ def model_label(model):
     return model
 
 
+def provider_table(config):
+    """Return the configured providers keyed by id."""
+    table = config.get("model_providers")
+    return table if isinstance(table, dict) else {}
+
+
+def fallback_policy(config):
+    """Return the credit fallback policy. A malformed policy is unusable, not fatal."""
+    raw = config.get("fallback_policy")
+    result = dict(DEFAULT_POLICY)
+    if not isinstance(raw, dict):
+        return result
+    for field in ("primary", "zero_credit", "excluded_models"):
+        value = raw.get(field)
+        if isinstance(value, list):
+            result[field] = [item for item in value if isinstance(item, str) and item.strip()]
+    status = raw.get("exhausted_status")
+    if isinstance(status, str) and status.strip():
+        result["exhausted_status"] = status.strip()
+    return result
+
+
+def excluded_models(config):
+    """Return the normalized model ids the policy excludes."""
+    return {normalize(item) for item in fallback_policy(config)["excluded_models"]}
+
+
+def permitted_models(config, provider_id):
+    """Return a provider's models with the excluded ids removed."""
+    entry = provider_table(config).get(provider_id)
+    if not isinstance(entry, dict):
+        return []
+    excluded = excluded_models(config)
+    models = [m for m in entry.get("models") or [] if isinstance(m, (str, dict))]
+    return [m for m in models if normalize(model_id(m)) not in excluded]
+
+
+def fallback_chain(config, failure_name):
+    """Return the ordered provider chain for a failure class.
+
+    A credit failure means the paid tier cannot serve the work, so the chain
+    starts at the zero-credit tier. Any other failure keeps the paid tier.
+    """
+    rules = fallback_policy(config)
+    if failure_name == "credit_exhausted":
+        return list(rules["zero_credit"])
+    return list(rules["primary"])
+
+
+def next_hop(config, failure_name, client):
+    """Return the next provider whose client differs from the pane's client."""
+    table = provider_table(config)
+    for provider_id in fallback_chain(config, failure_name):
+        entry = table.get(provider_id)
+        if isinstance(entry, dict) and entry.get("client") != client:
+            return provider_id
+    return None
+
+
 def providers(config):
     """Return the ordered provider allowlist from a config dict."""
     table = config.get("model_providers")
@@ -114,7 +181,7 @@ def providers(config):
         if not isinstance(entry, dict):
             continue
         client = entry.get("client")
-        models = [m for m in entry.get("models") or [] if isinstance(m, (str, dict))]
+        models = permitted_models(config, name)
         if not isinstance(client, str) or not client or not models:
             continue
         allowlist.append({"id": name, "client": client,
@@ -159,3 +226,19 @@ def footer_shows(text, model):
     if not head:
         return False
     return normalize(head).startswith(normalize(model_label(model)))
+
+
+def opencode_composer(text):
+    """Return the text of an OpenCode composer row, or None when it is not one."""
+    stripped = (text or "").strip()
+    if not stripped.startswith(BOX):
+        return None
+    return stripped[len(BOX):].strip()
+
+
+def opencode_empty(text):
+    """Report whether an OpenCode composer row shows an empty input."""
+    body = opencode_composer(text)
+    if body is None:
+        return False
+    return body == "" or body.startswith("Ask anything")

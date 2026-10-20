@@ -10,7 +10,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from overseer.__main__ import main, model_select, tick
-from overseer.modelchoice import detect, find_entry, footer_shows, selected_index
+from overseer.modelchoice import (
+    detect, fallback_chain, find_entry, footer_shows, model_id, next_hop, providers, selected_index,
+)
 from overseer.policy import Policy
 from overseer.scheduler import phase
 from overseer.tmux import Snapshot
@@ -145,6 +147,75 @@ class ModelChoiceTests(unittest.TestCase):
         text = '  GPT-6-Luna ultra · ~/Projects/Crypto-Cooking · Main [default]'
         self.assertTrue(footer_shows(text, {'id': 'gpt-6-luna', 'label': 'GPT-6-Luna'}))
         self.assertFalse(footer_shows(text, {'id': 'gpt-6-astra', 'label': 'GPT-6-Astra'}))
+
+    def test_excluded_model_is_never_offered(self):
+        config = {
+            'model_providers': {'openai': {'client': 'codex', 'label': 'OpenAI Codex', 'models': [
+                {'id': 'gpt-6-luna', 'label': 'GPT-6-Luna'},
+                {'id': 'gpt-5.6-terra', 'label': 'GPT-5.6-Terra'}]}},
+            'allowed_providers': ['openai'],
+            'fallback_policy': {'excluded_models': ['gpt-6-luna']},
+        }
+        offered = [model_id(model) for model in providers(config)[0]['models']]
+        self.assertEqual(offered, ['gpt-5.6-terra'])
+
+    def test_fallback_chain_starts_at_the_zero_credit_tier(self):
+        config = {
+            'model_providers': {
+                'openai': {'client': 'codex', 'label': 'OpenAI Codex', 'models': ['gpt-5.6-terra']},
+                'opencode': {'client': 'opencode', 'label': 'OpenCode', 'models': ['opencode/free']},
+            },
+            'fallback_policy': {'primary': ['claude', 'openai'], 'zero_credit': ['opencode']},
+        }
+        self.assertEqual(fallback_chain(config, 'credit_exhausted'), ['opencode'])
+        self.assertEqual(fallback_chain(config, 'unsupported_model'), ['claude', 'openai'])
+        self.assertEqual(next_hop(config, 'credit_exhausted', 'codex'), 'opencode')
+        self.assertIsNone(next_hop(config, 'credit_exhausted', 'opencode'))
+
+    def test_credit_failure_routes_to_the_zero_credit_tier_once(self):
+        self.config['model_providers'] = {'opencode': {'client': 'opencode', 'label': 'OpenCode',
+                                                       'models': [{'id': 'opencode/free', 'label': 'free'}]}}
+        self.config['allowed_providers'] = ['opencode']
+        self.config['fallback_policy'] = {'primary': ['openai'], 'zero_credit': ['opencode'],
+                                          'excluded_models': ['gpt-6-luna'],
+                                          'exhausted_status': 'CREDITS_EXHAUSTED_WAITING'}
+        self.change('%0', CREDIT_ERROR)
+        moved = {'pane': '%9', 'session': 'session-opencode', 'client': 'opencode',
+                 'provider': 'opencode', 'directory': '/tmp/project', 'model': 'default'}
+        with patch('overseer.scheduler.resolve_route', return_value=moved) as routed:
+            self.run_tick(0)
+            self.run_tick(10)
+        routed.assert_called_once()
+        self.assertEqual(self.state['_model_decisions']['%0']['resolved']['provider'], 'opencode')
+        self.assertIn('routed to opencode', self.state['%0:0']['queue_reason'])
+        self.assertTrue(self.state['_routes']['%9']['resume'])
+        sent = [call.args[0].pane for call in self.backend.send.call_args_list]
+        self.assertNotIn('%0', sent)
+
+    def test_credit_failure_in_the_last_tier_waits(self):
+        self.config['model_providers'] = {'opencode': {'client': 'opencode', 'label': 'OpenCode',
+                                                       'models': [{'id': 'opencode/free', 'label': 'free'}]}}
+        self.config['allowed_providers'] = ['opencode']
+        self.config['fallback_policy'] = {'primary': ['openai'], 'zero_credit': ['opencode'],
+                                          'excluded_models': ['gpt-6-luna'],
+                                          'exhausted_status': 'CREDITS_EXHAUSTED_WAITING'}
+        self.change('%0', CREDIT_ERROR, process='opencode',
+                    cursor_line='┃  Ask anything… "Fix broken tests"')
+        self.run_tick(0)
+        self.assertEqual(self.state['%0:0']['queue_reason'], 'CREDITS_EXHAUSTED_WAITING')
+        self.assertIsNone(self.state['_model_decisions']['%0']['resolved'])
+        sent = [call.args[0].pane for call in self.backend.send.call_args_list]
+        self.assertNotIn('%0', sent)
+        self.run_tick(1000)
+        self.assertEqual(self.state['%0:0']['queue_reason'], 'CREDITS_EXHAUSTED_WAITING')
+
+    def test_opencode_composer_readiness(self):
+        empty = Snapshot('%0', 'opencode', '1', 'text', '┃  Ask anything… "Fix broken tests"', '0', '0')
+        self.assertTrue(empty.ready)
+        draft = Snapshot('%0', 'opencode', '1', 'text', '┃  x', '0', '0')
+        self.assertFalse(draft.ready)
+        boxed = Snapshot('%0', 'opencode', '1', 'text', '┃', '0', '0')
+        self.assertTrue(boxed.ready)
 
 
 if __name__ == '__main__':

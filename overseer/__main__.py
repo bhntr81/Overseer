@@ -11,6 +11,7 @@ import time
 
 from .modelchoice import RESOLUTIONS, model_id, providers
 from .policy import DEFAULT_REPLY, Policy, hold, next_prompt
+from .route import resolve_route
 from .tmux import CLIENTS, Tmux, command
 
 
@@ -69,7 +70,7 @@ def pending_decisions(path):
             if isinstance(record, dict) and not isinstance(record.get("resolved"), dict)}
 
 
-def resolve_decision(path, pane, record, provider, model):
+def resolve_decision(path, pane, record, provider, model, moved=None):
     """Record the operator's choice where the monitor will read it."""
     target = path.parent / RESOLUTIONS
     data = {}
@@ -81,6 +82,8 @@ def resolve_decision(path, pane, record, provider, model):
     if not isinstance(data, dict):
         data = {}
     data[pane] = {"key": record.get("key"), "provider": provider, "model": model, "at": time.time()}
+    if moved:
+        data[pane]["route"] = moved
     save(target, data)
 
 
@@ -154,6 +157,28 @@ def model_select(args):
     if entry is None:
         print("Provider %s is not permitted." % choice, file=sys.stderr)
         return 1
+    backend = Tmux(config.get("exclude", []))
+    try:
+        snapshot = backend.inspect(args.pane)
+    except (RuntimeError, OSError, ValueError) as error:
+        print("Cannot read %s: %s" % (args.pane, error), file=sys.stderr)
+        return 1
+    if snapshot.process != entry["client"]:
+        # The client differs, so the work moves instead of the model changing.
+        if entry["client"] not in CLIENTS:
+            print("The monitor cannot watch %s sessions yet, so %s cannot be used here." % (
+                entry["client"], entry["id"]))
+            return 1
+        try:
+            moved = resolve_route(args.pane, entry["id"], config)
+        except (RuntimeError, OSError, ValueError) as error:
+            print("Routing failed: %s" % error, file=sys.stderr)
+            return 1
+        resolve_decision(args.state, args.pane, record, entry["id"],
+                         moved.get("model", "default"), moved)
+        print("Routed %s to %s in session %s (pane %s) at %s." % (
+            args.pane, entry["id"], moved["session"], moved["pane"], moved.get("directory")))
+        return 0
     model = args.model
     if not model:
         model = ask_model(entry)
@@ -162,23 +187,6 @@ def model_select(args):
         return 1
     if model not in [model_id(item) for item in entry["models"]]:
         print("Model %s is not in the permitted list for %s." % (model, entry["id"]), file=sys.stderr)
-        return 1
-    if entry["client"] not in CLIENTS:
-        print("The monitor cannot watch %s sessions yet, so %s cannot be applied here." % (
-            entry["client"], model))
-        return 1
-    backend = Tmux(config.get("exclude", []))
-    try:
-        snapshot = backend.inspect(args.pane)
-    except (RuntimeError, OSError, ValueError) as error:
-        print("Cannot read %s: %s" % (args.pane, error), file=sys.stderr)
-        return 1
-    if snapshot.process != entry["client"]:
-        print("Pane %s runs %s, not %s. The model cannot be changed in place." % (
-            args.pane, snapshot.process, entry["client"]))
-        print("Move the work to that client, then re-enable monitoring:")
-        print("  python3 -m overseer start <name> %s --cwd <workspace>" % entry["client"])
-        print("  python3 -m overseer watch <pane>")
         return 1
     try:
         reported = backend.select_model(args.pane, model)
@@ -291,7 +299,7 @@ def main():
     start = sub.add_parser("start")
     start.add_argument("name", help="new tmux session name")
     start.add_argument("--cwd", type=Path, default=Path.cwd())
-    start.add_argument("client", choices=["codex", "claude"])
+    start.add_argument("client", choices=["codex", "claude", "opencode"])
     start.add_argument("client_args", nargs=argparse.REMAINDER)
     select = sub.add_parser("model-select")
     select.add_argument("pane", nargs="?", help="tmux pane ID, e.g. %%0")
