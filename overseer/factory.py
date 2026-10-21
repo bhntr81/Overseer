@@ -1579,6 +1579,11 @@ class Factory:
                 self.event(job_id, 'cancelled', 'operator cancelled queued task')
 
     def execute(self, job_id, argv, cwd, timeout, log, env=None):
+        # The child runs in the workspace, so its PWD must name the workspace
+        # too: a tool that trusts $PWD over getcwd (OpenCode, for one) would
+        # otherwise edit the factory's own directory instead of the workspace.
+        env = dict(env if env is not None else os.environ)
+        env['PWD'] = str(cwd)
         started = time.monotonic()
         # Bounded captured output; drain the remainder so a noisy child cannot
         # deadlock or fill the evidence filesystem. stderr is merged with stdout.

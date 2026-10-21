@@ -4992,3 +4992,28 @@ class PauseTests(unittest.TestCase):
         self.addCleanup(other.close)
         other.restore(backup)
         self.assertTrue(other.run_one().get('paused'))
+
+
+class WorkerPwdTests(unittest.TestCase):
+    """The worker runs with PWD set to its workspace, not the factory's cwd.
+
+    Tools that trust the PWD environment variable over getcwd (OpenCode among
+    them) must land their file edits in the workspace.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.f = Factory(self.root / 'state' / 'jobs.sqlite3')
+        self.addCleanup(self.f.close)
+
+    def test_the_worker_environment_pwd_is_the_workspace(self):
+        code = ("import os,sys; sys.exit(0 if os.environ.get('PWD')==%r else 1)"
+                % str(self.root))
+        spec = attach_contract({'id': 'pwd', 'objective': 'check PWD',
+                                'workspace': str(self.root), 'timeout_seconds': 5,
+                                'implementation': [sys.executable, '-c', code],
+                                'checks': [[sys.executable, '-c', 'pass']]})
+        self.f.submit(spec)
+        self.assertEqual(self.f.run_one()['state'], 'passed')

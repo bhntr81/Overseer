@@ -3581,3 +3581,50 @@ adapter targeting OpenCode (the operator's machine cannot run a local Ollama
 model), proven first on a single manually submitted job before the unattended
 loop (increment 9) drives it. The safety brakes (increment 6 remains) still come
 before any unattended sending.
+
+### Making it real: the worker PWD fix, and a free model driven by the factory
+
+Operator direction: "make this real." The factory had never invoked a model — a
+job's implementation is an argv, and the whole suite uses a fake worker. We
+targeted OpenCode (the operator's machine cannot run a local Ollama model).
+
+Feasibility, verified on this machine:
+- OpenCode v2.0.32 is installed; `opencode run` is its headless mode, with
+  `--model`, `--format json`, and `--auto` (auto-approve edits).
+- `opencode auth list` is empty, but `opencode models` lists `opencode/*-free`
+  models served through OpenCode's gateway. `opencode/deepseek-v4.1-flash-free`
+  ran headless with no auth, used its write tool to create a file, and reported
+  cost 0.
+
+Two integration facts found by probing:
+1. `opencode run` without `--standalone` talks to a background `opencode serve
+   --service`, which is rooted wherever it was started, not the job's workspace;
+   `--standalone` runs a private server instead.
+2. Even with `--standalone`, OpenCode trusts the `$PWD` environment variable over
+   the actual working directory. The factory's `execute` ran the child with
+   `cwd=workspace` but inherited `PWD=<factory's own dir>`, so OpenCode edited the
+   factory's directory. This is a general correctness bug for any `$PWD`-trusting
+   tool, not just OpenCode.
+
+Fix (red-green, this commit): `overseer/factory.py:execute` now sets
+`env['PWD'] = str(cwd)` for every worker command (+5 lines), with
+`tests/test_factory.WorkerPwdTests.test_the_worker_environment_pwd_is_the_workspace`
+asserting a worker sees `PWD` equal to its workspace. Red failed on the inherited
+PWD; green passes. Full suite 411.
+
+Proof it is real (scratch, not committed): a factory job whose implementation is
+`opencode run --standalone --model opencode/deepseek-v4.1-flash-free --format
+json --auto "Create calc.py ... add(a, b) ..."`, workspace a fresh git repo,
+check `python3 -c "import calc; assert calc.add(2,3)==5"`. After the PWD fix the
+job reached `passed`: the model wrote `def add(a, b): return a + b` into the
+workspace, the diff receipt captured `calc.py` as added, acceptance `A1`
+completed, and the worker report was captured (its block is invalid because the
+`--format json` stream carries no line-start AGENTS.md block — recorded, not
+invented). `candidate_revision` is null because the worker did not commit.
+
+What is still not real: there is no provider-adapter module that constructs the
+OpenCode invocation from an instruction, model, and workspace — today the argv is
+hand-written in the task. The unattended feed loop (increment 9) needs that
+adapter. The free models are rate/quality limited and their output is not the
+AGENTS.md status block unless the prompt asks for text format. The safety brake
+increment 6 (monitor-side hold) also remains before any unattended sending.
