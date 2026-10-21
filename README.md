@@ -256,6 +256,18 @@ that the worker requested escalation, or an `escalation_requested` event is
 recorded when there is no lineage. The report's digest is sealed with a
 `worker_report` event, and the context manifest carries its pointer and digest.
 
+An operator can pause factory dispatch with a recorded note:
+
+```sh
+python3 -m overseer.factory pause --note "holding while I investigate"
+python3 -m overseer.factory unpause --note "resume"
+```
+
+While paused, `run_one` dispatches nothing and reports the pause instead,
+exiting non-zero. The pause is read inside the dispatch transaction, so a
+paused factory starts no new job, and it survives backup and restore. It pauses
+*dispatch* only: a job already running is not interrupted.
+
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 

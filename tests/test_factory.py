@@ -4899,3 +4899,96 @@ class NoNewEvidenceTests(unittest.TestCase):
         lin = self.lineage('a')
         self.assertEqual(lin['state'], 'open')
         self.assertEqual(lin['strikes'], 2)
+
+
+class _RecordingDB:
+    """A thin proxy over a sqlite3 connection that logs the SQL it executes.
+
+    It lets a test assert the order of statements, e.g. that the dispatch pause
+    is read inside the BEGIN IMMEDIATE transaction, not before it.
+    """
+
+    def __init__(self, connection, log):
+        self._connection = connection
+        self._log = log
+
+    def execute(self, sql, *args, **kwargs):
+        self._log.append(sql.strip().splitlines()[0][:48])
+        return self._connection.execute(sql, *args, **kwargs)
+
+    def __enter__(self):
+        return self._connection.__enter__()
+
+    def __exit__(self, *exc):
+        return self._connection.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+class PauseTests(unittest.TestCase):
+    """Increment 5: an operator pause of factory dispatch.
+
+    Pausing stops dispatch, not running work, and the pause survives restart.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / 'state' / 'jobs.sqlite3'
+        self.f = Factory(self.db)
+        self.addCleanup(self.f.close)
+
+    def spec(self, name='j'):
+        s = {'id': name, 'objective': 'succeed', 'workspace': str(self.root),
+             'timeout_seconds': 5,
+             'implementation': [sys.executable, '-c', 'pass'],
+             'checks': [[sys.executable, '-c', 'pass']]}
+        return attach_contract(s)
+
+    def test_a_paused_factory_dispatches_nothing(self):
+        self.f.submit(self.spec('j'))
+        self.f.pause('under maintenance')
+        log = []
+        self.f.db = _RecordingDB(self.f.db, log)
+        result = self.f.run_one()
+        self.assertTrue(result.get('paused'))
+        self.assertIn('paused', result.get('reason', ''))
+        # The job was not dispatched; it is still queued with no run.
+        self.assertEqual(self.f.inspect('j')['state'], 'queued')
+        self.assertIsNone(self.f.inspect('j')['run_id'])
+        # The pause was read inside the dispatch transaction, after BEGIN IMMEDIATE.
+        begin = next(i for i, sql in enumerate(log) if 'BEGIN IMMEDIATE' in sql)
+        pause = next(i for i, sql in enumerate(log) if 'dispatch_pause' in sql)
+        self.assertGreater(pause, begin)
+
+    def test_unpause_requires_a_note_and_resumes_dispatch(self):
+        self.f.submit(self.spec('j'))
+        self.f.pause('stop')
+        self.assertTrue(self.f.run_one().get('paused'))
+        with self.assertRaises(ValueError):
+            self.f.unpause('')
+        with self.assertRaises(ValueError):
+            self.f.unpause('   ')
+        with self.assertRaises(ValueError):
+            self.f.pause('')
+        self.f.unpause('resume now')
+        self.assertEqual(self.f.run_one()['state'], 'passed')
+
+    def test_the_pause_does_not_touch_a_running_job(self):
+        self.f.submit(self.spec('r'))
+        self.f.db.execute("UPDATE jobs SET state='running' WHERE id='r'")
+        self.f.db.commit()
+        self.f.pause('maintenance')
+        self.assertEqual(self.f.inspect('r')['state'], 'running')
+
+    def test_the_pause_survives_backup_and_restore(self):
+        self.f.submit(self.spec('j'))
+        self.f.pause('held')
+        backup = self.root / 'backup.sqlite3'
+        self.f.backup(backup)
+        other = Factory(self.root / 'state2' / 'jobs.sqlite3')
+        self.addCleanup(other.close)
+        other.restore(backup)
+        self.assertTrue(other.run_one().get('paused'))

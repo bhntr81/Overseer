@@ -3533,3 +3533,51 @@ Limit that remains: the fingerprint is byte-equal only. A worker that loops on a
 design flaw while changing its patch each attempt produces new evidence by this
 rule and runs to the bound; the early freeze caps an *unchanged* repeat, not a
 disguised one.
+
+### Increment 5: operator pause of factory dispatch (PERMISSIONS)
+
+Red-green, one commit. Phase 0 re-read the spec and `run_one`'s dispatch
+transaction. Phase 1 wrote the four named tests as `tests/test_factory.PauseTests`
+(digest `2fa20209880851fc8dabca94ed1a0cf9d1f07f2f7c82151b9600261cbcda00a7`); the
+dispatch test uses a small `_RecordingDB` proxy to assert the pause is read
+*after* `BEGIN IMMEDIATE`, which deterministically catches a check placed outside
+the transaction. Red was four errors on the missing pause API.
+
+Implementation in `overseer/factory.py` (+36 lines; just over the +35 estimate,
+under the +40 cap): a one-row `dispatch_pause(id, paused, note, at)` table in the
+schema and in `_ensure_side_tables`; a pause read at the top of `run_one`'s
+`BEGIN IMMEDIATE` transaction that rolls back and returns a JSON reason when
+paused; `pause`/`unpause`/`_set_pause` methods that require a note and record it
+under the worker lock; `pause`/`unpause --note` CLI subcommands; and a one-token
+fix of `main`'s exit logic to `result.get('state')` so a paused run-one exits 1
+without a KeyError.
+
+Decisions settled: the pause is checked inside the dispatch transaction
+(decision 1); a paused `run_one` returns `{dispatched: false, paused: true,
+reason: ...}` and the CLI exits 1 (decision 2); the table lives in the ledger and
+survives backup and restore (decision 3). It pauses dispatch, not running work:
+`_set_pause` never touches the jobs table, and a job already `running` is left
+alone.
+
+Verification:
+- `tests.test_factory.PauseTests`: 4 tests, OK.
+- Full suite: `Ran 410 tests ... OK` (was 406; +4).
+- Mutations confirmed to fail the suite, each reverted and re-parsed: the pause
+  check moved before `BEGIN IMMEDIATE` (caught by the dispatch test's order
+  assertion); the note requirement removed (caught by the unpause test).
+- All 151 `overseer/factory.py` citations across the three harness docs re-mapped
+  by content (file end 2465 to 2501); `check-doc-references` resolves for all.
+
+Docs: the PERMISSIONS pillar row records the dispatch pause and keeps the honest
+limit that it is not a pause of running work; `AUTONOMY_BLUEPRINT.md` marks M3-d
+and increment 5 landed; `README.md` gains the pause/unpause commands.
+`HARDENING_BLUEPRINT.md` is unchanged: the operator pause is a PERMISSIONS control
+and maps to no one of the five hardening failure modes.
+
+Direction note from the operator, mid-increment: "we need to make this real."
+The factory still runs argument-vector worker commands against a fake worker in
+the tests; no real model is invoked. The agreed next direction is a provider
+adapter targeting OpenCode (the operator's machine cannot run a local Ollama
+model), proven first on a single manually submitted job before the unattended
+loop (increment 9) drives it. The safety brakes (increment 6 remains) still come
+before any unattended sending.

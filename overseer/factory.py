@@ -456,6 +456,9 @@ class Factory:
                 affected_component TEXT NOT NULL, invalidation_condition TEXT NOT NULL,
                 revision TEXT, environment TEXT, owner TEXT, reason TEXT,
                 supersedes TEXT, verified INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS dispatch_pause (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                paused INTEGER NOT NULL, note TEXT NOT NULL, at REAL NOT NULL);
         ''')
         strikes.ensure_tables(self.db)
         self._lock_depth = 0
@@ -784,6 +787,24 @@ class Factory:
                 # transition, and before it, so 'failed' stays the last event.
                 strikes.record_terminal(self.db, job_id, 'failed', row['spec'])
                 self.transition(job_id, 'failed', 'operator reconciled, no automatic retry: ' + note)
+
+    def pause(self, note):
+        """Pause dispatch. Running work is not interrupted; only new dispatch is."""
+        return self._set_pause(True, note)
+
+    def unpause(self, note):
+        """Resume dispatch."""
+        return self._set_pause(False, note)
+
+    def _set_pause(self, paused, note):
+        if not isinstance(note, str) or not note.strip():
+            raise ValueError('a note is required to pause or unpause dispatch')
+        with self.worker_lock():
+            with self.db:
+                self.db.execute(
+                    'INSERT OR REPLACE INTO dispatch_pause(id,paused,note,at) VALUES(1,?,?,?)',
+                    (1 if paused else 0, note.strip(), time.time()))
+        return {'paused': paused, 'note': note.strip()}
 
     def lineage(self, lineage_id):
         """Return the repair lineage's recorded state, or None if unknown."""
@@ -2033,6 +2054,9 @@ class Factory:
                 affected_component TEXT NOT NULL, invalidation_condition TEXT NOT NULL,
                 revision TEXT, environment TEXT, owner TEXT, reason TEXT,
                 supersedes TEXT, verified INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS dispatch_pause (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                paused INTEGER NOT NULL, note TEXT NOT NULL, at REAL NOT NULL);
         ''')
         strikes.ensure_tables(self.db)
 
@@ -2174,6 +2198,13 @@ class Factory:
     def run_one(self):
         with self.worker_lock():
             self.db.execute('BEGIN IMMEDIATE')
+            # Read inside the transaction, so a pause recorded before dispatch
+            # always blocks it. Running work is not touched; only new dispatch.
+            pause = self.db.execute('SELECT paused, note FROM dispatch_pause WHERE id=1').fetchone()
+            if pause and pause['paused']:
+                self.db.rollback()
+                return {'dispatched': False, 'paused': True,
+                        'reason': 'factory dispatch is paused; unpause to resume: ' + pause['note']}
             if self.db.execute("SELECT 1 FROM jobs WHERE state IN ('running','checking','needs_reconciliation')").fetchone():
                 self.db.rollback()
                 raise RuntimeError('unresolved prior run; reconcile/inspect it before dispatch')
@@ -2404,6 +2435,9 @@ def main():
     release.add_argument('id')
     release.add_argument('--decider', required=True)
     release.add_argument('--note', required=True)
+    for name in ('pause', 'unpause'):
+        paused = sub.add_parser(name)
+        paused.add_argument('--note', required=True)
     sub.add_parser('status')
     sub.add_parser('run-one')
     sub.add_parser('reconcile')
@@ -2426,6 +2460,8 @@ def main():
                                                 repair_of=args.repair_of)}
         elif args.action == 'release':
             result = factory.release(args.id, args.decider, args.note)
+        elif args.action in ('pause', 'unpause'):
+            result = getattr(factory, args.action)(args.note)
         elif args.action == 'run-one':
             result = factory.run_one()
         elif args.action == 'inspect':
@@ -2453,7 +2489,7 @@ def main():
                 item['approval'] = dict(approval) if approval else None
                 result.append(item)
         print(json.dumps(result, indent=2))
-        return 1 if args.action == 'run-one' and result and result['state'] != 'passed' else 0
+        return 1 if args.action == 'run-one' and result and result.get('state') != 'passed' else 0
     except (ValueError, OSError, RuntimeError, sqlite3.Error) as error:
         print(json.dumps({'error': str(error)}))
         return 1
