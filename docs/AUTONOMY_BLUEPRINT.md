@@ -71,9 +71,11 @@ What exists. Do not propose any of it again.
 
 What is missing:
 
-- **M2-a. No scaffold step.** Nothing creates a target directory, initializes it as
-  a git repository, and makes the first commit. Without that commit no attempt
-  has a measurable base revision.
+- **M2-a. ~~No scaffold step.~~ LANDED by increment 7.** `overseer/target.py:66`
+  creates a target directory, runs `git init`, optionally copies `SPEC.md`, and
+  makes one initial commit with a scoped local identity, so the first attempt has
+  a measurable base revision. Proven end to end: the factory scaffolds, builds,
+  and tests a brand-new repo and the handoff record reconciles as `agree`.
 - **M2-b. No `SPEC.md` pointer.** The factory never reads a target's `SPEC.md`.
   The context manifest (`overseer/factory.py:1104`) does not record it. The
   attempt's environment carries recall, codebase, and skill variables
@@ -575,7 +577,18 @@ The hold is persisted in the monitor's state file. An explicit operator
 | counter reset on any new screen | the three-reports test |
 | hold placed before `stop_requested` | the needs-input test, through the stop reason |
 
-### Increment 7: target scaffold (TOOLS, `docs/HARNESS_FRAMEWORK.md:34`)
+### Increment 7: target scaffold (TOOLS, `docs/HARNESS_FRAMEWORK.md:34`) — LANDED
+
+> **Landed.** `overseer/target.py` (117 lines, under 200) adds
+> `python3 -m overseer.target init <dir> [--spec FILE]`: it creates or accepts an
+> empty directory, runs `git init`, copies an optional `SPEC.md`, and makes one
+> initial commit with a fixed identity passed through environment variables, via
+> its own writing git runner that never loosens the read-only runner. It refuses
+> a non-empty directory, a path inside a work tree (this repo included), a
+> relative path, and a symlink. Five tests pass, including an end-to-end test
+> where the factory scaffolds, builds, and tests a brand-new repo and the handoff
+> record reconciles `agree` with an empty unverifiable list; three mutations were
+> confirmed caught. The factory is unchanged.
 
 **Objective.** Add `python3 -m overseer.target init <dir> [--spec FILE]`. It:
 - creates an absent directory, or accepts an empty existing one

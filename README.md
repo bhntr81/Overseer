@@ -295,6 +295,20 @@ implementation is the resolved invocation. The adapter builds the command and
 the task; nothing calls it automatically yet — the unattended feed loop that
 would is not built.
 
+To point the factory at a brand-new external repository, scaffold one:
+
+```sh
+python3 -m overseer.target init /abs/path/to/new-project [--spec SPEC.md]
+```
+
+It creates (or accepts an empty) directory, runs `git init`, copies an optional
+`SPEC.md`, and makes one initial commit with a fixed local identity, so the
+first attempt has a measurable base revision. It refuses a non-empty directory,
+a path inside an existing git work tree, a relative path, and a symlink, and
+prints one JSON object (the path, the head commit, whether a spec was copied) or
+a JSON error with a non-zero exit. Its writing git runner is separate from the
+read-only runner used for evidence.
+
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 

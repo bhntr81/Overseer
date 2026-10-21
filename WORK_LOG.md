@@ -3724,3 +3724,52 @@ state `passed`. No citation remap was needed; the factory did not change.
 
 Still not real: nothing calls the adapter automatically; the feed loop (increment
 9) does, and increment 6 precedes it. Claude and Codex invocations are unverified.
+
+### Increment 7: target scaffold (TOOLS)
+
+Red-green, one commit. Phase 0 re-read the increment 7 spec, the reconciliation
+report shape (`verdict`, `unverifiable`), and the base-revision field of the
+handoff record. Phase 1 wrote the five named tests as
+`tests/test_target.py` (digest
+`91ec637d20b4a258b85b8d53fe52d3579e7119682735a5cfd4efad9b0897f599`); red failed
+on the missing module.
+
+New module `overseer/target.py` (117 lines, under 200). `init(directory,
+spec=None)` creates an absent directory or accepts an empty one, runs `git
+init`, optionally copies `SPEC.md` and commits it, else makes one
+`--allow-empty` initial commit, and returns the path, the head commit, and
+whether a spec was copied. It refuses a relative path, a symlinked path, a
+non-empty directory, and a path inside an existing git work tree (this repo
+included), the last by running `git rev-parse --is-inside-work-tree` from the
+nearest existing ancestor. `python3 -m overseer.target init ...` prints the
+JSON result (exit 0) or a JSON error (exit 1). The factory is unchanged.
+
+Its git runner `_git` writes, and it is a separate function from the read-only
+runner in `overseer/workdiff.py`; the read-only runner is not reused or
+loosened. The committer identity is passed through `GIT_AUTHOR_*` and
+`GIT_COMMITTER_*` environment variables scoped to each call, so the user's git
+config is neither read for identity nor written.
+
+Verification:
+- `tests.test_target.TargetScaffoldTests`: 5 tests, OK, including the end-to-end
+  test — scaffold a target, submit a job whose implementation writes `mod.py`
+  and a unittest `test_mod.py` and whose check runs `python -m unittest
+  test_mod`, reach `passed`, a measured `base_revision`, and `reconcile_handoff`
+  returning `agree` with an empty `unverifiable` list.
+- CLI smoke: `init` on a fresh dir prints the head commit; re-running on the now
+  non-empty dir prints a JSON refusal and exits 1.
+- Full suite: `Ran 436 tests ... OK` (was 431; +5).
+- Mutations confirmed to fail, each reverted: no initial commit (caught by the
+  end-to-end test, base unmeasured); the non-empty-directory check removed
+  (refusal test); the work-tree check removed (inside-work-tree test).
+- No citation remap: the factory did not change.
+
+Docs: the TOOLS pillar row records the scaffold and its separate writing runner;
+`AUTONOMY_BLUEPRINT.md` marks M2-a and increment 7 landed; `README.md` gains the
+`overseer.target init` command.
+
+This closes the base-revision gap the blueprint noted: an unborn repository
+reconciled as `agree` only vacuously (no base to compare); a scaffolded target
+has an anchored initial commit, so the base revision is measured and the
+agreement is real. Increment 8 (the target's SPEC.md pointer into the attempt)
+and the safety brake increment 6 remain before the unattended loop.
