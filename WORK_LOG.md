@@ -3628,3 +3628,40 @@ hand-written in the task. The unattended feed loop (increment 9) needs that
 adapter. The free models are rate/quality limited and their output is not the
 AGENTS.md status block unless the prompt asks for text format. The safety brake
 increment 6 (monitor-side hold) also remains before any unattended sending.
+
+### The OpenCode provider adapter
+
+Operator direction: defer the remaining safety brake (increment 6) and build the
+provider adapter, on the reasoning that the brakes are inert until the unattended
+loop gives the factory "claws" — a single operator-invoked job has no autonomy to
+restrain. Held line: increment 6 lands before the feed loop (increment 9).
+
+New module `overseer/provider.py` (67 lines, standard library only, red-green).
+`worker_argv(instruction, model=DEFAULT_MODEL, opencode='opencode',
+json_output=False)` returns the OpenCode headless argv — `opencode run
+--standalone --model <model> --auto <instruction>` — with the instruction as the
+single trailing element, never formatted into a string or passed through a shell.
+It validates the instruction (non-empty, no NUL, bounded to the status block's
+4000-char limit) and the model id shape. `FREE_MODELS` records the
+`opencode/*-free` gateway models seen on 2026-10-21, with `is_free` and a default;
+the list is the operator's snapshot and can go stale. The factory is unchanged.
+
+Tests `tests/test_provider.py` (8): the instruction is one whole element; a
+tricky instruction with shell metacharacters, quotes, a leading dash-word, and a
+newline is not split; empty, NUL, and over-long instructions and a malformed
+model id are refused; the default model is a registered free model; and a fake
+`opencode` on disk receives the instruction verbatim as one argv element through
+a real subprocess, proving no shell splitting. Full suite 419.
+
+Mutations confirmed to fail, each reverted: the instruction split into words
+(caught by the tricky test); the model validation removed (bad-model test).
+
+Verified with real OpenCode (scratch, not committed): the adapter's argv, run in
+a git workspace with PWD set, had the free model create the requested file and
+exit 0. No citation remap was needed — the factory did not change.
+
+What is still not real: nothing calls the adapter automatically. The unattended
+feed loop (increment 9) builds a job each iteration from the adapter and feeds the
+next instruction from the worker report; it is unwritten, and increment 6 precedes
+it. The free models are rate- and quality-limited, and their default output is not
+an AGENTS.md status block unless the prompt asks for one in text form.

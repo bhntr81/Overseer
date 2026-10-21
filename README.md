@@ -268,6 +268,16 @@ exiting non-zero. The pause is read inside the dispatch transaction, so a
 paused factory starts no new job, and it survives backup and restore. It pauses
 *dispatch* only: a job already running is not interrupted.
 
+A job can be driven by a real coding agent rather than a hand-written command.
+`overseer/provider.py` builds an OpenCode headless invocation —
+`opencode run --standalone --model <model> --auto <instruction>` — with the
+instruction placed as one whole argument that is never passed through a shell.
+OpenCode's `opencode/*-free` gateway models cost nothing and need no
+credentials. The factory runs that command with the child's PWD set to the
+workspace, so the model's file edits land in the workspace, and the acceptance
+commands then verify them by exit code. The adapter builds the command; nothing
+calls it automatically yet — the unattended feed loop that would is not built.
+
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 

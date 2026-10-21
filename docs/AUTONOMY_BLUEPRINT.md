@@ -657,6 +657,14 @@ in the context manifest. It hands the attempt `OVERSEER_SPEC_PATH` and
 
 ### Increment 9: the unattended factory feed loop (STATE, `docs/HARNESS_FRAMEWORK.md:33`)
 
+> **Building block ready (out of order).** The worker-invocation adapter this
+> loop needs is already built: `overseer/provider.py:45` constructs the OpenCode
+> argv with the instruction as one whole, un-shell-interpolated element, and
+> `overseer/provider.py:25` registers the free gateway models. A real free model
+> has written files the factory's checks verified (see the work log). This loop
+> remains unwritten, and the safety brake of increment 6 lands before it, since
+> this is the first increment that sends work unattended.
+
 **Objective.** Add `python3 -m overseer.orchestrate --db DB --loop LOOP.json
 --target DIR [--once] [--dry-run]`. Each iteration:
 
