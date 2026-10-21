@@ -168,6 +168,26 @@ def record_terminal(db, job_id, final_state, spec):
         _event(db, job_id, 'frozen', detail)
 
 
+def freeze_for_escalation(db, job_id, reason):
+    """Freeze a job's lineage because the worker asked to escalate.
+
+    A job with an open or released lineage is frozen at once with the reason; a
+    job with no lineage, or one whose lineage already closed on a pass, gets an
+    ``escalation_requested`` event instead, since there is nothing to freeze.
+    """
+    lineage_id = _lineage_id_for_job(db, job_id)
+    if lineage_id is None:
+        _event(db, job_id, 'escalation_requested', reason)
+        return
+    row = lineage(db, lineage_id)
+    if row['state'] in ('open', 'released', 'frozen'):
+        db.execute('UPDATE lineages SET state=?,detail=?,updated=? WHERE lineage_id=?',
+                   ('frozen', reason, time.time(), lineage_id))
+        _event(db, job_id, 'frozen', reason)
+    else:
+        _event(db, job_id, 'escalation_requested', reason)
+
+
 def release(db, lineage_id, decider, note):
     """Reopen a frozen lineage with a named, recorded note.
 

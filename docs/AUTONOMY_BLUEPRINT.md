@@ -42,11 +42,11 @@ What exists. Do not propose any of it again.
 
 - **A factory job already targets an arbitrary directory.**
   - A command-mode spec's `workspace` must be an existing absolute directory
-    (`overseer/factory.py:386`). Nothing ties it to this repository.
-  - The closed set of spec fields is enforced at `overseer/factory.py:384`.
-  - Every command runs with `cwd=workspace` (`overseer/factory.py:1556`). Its
+    (`overseer/factory.py:387`). Nothing ties it to this repository.
+  - The closed set of spec fields is enforced at `overseer/factory.py:385`.
+  - Every command runs with `cwd=workspace` (`overseer/factory.py:1560`). Its
     stdout and stderr are merged into a per-command log
-    (`overseer/factory.py:1559`).
+    (`overseer/factory.py:1563`).
 - **A job already builds and tests a brand-new directory.** The writer probed
   this at `f28bb7d` in a scratch directory. The job's implementation command wrote
   `m.py`, and its check ran `import m`.
@@ -75,12 +75,12 @@ What is missing:
   a git repository, and makes the first commit. Without that commit no attempt
   has a measurable base revision.
 - **M2-b. No `SPEC.md` pointer.** The factory never reads a target's `SPEC.md`.
-  The context manifest (`overseer/factory.py:1082`) does not record it. The
+  The context manifest (`overseer/factory.py:1083`) does not record it. The
   attempt's environment carries recall, codebase, and skill variables
-  (`overseer/factory.py:1039`, `overseer/factory.py:1077`) but no spec path. The
+  (`overseer/factory.py:1040`, `overseer/factory.py:1078`) but no spec path. The
   hardening mandate "re-read SPEC.md" therefore has nothing to point at in a target.
 - **M2-c. No orchestrator-level target argument.** The factory CLI
-  (`overseer/factory.py:2371`) takes a task file, which carries `workspace`.
+  (`overseer/factory.py:2396`) takes a task file, which carries `workspace`.
   Nothing else in the factory takes a target directory, because no orchestrator
   runner exists yet (M3-e).
 
@@ -118,18 +118,18 @@ What exists. Do not propose any of it again.
     `overseer/route.py:53`).
 - **The factory already has the safety primitives a loop would use:**
   - Approval gating: a task whose envelope requires a decision waits in
-    `awaiting_approval` until `decide` records a grant (`overseer/factory.py:797`).
+    `awaiting_approval` until `decide` records a grant (`overseer/factory.py:798`).
     `run_one` re-checks the grant inside its dispatch transaction
-    (`overseer/factory.py:2190`).
+    (`overseer/factory.py:2194`).
   - An interrupted run becomes `needs_reconciliation`, and `resolve`
-    (`overseer/factory.py:767`) closes it as "no automatic retry".
+    (`overseer/factory.py:768`) closes it as "no automatic retry".
   - The contract declares `budget.repair_allowance`, an integer from 0 to 10
-    (`overseer/factory.py:207`). Nothing consumes it: the handoff record's next
+    (`overseer/factory.py:208`). Nothing consumes it: the handoff record's next
     action is `bounded_repair` with `remaining_budget` unmeasured
     (`overseer/handoff.py:139`, `overseer/handoff.py:156`).
-  - The worker lock exists (`overseer/factory.py:720`). The `controller` row
-    holds the epoch (`overseer/factory.py:426`). Restore re-creates the side
-    tables (`overseer/factory.py:1998`).
+  - The worker lock exists (`overseer/factory.py:721`). The `controller` row
+    holds the epoch (`overseer/factory.py:427`). Restore re-creates the side
+    tables (`overseer/factory.py:2002`).
 - **The blueprint's repair policy** (`docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt:352`)
   is one implementation attempt plus at most two repair attempts, and it says to
   stop earlier when the failure repeats unchanged. That is the user's "3
@@ -142,8 +142,8 @@ What is missing:
   1.** A repair lineage now relates each repair job to the job it repairs
   (`overseer/strikes.py:108`), counts the consecutive non-`passed` terminal
   states, and freezes the lineage at its bound (`overseer/strikes.py:132`,
-  `overseer/factory.py:2352`). A frozen lineage refuses a further repair until an
-  operator releases it (`overseer/factory.py:791`). The counter and freeze this
+  `overseer/factory.py:2372`). A frozen lineage refuses a further repair until an
+  operator releases it (`overseer/factory.py:792`). The counter and freeze this
   bullet named no longer the gap; the remaining M3 items (b–f) are still open.
 - **M3-b. ~~The `NEXT_AGENT_INSTRUCTION` status block is never parsed.~~ PARSER
   LANDED by increment 2; wiring still open.** The block that AGENTS.md requires
@@ -152,8 +152,11 @@ What is missing:
   It is not yet read by any caller: the monitor still reads only
   `OVERSEER_REPORT`, and the factory still reads only exit codes. Increment 3
   wires the parser into the factory and increment 6 into the monitor.
-- **M3-c. `STUCK_NEEDS_ESCALATION` is detected nowhere.** Neither the monitor nor
-  the factory reacts to it.
+- **M3-c. ~~`STUCK_NEEDS_ESCALATION` is detected nowhere.~~ FACTORY SIDE LANDED
+  by increment 3.** The factory now reads the implementation log, and a
+  `STUCK_NEEDS_ESCALATION` block freezes the job's lineage
+  (`overseer/factory.py:2376`, `overseer/strikes.py:171`). The monitor still
+  does not react to it; increment 6 adds the pane-side hold.
 - **M3-d. No operator pause of dispatch.** The PERMISSIONS row's own Next increment
   (`docs/HARNESS_FRAMEWORK.md:35`) names this gap.
 - **M3-e. No factory-side feed loop.** No runner turns one job's worker
@@ -254,7 +257,7 @@ submissions until an operator releases it with a named, recorded note.
   - two tables in the schema and in `_ensure_side_tables`
   - a `repair_of` keyword on `submit`
   - the strike recorded inside `run_one`'s final transaction
-    (`overseer/factory.py:2353`) and inside `resolve`
+    (`overseer/factory.py:2378`) and inside `resolve`
   - a `release` method and CLI subcommand
 - Tests: a new class in `tests/test_factory.py`.
 
@@ -267,7 +270,7 @@ submissions until an operator releases it with a named, recorded note.
      `released`, `closed`}
 
    Do not add a spec field. The spec field set is closed
-   (`overseer/factory.py:384`), and the spec hash must stay what it is.
+   (`overseer/factory.py:385`), and the spec hash must stay what it is.
 2. **What a strike is.** Recommended:
    - A lineage job that reaches a terminal state other than `passed` is a strike:
      `failed` from `run_one`, or `failed` through `resolve`.
@@ -287,7 +290,7 @@ submissions until an operator releases it with a named, recorded note.
 5. **Release.** Recommended: `release(lineage_id, decider, note)`.
    - The decider and note are required.
    - The decider is recorded, not authorized, exactly as `decide` documents
-     (`overseer/factory.py:797`).
+     (`overseer/factory.py:798`).
    - Release grants a fresh `bound` of attempts, with a `released` event.
 6. **Backup and restore.** Both new tables must survive `backup` and `restore`,
    and they must be created by `_ensure_side_tables`.
@@ -384,7 +387,16 @@ text. The result is data: never evaluated, closed values, bounded fields.
 | truncation instead of rejection | the over-long test |
 | status values not closed | the unknown-status test |
 
-### Increment 3: worker report as evidence; `STUCK_NEEDS_ESCALATION` escalates (EVIDENCE, `docs/HARNESS_FRAMEWORK.md:36`)
+### Increment 3: worker report as evidence; `STUCK_NEEDS_ESCALATION` escalates (EVIDENCE, `docs/HARNESS_FRAMEWORK.md:36`) — LANDED
+
+> **Landed.** Implemented in `overseer/workerreport.py` (62 lines, under the 150
+> budget) with a +25-line call-site edit to `overseer/factory.py` (inside the
+> +30 budget) and a small `freeze_for_escalation` added to `overseer/strikes.py`
+> (now 212 lines, under 300). All five named tests pass in
+> `tests/test_factory.WorkerReportTests`, the full suite is 403 tests, and the
+> four mutation checks below were confirmed to fail the suite. The worker report
+> is evidence only: exit codes decide the state, and the factory side of
+> escalation is wired while the monitor side waits for increment 6.
 
 **Objective.** After the implementation command, the factory reads a bounded tail
 of that command's log and parses it with increment 2's parser. It writes
@@ -401,10 +413,10 @@ of that command's log and parses it with increment 2's parser. It writes
 
 **Decisions to settle:**
 1. **Which log.** The implementation command's log only (`00.log`, written at
-   `overseer/factory.py:2291`). Read its last 64 KiB, checking the size before
+   `overseer/factory.py:2295`). Read its last 64 KiB, checking the size before
    opening.
 2. **A claim is never a verdict.** Pass or fail stays decided by exit codes
-   (`overseer/factory.py:2298`).
+   (`overseer/factory.py:2302`).
    - A `TESTS_PASSED: TRUE` claim on a run whose acceptance failed is recorded as
      `claim_disagrees: true`, naming both sides.
    - It changes nothing.
@@ -474,12 +486,12 @@ because the PERMISSIONS row asks for a pause of *running* work and this pauses
 
 **Files and budgets:**
 - `overseer/factory.py`, ≤ +35 lines: a `paused` column or a one-row table
-  beside `controller` (`overseer/factory.py:426`), a check at the top of
+  beside `controller` (`overseer/factory.py:427`), a check at the top of
   `run_one`'s dispatch transaction, two methods, and two subcommands.
 
 **Decisions to settle:**
 1. The pause is checked inside the same `BEGIN IMMEDIATE` transaction as dispatch
-   (`overseer/factory.py:2170`).
+   (`overseer/factory.py:2174`).
 2. A paused `run_one` returns a JSON reason, and the CLI exits 1.
 3. The pause survives backup and restore.
 
@@ -595,7 +607,7 @@ in the context manifest. It hands the attempt `OVERSEER_SPEC_PATH` and
 
 **Files and budgets:**
 - `overseer/factory.py`, ≤ +30 lines: one manifest block and two environment
-  variables beside the skills variables (`overseer/factory.py:1077`).
+  variables beside the skills variables (`overseer/factory.py:1078`).
 - Bounded reading reuses `overseer/readback.py`.
 
 **Decisions to settle:**
@@ -780,8 +792,8 @@ observable signals:**
 - **A `git init` repository with no commit is different.** The base is unmeasured,
   yet `reconcile_handoff` returns `agree`, because the base comparison is
   `not_applicable`. This is why increment 7 makes an initial commit.
-- **The validation line has moved.** It is `overseer/factory.py:386` (validate
-  starts at `overseer/factory.py:353`), not about 384.
+- **The validation line has moved.** It is `overseer/factory.py:387` (validate
+  starts at `overseer/factory.py:354`), not about 384.
 - **The monitor already feeds report-derived prompts unattended.** What is
   missing is the AGENTS.md status block, not a feed loop as such.
 - **Four monitor modules are already over 300 lines**: `policy.py`,

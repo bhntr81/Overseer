@@ -11,6 +11,7 @@ from overseer.skills import provenance as skill_provenance
 from overseer.skills import unchecked as unchecked_provenance
 from overseer import strikes
 from overseer import workdiff
+from overseer import workerreport
 import hashlib
 import json
 import os
@@ -1080,7 +1081,8 @@ class Factory:
         return env
 
     def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
-                          codebase=None, skills=None, workspace_diff=None, handoff_info=None):
+                          codebase=None, skills=None, workspace_diff=None, handoff_info=None,
+                          worker_report=None):
         """Record what the controller supplied for this attempt, and why."""
         contract = spec.get('contract') or {}
         acceptance_ids = list(contract.get('acceptance_ids') or [])
@@ -1280,6 +1282,8 @@ class Factory:
             'skills': self._manifest_skills(skills),
             'workspace_diff': self._manifest_diff(workspace_diff),
             'handoff': self._manifest_handoff(handoff_info),
+            'worker_report': ({'path': worker_report['path'], 'sha256': worker_report['sha256']}
+                              if worker_report else None),
             'candidate_revision': candidate,
             'unmeasured': [name for name in ('tokens', 'cost_usd', 'candidate_revision',
                                              'remaining_budget', 'unresolved_effects',
@@ -2331,12 +2335,25 @@ class Factory:
                 summary['fixture_verification'] = fixture_verification
             if fake_verification is not None:
                 summary['fake_provider_verification'] = fake_verification
+            # The worker's status block is read from the implementation log and
+            # recorded as evidence. It is context, never a verdict: exit codes
+            # decided `final` above. Only command-mode runs write 00.log.
+            worker_report_info = None
+            if (spec.get('mode') not in ('fixture', 'fake_provider', 'isolation_probe')
+                    and (evidence / '00.log').is_file()):
+                report = workerreport.capture(evidence, final)
+                report_path = evidence / 'worker_report.json'
+                report_path.write_text(json.dumps(report, indent=2))
+                report_digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+                worker_report_info = {'path': str(report_path), 'sha256': report_digest,
+                                      'report': report}
+                summary['worker_report'] = {'path': str(report_path), 'sha256': report_digest}
             # The context manifest records what the controller supplied for
             # this attempt. Its path and digest go into the ledger with the
             # final state change, in one transaction.
             manifest = self._context_manifest(
                 job_id, run_id, spec, row['spec_hash'], results, epoch, recall_info,
-                codebase_info, skills_info, diff_info, handoff_info)
+                codebase_info, skills_info, diff_info, handoff_info, worker_report_info)
             manifest_path = evidence / 'context.json'
             manifest_path.write_text(json.dumps(manifest, indent=2))
             manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
@@ -2346,10 +2363,18 @@ class Factory:
             with self.db:
                 self.event(job_id, 'context_manifest',
                            f'context.json sha256={manifest_digest}')
+                if worker_report_info:
+                    self.event(job_id, 'worker_report',
+                               'worker_report.json sha256=' + worker_report_info['sha256'])
                 # The strike or close is recorded in the same transaction as the
                 # final transition, and before it, so the terminal state stays
                 # the job's last event.
                 strikes.record_terminal(self.db, job_id, final, spec)
+                # The worker's escalation request freezes the lineage after the
+                # strike, so its reason is the one recorded.
+                if worker_report_info and worker_report_info['report']['escalate']:
+                    strikes.freeze_for_escalation(self.db, job_id,
+                                                  'the worker requested escalation')
                 self.transition(job_id, final, detail)
             with self.db:
                 self.db.execute('UPDATE jobs SET finished=? WHERE id=?', (time.time(), job_id))

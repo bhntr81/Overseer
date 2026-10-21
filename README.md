@@ -237,6 +237,20 @@ keep repairing, not a verdict: nothing consumes the contract's
 `repair_allowance` beyond setting the bound, and the freeze caps cost, it does
 not diagnose the failure.
 
+After the implementation command, a command-mode attempt also reads the last
+64 KiB of that command's log and records a `worker_report.json` in the run
+evidence: the parsed AGENTS.md status block (`STATUS`, `TESTS_PASSED`,
+`FILES_MODIFIED`, `NEXT_AGENT_INSTRUCTION`), the digest of the bytes read, and
+whether a `TESTS_PASSED: TRUE` claim disagrees with the exit-code outcome. The
+report is evidence, never a verdict: exit codes decide the state, a disagreeing
+claim is recorded and changes nothing, and a missing or invalid block is
+recorded with its reason and is not a strike by itself. The block's
+instruction is decoded as a plain string and never executed. When the block is
+`STATUS: STUCK_NEEDS_ESCALATION`, the job's lineage is frozen with the reason
+that the worker requested escalation, or an `escalation_requested` event is
+recorded when there is no lineage. The report's digest is sealed with a
+`worker_report` event, and the context manifest carries its pointer and digest.
+
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 

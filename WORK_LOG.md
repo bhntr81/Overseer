@@ -3412,3 +3412,71 @@ has no caller until increment 3.
 Limit that remains: the parser is pure data extraction. Nothing yet reads a
 worker's block, so `STUCK_NEEDS_ESCALATION` still triggers nothing; increments 3
 (factory) and 6 (monitor) wire it in.
+
+### Increment 3: worker report as evidence; stuck-escalation freezes the lineage (EVIDENCE)
+
+Red-green, one commit. Phase 0 re-read the increment 3 spec and the run_one tail
+(the implementation log `00.log`, the exit-code decision of `final`, the final
+transaction, and `_context_manifest`). Phase 1 wrote the five named tests as
+`tests/test_factory.WorkerReportTests` and recorded the digest
+`7757e3b7d79d1ef06fa6f501b12140306043a915cc7dd701d2359c799565db3c`; all five
+failed on the missing `worker_report.json`. Phase 2 implemented it; the test
+digest was unchanged after the green phase.
+
+New module `overseer/workerreport.py` (62 lines, under the 150 budget). It reads
+the last 64 KiB of the implementation command's `00.log` — the size is checked
+before the file is opened and the read is bounded to the tail — parses the block
+with `overseer/statusblock.py`, and returns a record: the parsed block, the
+bytes read and their sha256, whether the log was truncated, whether a
+`TESTS_PASSED: TRUE` claim disagrees with the exit-code outcome, and whether the
+block asks to escalate. It is evidence, never a verdict.
+
+`overseer/factory.py` grew by +25 lines (inside the +30 budget): the capture and
+write before the manifest, a `worker_report` pointer and digest in the manifest,
+the `worker_report` event that seals the digest in the final transaction, and
+the escalation call after the strike so the escalation reason is the one
+recorded. `overseer/strikes.py` gained `freeze_for_escalation` (now 212 lines,
+under 300): a job with an open, released, or frozen lineage is frozen with the
+escalation reason, and a job with no lineage — or one already closed on a pass —
+gets an `escalation_requested` event, since there is nothing to freeze. Only
+command-mode runs with a `00.log` are captured, so the fixture, fake-provider,
+and isolation-probe runs are untouched.
+
+Decisions settled: exit codes decide the state (the claim is recorded as
+`claim_disagrees` and changes nothing); the handoff record's ten fields are
+unchanged and the manifest gains only a pointer and a digest; a missing or
+invalid block is recorded with its reason and is not a strike by itself. In the
+escalation freeze test the contract sets `repair_allowance: 2` (bound 3) so a
+single strike cannot freeze the lineage and only the escalation can, which
+isolates the escalation path from the strike path.
+
+Verification:
+- `python3 -m unittest tests.test_factory.WorkerReportTests`: 5 tests, OK.
+- Full suite: `Ran 403 tests ... OK` (was 398; +5).
+- Mutations confirmed to fail the suite, each reverted: the claim decides the
+  state (caught by the claim test); escalation ignored (freeze test); the whole
+  log read (tail test); the digest event omitted (recorded test). The first two
+  attempts at the escalation and digest mutations left dangling continuation
+  lines; they were redone as single-line, compiling mutations that failed the
+  right test.
+- No existing test pins the manifest key set, so the new `worker_report` key is
+  safe; no existing test asserts a full event sequence, and recording the
+  `worker_report` event and the escalation before the final transition keeps the
+  terminal state the last event.
+
+Citations re-derived: the +25-line `overseer/factory.py` edit shifted later
+lines, so all 143 `overseer/factory.py` citations across the three harness docs
+were re-mapped by content with the difflib old→new map (HEAD vs the working
+tree); the file end moved 2428→2453. `check-doc-references` resolves for all
+three docs.
+
+Docs: the EVIDENCE pillar row records the worker report with its citations and
+the honest limit that the monitor side of escalation is still unbuilt;
+`AUTONOMY_BLUEPRINT.md` marks M3-c and increment 3 landed; `HARDENING_BLUEPRINT.md`
+moves the explicit-escalation detection to PARTIAL (parser and factory action
+built, monitor action filed); `README.md` gains the worker-report paragraph.
+
+Limit that remains: the factory acts on a stuck block, but the monitor does not
+yet react to a stuck block in a live pane; increment 6 adds that. A claim is
+recorded, never trusted; a worker that lies about success cannot change the
+exit-code verdict, but nothing proves the block itself is honest.

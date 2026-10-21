@@ -4708,3 +4708,110 @@ class RepairLineageTests(unittest.TestCase):
         self.assertEqual(row['state'], 'frozen')
         self.assertEqual(row['strikes'], 1)
         self.assertEqual(row['bound'], 1)
+
+
+BLOCK_OK = ('STATUS: SUCCESS\nTESTS_PASSED: TRUE\n'
+            'FILES_MODIFIED: [a.py]\nNEXT_AGENT_INSTRUCTION: "do the next step"\n')
+BLOCK_STUCK = ('STATUS: STUCK_NEEDS_ESCALATION\nTESTS_PASSED: FALSE\n'
+               'FILES_MODIFIED: []\nNEXT_AGENT_INSTRUCTION: "escalate please"\n')
+
+
+class WorkerReportTests(unittest.TestCase):
+    """Increment 3: the worker report captured as evidence, and escalation.
+
+    Filed against the EVIDENCE row of docs/HARNESS_FRAMEWORK.md. A worker's
+    claim is recorded, never trusted: exit codes decide the state.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / 'state' / 'jobs.sqlite3'
+        self.f = Factory(self.db)
+        self.addCleanup(self.f.close)
+
+    def _budget(self, allowance):
+        return {'wall_time_seconds': 600, 'token_limit': None, 'cost_limit_usd': None,
+                'resource_limits': None, 'repair_allowance': allowance}
+
+    def spec(self, name, impl_code, check_exit=0, allowance=0):
+        spec = {'id': name, 'objective': 'print a status block and be judged by exit codes',
+                'workspace': str(self.root), 'timeout_seconds': 10,
+                'implementation': [sys.executable, '-c', impl_code],
+                'checks': [[sys.executable, '-c', 'import sys; sys.exit(%d)' % check_exit]]}
+        return attach_contract(spec, budget=self._budget(allowance))
+
+    def prints(self, text, exit_code=0):
+        return 'import sys; sys.stdout.write(%r); sys.exit(%d)' % (text, exit_code)
+
+    def lineage(self, lineage_id):
+        return self.f.db.execute(
+            'SELECT * FROM lineages WHERE lineage_id=?', (lineage_id,)).fetchone()
+
+    def report_of(self, result):
+        return json.loads((Path(result['evidence']) / 'worker_report.json').read_text())
+
+    def test_a_worker_block_is_recorded_with_its_log_digest(self):
+        self.f.submit(self.spec('ok', self.prints(BLOCK_OK, 0), check_exit=0))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        report = self.report_of(result)
+        self.assertTrue(report['captured'])
+        self.assertTrue(report['block']['valid'])
+        self.assertEqual(report['block']['status'], 'SUCCESS')
+        self.assertEqual(report['block']['next_instruction'], 'do the next step')
+        self.assertEqual(len(report['log_sha256']), 64)
+        report_digest = hashlib.sha256(
+            (Path(result['evidence']) / 'worker_report.json').read_bytes()).hexdigest()
+        event = self.f.db.execute(
+            "SELECT detail FROM events WHERE job_id='ok' AND state='worker_report'").fetchone()
+        self.assertIsNotNone(event)
+        self.assertIn(report_digest, event['detail'])
+
+    def test_stuck_needs_escalation_freezes_the_lineage(self):
+        # allowance 2 -> bound 3, so a single strike cannot freeze it; only the
+        # escalation can.
+        self.f.submit(self.spec('stuck', self.prints(BLOCK_STUCK, 1), allowance=2))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'failed')
+        lin = self.lineage('stuck')
+        self.assertEqual(lin['state'], 'frozen')
+        self.assertIn('escalation', lin['detail'])
+        # The freeze never changes the job's own state.
+        self.assertEqual(self.f.inspect('stuck')['state'], 'failed')
+
+    def test_a_success_claim_on_a_failed_run_is_recorded_as_disagreeing_and_changes_nothing(self):
+        # Implementation prints TESTS_PASSED: TRUE and exits 0, but acceptance fails.
+        self.f.submit(self.spec('claim', self.prints(BLOCK_OK, 0), check_exit=1, allowance=2))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'failed')
+        report = self.report_of(result)
+        self.assertTrue(report['block']['valid'])
+        self.assertTrue(report['claim_disagrees'])
+        self.assertEqual(report['claim'], 'TRUE')
+        self.assertEqual(report['final_state'], 'failed')
+        self.assertEqual(self.f.inspect('claim')['state'], 'failed')
+
+    def test_a_missing_block_is_recorded_not_invented(self):
+        self.f.submit(self.spec('nob', self.prints('just working on it\nno block\n', 0),
+                                check_exit=0, allowance=2))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'passed')
+        report = self.report_of(result)
+        self.assertTrue(report['captured'])
+        self.assertFalse(report['block']['found'])
+        self.assertFalse(report['block']['valid'])
+        self.assertFalse(report['escalate'])
+        self.assertIsNone(self.f.db.execute(
+            "SELECT 1 FROM events WHERE job_id='nob' AND state='escalation_requested'").fetchone())
+
+    def test_an_oversized_log_is_read_only_at_its_tail(self):
+        impl = 'import sys; sys.stdout.write("x"*70000 + "\\n" + %r); sys.exit(0)' % BLOCK_OK
+        self.f.submit(self.spec('big', impl, check_exit=0))
+        result = self.f.run_one()
+        report = self.report_of(result)
+        self.assertTrue(report['log_truncated'])
+        self.assertLessEqual(report['log_bytes_read'], 64 * 1024)
+        self.assertTrue(report['block']['valid'])
+        self.assertEqual(report['block']['status'], 'SUCCESS')
