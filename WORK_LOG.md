@@ -3480,3 +3480,56 @@ Limit that remains: the factory acts on a stuck block, but the monitor does not
 yet react to a stuck block in a live pane; increment 6 adds that. A claim is
 recorded, never trusted; a worker that lies about success cannot change the
 exit-code verdict, but nothing proves the block itself is honest.
+
+### Increment 4: the no-new-evidence early freeze (EVIDENCE)
+
+Red-green, one commit. Phase 0 re-read the increment 4 spec, `handoff.acceptance`
+(reused for the failing/not-run identifiers), and the run_one tail. Phase 1 wrote
+the three named tests as `tests/test_factory.NoNewEvidenceTests` in a git
+workspace (the changed-patch case needs a real patch digest) and recorded the
+digest `5a46e5fb5e6a8330818b4f383fe1181b977646706aab097d758ba24e4a7c578c`. Red
+was one failure (the positive freeze test) with the two "new evidence" guard
+tests passing trivially, since nothing froze early yet; those guards earn their
+keep against the mutations.
+
+Implementation. `overseer/strikes.py` (now 257 lines, under 300; the added logic
+is inside the +60 budget): a `fingerprint(failing_ids, not_run_ids, exit_code,
+timed_out, patch_digest)` that returns a byte-stable sha256 of a sorted payload;
+a `strike_evidence(job_id, lineage_id, run_id, fingerprint, at)` table created by
+`ensure_tables`; and an early-freeze branch in `record_terminal` that, given a
+fingerprint, compares it with the lineage's most recent prior strike fingerprint
+and, on a byte-equal repeat below the bound, freezes with a reason naming both
+run ids. `overseer/factory.py` grew by +12 lines (inside +15): it builds the
+fingerprint of a failed command-mode attempt from `handoff.acceptance` and the
+diff receipt's `patch_sha256`, and passes it with the run id to
+`record_terminal`. `resolve` passes no fingerprint, so an operator-resolved
+interruption never early-freezes.
+
+A real interaction surfaced and was handled honestly: increment 1's
+`test_three_consecutive_failures_freeze_the_lineage` used three identical failing
+jobs, which the new early freeze (correctly) froze at strike 2 instead of the
+bound. The test was updated to give each attempt a distinct exit code — new
+evidence each time — so it still tests the bound. This is test maintenance driven
+by the feature's semantics, not weakening: the bound assertion is unchanged, and
+the scenario now actually exercises the bound. The increment-4 red digest was
+already honoured (the new class passed with the file at that digest before this
+unrelated edit).
+
+Verification:
+- `tests.test_factory.NoNewEvidenceTests`: 3 tests, OK.
+- Full suite: `Ran 406 tests ... OK` (was 403; +3).
+- Mutations confirmed to fail the suite, each reverted and re-parsed: the patch
+  digest dropped from the fingerprint (caught by the changed-patch test); the
+  identifiers dropped (different-identifier test).
+- All 149 `overseer/factory.py` citations across the three harness docs re-mapped
+  by content (file end 2453 to 2465); `check-doc-references` resolves for all.
+
+Docs: the EVIDENCE pillar row records the fingerprint and the honest limit that a
+changing patch is new evidence; `AUTONOMY_BLUEPRINT.md` marks increment 4 landed;
+`HARDENING_BLUEPRINT.md` moves the no-new-evidence repeat to IMPLEMENTED in Pillar
+3 and the scorecard; `README.md` gains the early-freeze sentence.
+
+Limit that remains: the fingerprint is byte-equal only. A worker that loops on a
+design flaw while changing its patch each attempt produces new evidence by this
+rule and runs to the bound; the early freeze caps an *unchanged* repeat, not a
+disguised one.

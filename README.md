@@ -235,7 +235,12 @@ command-mode jobs carry a lineage; the fixture, fake-provider, and
 isolation-probe modes do not. The lineage is context for deciding whether to
 keep repairing, not a verdict: nothing consumes the contract's
 `repair_allowance` beyond setting the bound, and the freeze caps cost, it does
-not diagnose the failure.
+not diagnose the failure. A lineage also freezes *before* its bound when two
+consecutive failed attempts repeat the same failure unchanged: a byte-equal
+fingerprint of the failing and not-run acceptance identifiers, the failing
+command's exit code and timeout flag, and the patch digest (or `no patch`). The
+comparison is byte-equal, never semantic, so a worker that changes its patch
+each attempt still counts as new evidence and runs to the bound.
 
 After the implementation command, a command-mode attempt also reads the last
 64 KiB of that command's log and records a `worker_report.json` in the run

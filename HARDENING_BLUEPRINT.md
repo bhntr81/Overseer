@@ -179,24 +179,27 @@ cost is spent on noise instead of escalating.
   (`overseer/strikes.py:108`) and counts its consecutive non-`passed` terminal
   states, freezing at `min(3, 1 + repair_allowance)` (`overseer/strikes.py:52`,
   `overseer/strikes.py:132`). The strike is recorded in the same transaction as
-  the job's final transition, in `run_one` (`overseer/factory.py:2372`) and in
+  the job's final transition, in `run_one` (`overseer/factory.py:2383`) and in
   `resolve` (`overseer/factory.py:785`); a frozen lineage refuses a further
   repair until an operator releases it (`overseer/factory.py:792`). This is the
   user's "3 consecutive self-correction attempts" (`AGENTS.md:31`) and the
   blueprint's one attempt plus two repairs
   (`docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt:352`). Filed against the STATE row
   (`docs/HARNESS_FRAMEWORK.md:33`).
-- **No-new-evidence repeat.** *FILED (autonomy increment 4).* A byte-equal
-  fingerprint of failing identifiers, the failing command's exit code, and the
-  patch digest freezes a lineage *before* its bound when a failure repeats
-  unchanged. Filed against EVIDENCE (`docs/HARNESS_FRAMEWORK.md:36`).
+- **No-new-evidence repeat.** *IMPLEMENTED (autonomy increment 4).* A byte-equal
+  fingerprint of the failing and not-run identifiers, the failing command's exit
+  code and timeout flag, and the patch digest (`overseer/strikes.py:78`) freezes
+  a lineage *before* its bound when two consecutive failed attempts repeat it
+  unchanged (`overseer/strikes.py:201`, built at `overseer/factory.py:2359`). The
+  comparison is byte-equal, never semantic. Filed against EVIDENCE
+  (`docs/HARNESS_FRAMEWORK.md:36`).
 - **Explicit escalation request.** *PARTIAL (parser and factory action
   IMPLEMENTED, autonomy increments 2–3; monitor action FILED, increment 6).* The
   `STATUS: STUCK_NEEDS_ESCALATION` line of the `AGENTS.md` status block
   (`AGENTS.md:62`) is parsed by a bounded, never-evaluated parser
   (`overseer/statusblock.py:96`) and now acted on in the factory: after the
   implementation command, the log is read and a stuck block freezes the job's
-  lineage (`overseer/factory.py:2376`, `overseer/strikes.py:171`). The monitor
+  lineage (`overseer/factory.py:2388`, `overseer/strikes.py:171`). The monitor
   still does not react to a stuck block in a pane; increment 6 adds that hold.
 - **Hop-distance counter.** *FILED (subsumed by the lineage).* A per-prompt
   `hop_count` is realized as the lineage's strike chain rather than a free
@@ -320,16 +323,16 @@ Stated plainly, so no reader over-trusts these controls:
 |---|---|---|---|
 | 1 Locality trap | DATA-ONLY (loc delta in `diff.json`) | BY DISCIPLINE (size rule) | CONTEXT threshold increment |
 | 2 Gaming the harness | DATA-ONLY (`tests/` edits in `diff.json`) | BY DISCIPLINE (red-green) | EVIDENCE enforcement increment |
-| 3 Context rot / cascades | PARTIAL (lineage strike-count, status-block parser, and factory-side stuck-escalation IMPLEMENTED; fingerprint and monitor-side escalation FILED) | PARTIAL + FILED (ground truth, reset) | Autonomy increments 1–3 landed; 4, 6, 8, 10 owed |
+| 3 Context rot / cascades | PARTIAL (lineage strike-count, status-block parser, factory-side stuck-escalation, and no-new-evidence early freeze IMPLEMENTED; monitor-side escalation FILED) | PARTIAL + FILED (ground truth, reset) | Autonomy increments 1–4 landed; 6, 8, 10 owed |
 | 4 Non-determinism / races | IMPLEMENTED (timeout+SIGKILL) | IMPLEMENTED (single writer, fenced restore); PARTIAL (sandbox probe) | TOOLS row for real sandboxing |
 | 5 Orchestrator overhead | OUT OF SCOPE (ratio); proxy via size budgets | IMPLEMENTED (one ledger; read-only git authority) | — |
 
 The honest summary: **race-condition and recovery hardening is built; the
 consecutive-failure freeze (autonomy increment 1) is now built too, so the
-first cost-cap control exists, the status-block parser and the factory-side
-stuck-escalation freeze are built too (increments 2–3), while the rest of the
-cost-cap and escalation hardening is specified and owed to autonomy increments
-4–10; architectural-rot
+first cost-cap control exists, the status-block parser, the factory-side
+stuck-escalation freeze, and the no-new-evidence early freeze are built too
+(increments 2–4), while the rest of the cost-cap and escalation hardening is
+specified and owed to autonomy increments 5–10; architectural-rot
 and test-drift detection have the evidence captured but not yet the thresholds
 that act on it.** No mitigation on this page is claimed without a citation or a
 filing.

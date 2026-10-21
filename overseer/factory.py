@@ -2348,6 +2348,17 @@ class Factory:
                 worker_report_info = {'path': str(report_path), 'sha256': report_digest,
                                       'report': report}
                 summary['worker_report'] = {'path': str(report_path), 'sha256': report_digest}
+            # The evidence fingerprint of a failed command-mode attempt, so an
+            # unchanged repeated failure can freeze the lineage before its bound.
+            failure_fingerprint = None
+            if final == 'failed' and spec.get('mode') not in ('fixture', 'fake_provider', 'isolation_probe'):
+                acceptance_ids = (spec.get('contract') or {}).get('acceptance_ids') or []
+                _, failing, not_run, _ = handoff.acceptance(acceptance_ids, results)
+                failed = next((r for r in reversed(results)
+                               if r.get('timed_out') or r.get('exit_code')), None)
+                failure_fingerprint = strikes.fingerprint(
+                    failing, not_run, failed and failed.get('exit_code'),
+                    bool(failed and failed.get('timed_out')), diff_info.get('patch_sha256'))
             # The context manifest records what the controller supplied for
             # this attempt. Its path and digest go into the ledger with the
             # final state change, in one transaction.
@@ -2369,7 +2380,8 @@ class Factory:
                 # The strike or close is recorded in the same transaction as the
                 # final transition, and before it, so the terminal state stays
                 # the job's last event.
-                strikes.record_terminal(self.db, job_id, final, spec)
+                strikes.record_terminal(self.db, job_id, final, spec,
+                                        run_id=run_id, fingerprint=failure_fingerprint)
                 # The worker's escalation request freezes the lineage after the
                 # strike, so its reason is the one recorded.
                 if worker_report_info and worker_report_info['report']['escalate']:

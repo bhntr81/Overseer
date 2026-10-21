@@ -4586,10 +4586,13 @@ class RepairLineageTests(unittest.TestCase):
         return {'wall_time_seconds': 600, 'token_limit': None, 'cost_limit_usd': None,
                 'resource_limits': None, 'repair_allowance': allowance}
 
-    def fail_spec(self, name, allowance=0):
+    def fail_spec(self, name, allowance=0, exit_code=1):
+        # exit_code lets an attempt carry distinct failure evidence, so the
+        # no-new-evidence early freeze (increment 4) does not confound a test
+        # that is about the bound.
         spec = {'id': name, 'objective': 'fail on purpose for the lineage',
                 'workspace': str(self.root), 'timeout_seconds': 5,
-                'implementation': [sys.executable, '-c', 'import sys; sys.exit(1)'],
+                'implementation': [sys.executable, '-c', 'import sys; sys.exit(%d)' % exit_code],
                 'checks': [[sys.executable, '-c', 'pass']]}
         return attach_contract(spec, budget=self._budget(allowance))
 
@@ -4605,15 +4608,17 @@ class RepairLineageTests(unittest.TestCase):
             'SELECT * FROM lineages WHERE lineage_id=?', (lineage_id,)).fetchone()
 
     def test_three_consecutive_failures_freeze_the_lineage(self):
-        self.f.submit(self.fail_spec('a', allowance=2))
+        # Distinct exit codes so each attempt is new evidence; this test is
+        # about reaching the bound, not the no-new-evidence early freeze.
+        self.f.submit(self.fail_spec('a', allowance=2, exit_code=1))
         self.f.run_one()
         self.assertEqual(self.lineage('a')['state'], 'open')
         self.assertEqual(self.lineage('a')['strikes'], 1)
-        self.f.submit(self.fail_spec('b', allowance=2), repair_of='a')
+        self.f.submit(self.fail_spec('b', allowance=2, exit_code=2), repair_of='a')
         self.f.run_one()
         self.assertEqual(self.lineage('a')['state'], 'open')
         self.assertEqual(self.lineage('a')['strikes'], 2)
-        self.f.submit(self.fail_spec('c', allowance=2), repair_of='b')
+        self.f.submit(self.fail_spec('c', allowance=2, exit_code=3), repair_of='b')
         self.f.run_one()
         lin = self.lineage('a')
         self.assertEqual(lin['state'], 'frozen')
@@ -4815,3 +4820,82 @@ class WorkerReportTests(unittest.TestCase):
         self.assertLessEqual(report['log_bytes_read'], 64 * 1024)
         self.assertTrue(report['block']['valid'])
         self.assertEqual(report['block']['status'], 'SUCCESS')
+
+
+class NoNewEvidenceTests(unittest.TestCase):
+    """Increment 4: an unchanged repeated failure freezes the lineage early.
+
+    Two consecutive failed attempts that carry a byte-equal evidence
+    fingerprint (failing and not-run identifiers, the failing command's exit
+    code and timeout flag, and the patch digest) freeze before the bound.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.repo = self.base / 'repo'
+        self.repo.mkdir()
+        self.git('init', '--quiet')
+        (self.repo / 'keep.txt').write_bytes(b'a\nb\nc\n')
+        self.commit('base')
+        self.f = Factory(self.base / 'state' / 'jobs.sqlite3')
+        self.addCleanup(self.f.close)
+
+    def git(self, *arguments, cwd=None):
+        return subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
+                               *arguments], cwd=cwd or self.repo, capture_output=True, timeout=60)
+
+    def commit(self, message):
+        self.git('add', '-A')
+        self.git('commit', '--quiet', '-m', message)
+
+    def spec(self, name, code='pass', checks=None, allowance=2):
+        fail = [sys.executable, '-c', 'import sys; sys.exit(1)']
+        spec = {'id': name, 'objective': 'fail for the lineage fingerprint',
+                'workspace': str(self.repo), 'timeout_seconds': 10,
+                'implementation': [sys.executable, '-c', code],
+                'checks': checks if checks is not None else [fail]}
+        return attach_contract(spec, budget={
+            'wall_time_seconds': 600, 'token_limit': None, 'cost_limit_usd': None,
+            'resource_limits': None, 'repair_allowance': allowance})
+
+    def lineage(self, lineage_id):
+        return self.f.db.execute(
+            'SELECT * FROM lineages WHERE lineage_id=?', (lineage_id,)).fetchone()
+
+    def test_an_unchanged_repeated_failure_freezes_before_the_bound(self):
+        self.f.submit(self.spec('a'))
+        self.assertEqual(self.f.run_one()['state'], 'failed')
+        self.assertEqual(self.lineage('a')['state'], 'open')
+        self.f.submit(self.spec('b'), repair_of='a')
+        self.assertEqual(self.f.run_one()['state'], 'failed')
+        lin = self.lineage('a')
+        self.assertEqual(lin['state'], 'frozen')
+        self.assertEqual(lin['strikes'], 2)
+        self.assertLess(lin['strikes'], lin['bound'])
+        self.assertIn('no new evidence', lin['detail'])
+
+    def test_a_different_failing_identifier_is_new_evidence(self):
+        passc = [sys.executable, '-c', 'pass']
+        fail = [sys.executable, '-c', 'import sys; sys.exit(1)']
+        self.f.submit(self.spec('a', checks=[fail, passc]))    # A1 fails, A2 not run
+        self.f.run_one()
+        self.assertEqual(self.lineage('a')['strikes'], 1)
+        self.f.submit(self.spec('b', checks=[passc, fail]), repair_of='a')  # A1 ok, A2 fails
+        self.f.run_one()
+        lin = self.lineage('a')
+        self.assertEqual(lin['state'], 'open')
+        self.assertEqual(lin['strikes'], 2)
+
+    def test_a_changed_patch_is_new_evidence_and_does_not_freeze_early(self):
+        write_one = "from pathlib import Path; Path('out.txt').write_text('one')"
+        write_two = "from pathlib import Path; Path('out.txt').write_text('two')"
+        self.f.submit(self.spec('a', code=write_one))   # same failing check, patch adds out.txt='one'
+        self.f.run_one()
+        self.assertEqual(self.lineage('a')['strikes'], 1)
+        self.f.submit(self.spec('b', code=write_two), repair_of='a')  # patch differs
+        self.f.run_one()
+        lin = self.lineage('a')
+        self.assertEqual(lin['state'], 'open')
+        self.assertEqual(lin['strikes'], 2)

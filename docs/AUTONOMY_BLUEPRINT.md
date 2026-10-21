@@ -80,7 +80,7 @@ What is missing:
   (`overseer/factory.py:1040`, `overseer/factory.py:1078`) but no spec path. The
   hardening mandate "re-read SPEC.md" therefore has nothing to point at in a target.
 - **M2-c. No orchestrator-level target argument.** The factory CLI
-  (`overseer/factory.py:2396`) takes a task file, which carries `workspace`.
+  (`overseer/factory.py:2408`) takes a task file, which carries `workspace`.
   Nothing else in the factory takes a target directory, because no orchestrator
   runner exists yet (M3-e).
 
@@ -142,7 +142,7 @@ What is missing:
   1.** A repair lineage now relates each repair job to the job it repairs
   (`overseer/strikes.py:108`), counts the consecutive non-`passed` terminal
   states, and freezes the lineage at its bound (`overseer/strikes.py:132`,
-  `overseer/factory.py:2372`). A frozen lineage refuses a further repair until an
+  `overseer/factory.py:2383`). A frozen lineage refuses a further repair until an
   operator releases it (`overseer/factory.py:792`). The counter and freeze this
   bullet named no longer the gap; the remaining M3 items (b–f) are still open.
 - **M3-b. ~~The `NEXT_AGENT_INSTRUCTION` status block is never parsed.~~ PARSER
@@ -155,7 +155,7 @@ What is missing:
 - **M3-c. ~~`STUCK_NEEDS_ESCALATION` is detected nowhere.~~ FACTORY SIDE LANDED
   by increment 3.** The factory now reads the implementation log, and a
   `STUCK_NEEDS_ESCALATION` block freezes the job's lineage
-  (`overseer/factory.py:2376`, `overseer/strikes.py:171`). The monitor still
+  (`overseer/factory.py:2388`, `overseer/strikes.py:171`). The monitor still
   does not react to it; increment 6 adds the pane-side hold.
 - **M3-d. No operator pause of dispatch.** The PERMISSIONS row's own Next increment
   (`docs/HARNESS_FRAMEWORK.md:35`) names this gap.
@@ -257,7 +257,7 @@ submissions until an operator releases it with a named, recorded note.
   - two tables in the schema and in `_ensure_side_tables`
   - a `repair_of` keyword on `submit`
   - the strike recorded inside `run_one`'s final transaction
-    (`overseer/factory.py:2378`) and inside `resolve`
+    (`overseer/factory.py:2390`) and inside `resolve`
   - a `release` method and CLI subcommand
 - Tests: a new class in `tests/test_factory.py`.
 
@@ -441,7 +441,17 @@ of that command's log and parses it with increment 2's parser. It writes
 | whole log read | the tail test |
 | digest event omitted | the recorded test |
 
-### Increment 4: the no-new-evidence early freeze (EVIDENCE, `docs/HARNESS_FRAMEWORK.md:36`)
+### Increment 4: the no-new-evidence early freeze (EVIDENCE, `docs/HARNESS_FRAMEWORK.md:36`) — LANDED
+
+> **Landed.** Implemented in `overseer/strikes.py` (a `fingerprint` function, a
+> `strike_evidence` table, and an early-freeze branch in `record_terminal`; the
+> module is now 257 lines, under 300, and the added logic is inside the +60
+> budget) with a +12-line call-site edit to `overseer/factory.py` (inside the
+> +15 budget). Three named tests pass in `tests/test_factory.NoNewEvidenceTests`
+> and the two mutation checks were confirmed to fail the suite. Increment 1's
+> `test_three_consecutive_failures_freeze_the_lineage` was updated to give each
+> attempt a distinct exit code, so it still tests the bound rather than tripping
+> the new early freeze; the full suite is 406 tests.
 
 **Objective.** The blueprint says to stop earlier "when the failure repeats
 unchanged" (`docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt:352`). This increment freezes

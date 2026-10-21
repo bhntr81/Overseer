@@ -18,6 +18,7 @@ submitted against it until an operator releases it with a named note.
 Only command-mode jobs carry a lineage. The internal probe modes (``fixture``,
 ``fake_provider``, ``isolation_probe``) are never tracked.
 """
+import hashlib
 import json
 import time
 
@@ -41,6 +42,12 @@ CREATE TABLE IF NOT EXISTS lineages (
     bound_source TEXT NOT NULL,
     detail TEXT NOT NULL,
     updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS strike_evidence (
+    job_id TEXT PRIMARY KEY NOT NULL,
+    lineage_id TEXT NOT NULL,
+    run_id TEXT,
+    fingerprint TEXT NOT NULL,
+    at REAL NOT NULL);
 '''
 
 
@@ -66,6 +73,24 @@ def bound_for(allowance):
 def is_strike(final_state):
     """A terminal ``failed`` state is the only strike."""
     return final_state == 'failed'
+
+
+def fingerprint(failing_ids, not_run_ids, exit_code, timed_out, patch_digest):
+    """Return a byte-stable fingerprint of one failed attempt's observable evidence.
+
+    The fields are the failing and not-run acceptance identifiers, the failing
+    command's exit code and timeout flag, and the patch digest of the workspace
+    diff receipt (or ``no patch``). Comparison is byte-equal; nothing here is
+    compared semantically.
+    """
+    payload = {
+        'failing': sorted(failing_ids or []),
+        'not_run': sorted(not_run_ids or []),
+        'exit_code': exit_code,
+        'timed_out': bool(timed_out),
+        'patch': patch_digest or 'no patch',
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
 def _allowance(spec):
@@ -129,7 +154,7 @@ def join_lineage(db, job_id, parent_id):
     return lineage_id
 
 
-def record_terminal(db, job_id, final_state, spec):
+def record_terminal(db, job_id, final_state, spec, run_id=None, fingerprint=None):
     """Record a command-mode job's terminal state against its lineage.
 
     A ``passed`` state closes an existing lineage; a ``failed`` state is a
@@ -138,6 +163,10 @@ def record_terminal(db, job_id, final_state, spec):
     The caller runs this inside the transaction that records the final
     transition, and before that transition's own event, so the terminal state
     stays the lineage's last event.
+
+    When a ``fingerprint`` is given and it is byte-equal to the previous failed
+    attempt's fingerprint in the same lineage, the lineage is frozen before its
+    bound: the failure repeated unchanged.
     """
     if (spec or {}).get('mode') in PROBE_MODES:
         return
@@ -160,6 +189,22 @@ def record_terminal(db, job_id, final_state, spec):
                (strikes, time.time(), lineage_id))
     _event(db, job_id, 'strike',
            'strike %d of %d on lineage %s' % (strikes, row['bound'], lineage_id))
+    if fingerprint is not None:
+        previous = db.execute(
+            'SELECT run_id, fingerprint FROM strike_evidence WHERE lineage_id=?'
+            ' ORDER BY at DESC LIMIT 1', (lineage_id,)).fetchone()
+        db.execute(
+            'INSERT OR REPLACE INTO strike_evidence(job_id,lineage_id,run_id,fingerprint,at)'
+            ' VALUES(?,?,?,?,?)', (job_id, lineage_id, run_id, fingerprint, time.time()))
+        if (previous and previous[1] == fingerprint and strikes < row['bound']
+                and row['state'] in ('open', 'released')):
+            detail = ('lineage %s frozen early: run %s repeats the failure of run %s unchanged '
+                      '(same failing and not-run identifiers, exit code, and patch digest); '
+                      'no new evidence' % (lineage_id, run_id, previous[0]))
+            db.execute('UPDATE lineages SET state=?,detail=?,updated=? WHERE lineage_id=?',
+                       ('frozen', detail, time.time(), lineage_id))
+            _event(db, job_id, 'frozen', detail)
+            return
     if row['state'] in ('open', 'released') and strikes >= row['bound']:
         detail = ('lineage %s frozen after %d consecutive failures; bound %d (%s)'
                   % (lineage_id, strikes, row['bound'], row['bound_source']))
