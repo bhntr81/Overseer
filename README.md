@@ -277,23 +277,24 @@ credentials. The factory runs that command with the child's PWD set to the
 workspace, so the model's file edits land in the workspace, and the acceptance
 commands then verify them by exit code.
 
-The adapter can also detect the active coding-agent session from the
-environment and inherit its runner, so a job is driven by whatever CLI launched
-Overseer (Claude Code, Codex, or OpenCode) instead of a hardcoded one:
+The adapter detects the active coding-agent session from the environment and
+**defaults to that runner**, so when an LLM launches Overseer the work is driven
+by that same LLM — run it from Claude Code and the default is the `claude`
+client; from Codex, `codex`; from OpenCode, `opencode`:
 
 ```sh
 python3 -m overseer.provider "implement add() in calc.py"        # reports the resolved invocation
 python3 -m overseer.provider "..." --runner opencode --model opencode/glm-5.3-flash-free
 ```
 
-The execution-safe default is the free OpenCode gateway: when no session is
-detected, OpenCode free is used. An inherited **Claude or Codex** runner spends
-that account's credits, so it is reported in the result rather than chosen
-silently; pass `--runner opencode` (or a free `--model`) to stay free.
-`overseer.provider.build_task` returns a submittable factory task whose
-implementation is the resolved invocation. The adapter builds the command and
-the task; nothing calls it automatically yet — the unattended feed loop that
-would is not built.
+The same default applies to the monitor (`overseer start <name>` with no client
+runs the launching LLM's client) and to the feed loop. The free OpenCode gateway
+is only the fallback, used when no session is detected. An inherited **Claude or
+Codex** runner spends that account's credits, and the chosen runner and its
+source are always named in the result, never hidden; pass `--runner opencode`
+(or a free `--model`) to force the free tier. `overseer.provider.build_task`
+returns a submittable factory task whose implementation is the resolved
+invocation.
 
 To point the factory at a brand-new external repository, scaffold one:
 
@@ -332,9 +333,19 @@ loop with `OVERSEER_NEEDS_INPUT` rather than inventing an instruction. The loop
 stops when dispatch is paused, the lineage is frozen, the last job awaits
 approval (it never decides), the worker asks for input, the daily cap (counted
 from ledger events, so it holds across a restart) is reached, or the objective
-reports `OVERSEER_DONE`. An `flock` allows one loop per ledger. For unattended
-safety it drives the free OpenCode gateway by default and never silently
-inherits a paid session; `--dry-run` builds the next job without submitting it.
+reports `OVERSEER_DONE`. An `flock` allows one loop per ledger. By default it
+drives the runner of the session that launched Overseer, falling back to the
+free OpenCode gateway only when no session is detected; `--dry-run` builds the
+next job (and reports its resolved runner) without submitting it.
+
+When the loop stops because a lineage froze, and only then, it can route one
+escalation session to the client named by the loop spec's `escalate_to`
+(`none` by default, or `codex`/`claude`/`opencode`) through the session router,
+at most once per lineage, with a prompt built from ledger facts only — the
+lineage, the run ids, the failing identifiers, the freeze reason, and the
+evidence directory paths, never raw log text. It never routes a pause, an
+approval wait, or an `OVERSEER_NEEDS_INPUT`, since no model may answer a human
+decision, and it honours `--dry-run` and the daily cap.
 
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.

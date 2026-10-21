@@ -10,7 +10,7 @@ from pathlib import Path
 from overseer.factory import Factory
 from overseer.provider import (
     DEFAULT_MODEL, DEFAULT_RUNNER, FREE_MODELS, MAX_INSTRUCTION_CHARS,
-    build_task, detect_session, is_free, resolve_worker, worker_argv,
+    build_task, default_runner, detect_session, is_free, resolve_worker, worker_argv,
 )
 
 
@@ -152,3 +152,14 @@ class BuildTaskTests(unittest.TestCase):
         spec, _ = build_task('bt2', 'o', '/tmp/x',
                              checks=[['a'], ['b']], instruction='do', env={})
         self.assertEqual(spec['contract']['acceptance_ids'], ['A1', 'A2'])
+
+
+class DefaultRunnerTests(unittest.TestCase):
+    def test_default_runner_inherits_the_launching_session(self):
+        self.assertEqual(default_runner({'CLAUDECODE': '1'}), 'claude')
+        self.assertEqual(default_runner({'CODEX_SANDBOX': 'seatbelt'}), 'codex')
+        self.assertEqual(default_runner({'OPENCODE': '/x/opencode'}), 'opencode')
+
+    def test_default_runner_falls_back_to_opencode_without_a_session(self):
+        self.assertEqual(default_runner({'PATH': '/usr/bin'}), DEFAULT_RUNNER)
+        self.assertEqual(default_runner({'PATH': '/usr/bin'}), 'opencode')

@@ -208,3 +208,23 @@ class EscalationTests(LoopTests):
                        escalate_to='claude', dry_run=True, repair_allowance=1)
         self.assertEqual(r['state'], 'dry_run')
         self.assertEqual(len(router.calls), 0)
+
+
+class InheritRunnerTests(LoopTests):
+    def test_the_loop_inherits_the_launching_session_by_default(self):
+        fake = self.make_fake([{'next': 'x', 'markers': ['OVERSEER_DONE']}])
+        spec = self.spec()
+        spec.pop('runner', None)  # no explicit runner -> inherit the session
+        r = run_loop(str(self.db), spec, str(self.target), dry_run=True,
+                     env={'CLAUDECODE': '1'}, opencode=fake)
+        self.assertEqual(r['state'], 'dry_run')
+        self.assertEqual(r['runner'], 'claude')
+
+    def test_the_loop_falls_back_to_opencode_without_a_session(self):
+        fake = self.make_fake([{'next': 'x', 'markers': ['OVERSEER_DONE']}])
+        spec = self.spec()
+        spec.pop('runner', None)
+        r = run_loop(str(self.db), spec, str(self.target), dry_run=True,
+                     env={}, opencode=fake)
+        self.assertEqual(r['state'], 'dry_run')
+        self.assertEqual(r['runner'], 'opencode')

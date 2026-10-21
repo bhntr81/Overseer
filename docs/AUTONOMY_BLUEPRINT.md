@@ -704,12 +704,12 @@ in the context manifest. It hands the attempt `OVERSEER_SPEC_PATH` and
 ### Increment 9: the unattended factory feed loop (STATE, `docs/HARNESS_FRAMEWORK.md:33`)
 
 > **Building block ready (out of order).** The worker-invocation adapter this
-> loop needs is already built: `overseer/provider.py:45` constructs the OpenCode
+> loop needs is already built: `overseer/provider.py:51` constructs the OpenCode
 > argv with the instruction as one whole, un-shell-interpolated element,
-> `overseer/provider.py:25` registers the free gateway models,
-> `overseer/provider.py:131` detects and (optionally) inherits the active
+> `overseer/provider.py:31` registers the free gateway models,
+> `overseer/provider.py:141` detects and (optionally) inherits the active
 > session's runner with the free OpenCode gateway as the execution-safe default,
-> and `overseer/provider.py:163` builds a submittable task from an instruction. A
+> and `overseer/provider.py:173` builds a submittable task from an instruction. A
 > real free model has written files the factory's checks verified via that
 > builder (see the work log). This loop still only needs to call `build_task` per
 > iteration and feed the next instruction from the worker report. It remains
@@ -798,8 +798,8 @@ is driven by a counter file.
 ### Increment 10: escalation route to a Claude session (PERMISSIONS, `docs/HARNESS_FRAMEWORK.md:35`) — LANDED
 
 > **Landed.** `overseer/orchestrate.py` gained `_escalate`
-> (`overseer/orchestrate.py:122`) and `_escalation_prompt`
-> (`overseer/orchestrate.py:101`) within its budget (now 251 lines, under 280).
+> (`overseer/orchestrate.py:125`) and `_escalation_prompt`
+> (`overseer/orchestrate.py:104`) within its budget (now 251 lines, under 280).
 > When the loop stops on a freeze, and only then, it routes one session to the
 > loop spec's `escalate_to` client through `overseer/route.py`, at most once per
 > lineage (guarded by an `escalation_routed` event), with a prompt built from

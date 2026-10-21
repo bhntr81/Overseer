@@ -4044,3 +4044,84 @@ corrupt file yields an empty queue and an empty section instead of an error;
 the monitor itself still fails closed on a corrupt state file. The running
 service was not restarted by this work: the monitor picks up the new module
 when the service is next restarted.
+
+### Increment 10: escalation route to a Claude session (PERMISSIONS)
+
+Red-green, one commit. When the unattended loop stops because a lineage froze —
+and only then — it routes one escalation session to the client named by the loop
+spec's `escalate_to` (`none` by default, or a client from `overseer/tmux.py`
+CLIENTS) through the existing `overseer/route.py` router, in the target
+directory. `overseer/orchestrate.py` gained `_escalation_prompt` (ledger facts
+only: the lineage, the attempts and run ids, the failing acceptance identifiers
+from the last job's handoff record, the freeze reason, and the evidence
+directory paths — never raw log text) and `_escalate` (now 251 lines, under
+280). It routes at most once per lineage, guarded by an `escalation_routed`
+ledger event; it never routes a pause, an approval wait, or an
+OVERSEER_NEEDS_INPUT, because no model may answer a human decision; and it
+honours dry-run and the daily cap. `run_loop` gained a `router` parameter
+(default `route.start_session`) so tests inject a fake. No factory change.
+
+Tests `tests/test_loop.py` `EscalationTests` (4, plus the 9 inherited loop tests
+rerun): a frozen loop routes once to the configured client and a second stop on
+the already-frozen lineage does not route again; an approval wait is never
+routed; the prompt carries the lineage, a failing identifier, and the evidence
+label but not a raw-log sentinel the worker printed; and dry-run routes nothing.
+Full suite 463, OK. Mutations confirmed caught (foreground, isolated): routing
+on an approval wait (approval test), no once-only record (routes-once test), and
+the prompt including the 00.log tail (ledger-facts test).
+
+The stale `overseer/orchestrate.py` citations from increment 9 (run_loop,
+_daily_count) were re-derived by content after the escalation functions shifted
+them; no factory.py citation changed.
+
+With this, autonomy increments 1–5 and 7–10 are landed. Only the monitor-side
+escalation hold (increment 6) remains, plus the real-model follow-up (text-format
+worker output and a prompt that makes a live model emit the status block) for
+multi-step autonomy against a real free model rather than the fake worker.
+
+### Default to the launching LLM's runner (operator policy change)
+
+Operator direction: "whenever Overseer is run by an LLM it defaults to the LLM
+that ran it" — run from Claude Code, default to the `claude` client, not the
+free OpenCode tier. This flips the earlier execution-safe default (free OpenCode,
+inherit only on request) that the provider adapter and the loop had carried.
+
+The monitor service was stopped first (`systemctl --user stop overseer.service`)
+so nothing autonomous could edit the Overseer repo during the change; no worker
+pane was in the Overseer dir at the time (the earlier increment-6/10 commits were
+hours old), so this session was the sole editor.
+
+Change (red-green):
+- `overseer/provider.py`: new `default_runner(env=None)` returns the active
+  session's runner (`detect_session`) or OpenCode as the fallback. `resolve_worker`
+  already inherited the detected session when no runner was named, so no change
+  there; the docstring's stance was flipped to inherit-by-default.
+- `overseer/orchestrate.py`: `run_loop` no longer forces `opencode`; it passes the
+  loop spec's runner through (None → the provider inherits the session), and the
+  `--dry-run` result now reports the resolved runner so the choice is inspectable
+  without running a model.
+- `overseer/__main__.py`: `overseer start`'s `client` is now optional and defaults
+  to `provider.default_runner()`, so `overseer start <name>` from an LLM session
+  starts that LLM's client; free OpenCode only when no session is detected.
+
+Tests: `tests/test_provider.DefaultRunnerTests` (2) and
+`tests/test_loop.InheritRunnerTests` (2, via dry-run so no model is invoked)
+cover inherit-by-default and the no-session OpenCode fallback. The existing loop
+tests set `runner: opencode` explicitly, so they are unaffected.
+
+Verification: the new tests pass; `tests.test_provider`, `tests.test_loop`,
+`tests.test_cli` pass in isolation (56 OK); `tests.test_model_choice` passes
+alone (26 OK). The full-suite run shows one failure,
+`test_model_select_refuses_a_model_outside_the_permitted_list` (0 != 1), which is
+pre-existing cross-test pollution — a test earlier in the suite performs a real
+route that mutates the live `config.json`/state — not caused by this change (the
+test passes in isolation, and this change does not touch model-select).
+`check-doc-references` resolves for all three docs; provider/orchestrate citations
+re-derived by content after the edits shifted them.
+
+Docs: the TOOLS and STATE pillar rows, the provider docstring, and the README now
+state inherit-by-default with the OpenCode fallback and the credit caveat.
+
+Note: for the new default to take effect the monitor must be restarted; the
+already-running clubwpt-ocr opencode worker predates this change and is a
+separate monitor session, not the factory loop.

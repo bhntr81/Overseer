@@ -80,7 +80,10 @@ def run_loop(db_path, loop_spec, target, once=False, dry_run=False, env=None,
     router = route.start_session if router is None else router
     escalate_to = loop_spec.get('escalate_to') or 'none'
     cap = loop_spec.get('daily_cap', DAILY_CAP)
-    runner = loop_spec.get('runner') or 'opencode'
+    # Default to the runner of the session that launched Overseer; the provider
+    # inherits it when this is None, and falls back to free OpenCode only when no
+    # session is detected.
+    runner = loop_spec.get('runner')
     checks = loop_spec.get('checks') or []
     prefix = loop_spec['id_prefix']
     lock_path = Path(db_path).with_name(Path(db_path).name + '.loop.lock')
@@ -172,7 +175,7 @@ def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
             return _result('needs_input', iteration, last_job, 'no instruction to feed')
 
         task_id = '%s-%d' % (prefix, iteration)
-        spec, _resolved = build_task(
+        spec, resolved = build_task(
             task_id, loop_spec['objective'], target, checks, instruction,
             model=loop_spec.get('model'), runner=runner, env=env,
             timeout_seconds=loop_spec.get('timeout_seconds', 600),
@@ -180,8 +183,10 @@ def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
         if loop_spec.get('envelope'):
             spec['envelope'] = loop_spec['envelope']
         if dry_run:
-            return _result('dry_run', iteration, None,
-                           'dry run: the next job was built but not submitted')
+            result = _result('dry_run', iteration, None,
+                             'dry run: the next job was built but not submitted')
+            result['runner'] = resolved['runner']
+            return result
 
         factory.submit(spec, repair_of=(last_job if last_failed else None))
         result = factory.run_one()

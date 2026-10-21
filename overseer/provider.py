@@ -14,13 +14,14 @@ models cost nothing and need no credentials; the ones listed here were seen with
 `opencode models` on 2026-10-21 and can go stale. A stronger or paid model is
 one identifier change; this module never invents a model name.
 
-This module also detects the active coding-agent session from the environment
-and can inherit its runner, so a job can be driven by whatever CLI launched
-Overseer instead of a hardcoded one. The execution-safe default stays the free
-OpenCode gateway: inheriting a paid runner (Claude Code or Codex) spends that
-account's credits, so it is reported transparently and used only when a session
-is actually detected or a runner is named explicitly. Nothing here runs a
-command; it builds argv and task specs that the factory runs and records.
+This module detects the active coding-agent session from the environment and
+defaults to its runner, so when an LLM launches Overseer the work is driven by
+that same LLM (run from Claude Code, the default runner is `claude`). The free
+OpenCode gateway is the fallback, used only when no session is detected or when
+a runner is named explicitly. Inheriting a paid runner (Claude Code or Codex)
+spends that account's credits, and the chosen runner and its source are always
+reported, never hidden. Nothing here runs a command; it builds argv and task
+specs that the factory runs and records.
 """
 import os
 
@@ -108,6 +109,16 @@ def detect_session(env=None):
                     'detail': 'detected the %s session from $%s' % (runner, marker)}
     return {'runner': None, 'marker': None,
             'detail': 'no active coding-agent session detected'}
+
+
+def default_runner(env=None):
+    """Return the client to default to: the launching session's runner, else OpenCode.
+
+    When an LLM session launched Overseer (its env marker is present), its own
+    runner is the default, so work is driven by the model that ran it. With no
+    session detected, the free OpenCode gateway is the fallback.
+    """
+    return detect_session(env)['runner'] or DEFAULT_RUNNER
 
 
 def _claude_argv(instruction, model, claude='claude'):

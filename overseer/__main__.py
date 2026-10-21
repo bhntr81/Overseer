@@ -9,6 +9,7 @@ import signal
 import sys
 import time
 
+from . import provider
 from .escalation import adopt, release
 from .halt import clear, note, read_state, render
 from .modelchoice import RESOLUTIONS, model_id, opencode_empty, providers, running_marker
@@ -324,7 +325,8 @@ def main():
     start = sub.add_parser("start")
     start.add_argument("name", help="new tmux session name")
     start.add_argument("--cwd", type=Path, default=Path.cwd())
-    start.add_argument("client", choices=["codex", "claude", "opencode"])
+    start.add_argument("client", nargs="?", choices=["codex", "claude", "opencode"],
+                       default=None, help="client to run; defaults to the launching LLM session")
     start.add_argument("client_args", nargs=argparse.REMAINDER)
     select = sub.add_parser("model-select")
     select.add_argument("pane", nargs="?", help="tmux pane ID, e.g. %%0")
@@ -395,7 +397,11 @@ def main():
             print("No hold is recorded for %s." % args.pane, file=sys.stderr)
             return 1
         elif args.action == "start":
-            shell_command = shlex.join([args.client, *args.client_args])
+            # Default to the client of the LLM session that launched Overseer, so
+            # running it from Claude Code starts a claude worker; free OpenCode
+            # only when no session is detected.
+            client = args.client or provider.default_runner()
+            shell_command = shlex.join([client, *args.client_args])
             pane = command("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", args.name,
                            "-c", str(args.cwd.resolve()), shell_command).strip()
             command("set-option", "-p", "-t", pane, "@overseer", "1")
