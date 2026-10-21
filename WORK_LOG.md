@@ -3815,3 +3815,59 @@ increment 8 landed; `README.md` gains the SPEC.md behavior.
 Subsystem 2 (target scope) is now complete: a target is scaffolded (increment 7)
 and its SPEC.md is read into the attempt (increment 8). The safety brake increment
 6 and the unattended feed loop increment 9 remain; 6 precedes 9.
+
+### Increment 9: the unattended factory feed loop (STATE) — the claws
+
+Red-green, one commit. The operator directed this ahead of the monitor-side
+brake (increment 6); recorded honestly: the factory feed loop is a different
+path than the monitor's pane-sending, and it is fenced by the factory-side
+brakes (lineage freeze 1, worker-report escalation 3, no-new-evidence freeze 4,
+dispatch pause 5) plus its own stop conditions, so building it now is bounded.
+Brake 6 still precedes letting the monitor auto-send.
+
+New module `overseer/orchestrate.py` (203 lines, under 280): `run_loop` and the
+`python3 -m overseer.orchestrate --db --loop --target [--once] [--dry-run]` CLI.
+Each iteration builds a command-mode job with `overseer.provider.build_task`
+(so the instruction is one whole, un-shell-interpolated argv element), submits
+it as a repair of the previous job after a failure, runs it, reads the worker
+report's status block, and feeds `NEXT_AGENT_INSTRUCTION` into the next
+iteration. The first instruction is the loop spec's objective; a missing or
+invalid block stops with needs_input and no invented instruction. Stop
+conditions, in order: dispatch paused, lineage frozen, last job
+awaiting_approval (never decides), OVERSEER_NEEDS_INPUT, the daily cap, done.
+The daily cap is counted from ledger `running` events in the last 86400 s, so it
+holds across a restart; an flock beside the database allows one loop per ledger;
+and the factory worker lock still serializes run_one. For unattended safety the
+runner defaults to the free OpenCode gateway and a paid session is never
+silently inherited. `provider.build_task` gained `opencode` and
+`repair_allowance` parameters so the loop (and its tests) can inject a worker
+and set the lineage bound; the factory is unchanged.
+
+Tests `tests/test_loop.py` (9) use a fake worker: a Python script driven by a
+counter and a plan file that prints a status block and markers and exits with a
+chosen code. They cover feeding the next instruction as one argv element, the
+freeze after three differing failures, the pause stop, never deciding an
+approval, the needs_input stop, the daily cap holding across a restart, an
+invalid block stopping without invention, finishing on done, and dry-run
+submitting nothing. Full suite 450, OK.
+
+Two test-authoring bugs were found and fixed during the green phase (not
+weakenings): a helper named `run` shadowed `unittest.TestCase.run` so setUp
+never fired, renamed to `drive`; and an approval test used an invalid envelope
+mode and a string scope, corrected to a valid mode and a list.
+
+Mutations confirmed caught (after a first run where a background job raced the
+file; re-run in isolation): freeze check removed (freeze test); pause check
+removed (pause test, verified in isolation); `decide` called (approval test);
+fallback instruction invented (invalid-block test); the daily cap kept in memory
+(restart test — the loop then fails to terminate, which is exactly the cap's
+role); and the instruction substituted into a substring (argv test). No
+factory.py citation changed.
+
+Honest limit: the loop logic is proven with a fake worker. Driving a real free
+model through multiple steps additionally needs text-format worker output and a
+prompt that makes the model emit the AGENTS.md status block — with the default
+`--format json` the block is not line-start and the loop would stop at
+needs_input after the first iteration. That text-format-and-prompt follow-up,
+the monitor-side hold (increment 6), and the Claude escalation route (increment
+10) remain.

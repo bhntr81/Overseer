@@ -317,6 +317,25 @@ resolves outside the workspace is refused and recorded as absent, and a missing
 `SPEC.md` is absent rather than an error. The spec is context only: nothing
 checks the work against it.
 
+An unattended feed loop can drive the factory from a loop spec:
+
+```sh
+python3 -m overseer.orchestrate --db DB --loop LOOP.json --target DIR [--once] [--dry-run]
+```
+
+Each iteration builds a command-mode job with the provider adapter, submits it
+(as a repair of the previous job after a failure), runs it, reads the worker
+report, and feeds that report's `NEXT_AGENT_INSTRUCTION` into the next
+iteration. The first instruction is the loop spec's objective; every later one
+comes only from a valid status block, and a missing or invalid block stops the
+loop with `OVERSEER_NEEDS_INPUT` rather than inventing an instruction. The loop
+stops when dispatch is paused, the lineage is frozen, the last job awaits
+approval (it never decides), the worker asks for input, the daily cap (counted
+from ledger events, so it holds across a restart) is reached, or the objective
+reports `OVERSEER_DONE`. An `flock` allows one loop per ledger. For unattended
+safety it drives the free OpenCode gateway by default and never silently
+inherits a paid session; `--dry-run` builds the next job without submitting it.
+
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 

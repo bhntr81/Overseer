@@ -161,7 +161,8 @@ def resolve_worker(instruction, model=None, runner=None, env=None,
 
 
 def build_task(task_id, objective, workspace, checks, instruction,
-               model=None, runner=None, env=None, timeout_seconds=600):
+               model=None, runner=None, env=None, timeout_seconds=600,
+               opencode=DEFAULT_OPENCODE, repair_allowance=1):
     """Return ``(spec, resolved)``: a submittable command-mode factory task whose
     implementation is the resolved worker invocation.
 
@@ -169,7 +170,7 @@ def build_task(task_id, objective, workspace, checks, instruction,
     the checks one for one. Submitting and running it drives the chosen model;
     the factory validates, hashes, and freezes the spec as for any other task.
     """
-    resolved = resolve_worker(instruction, model=model, runner=runner, env=env)
+    resolved = resolve_worker(instruction, model=model, runner=runner, env=env, opencode=opencode)
     spec = {
         'id': task_id, 'objective': objective, 'workspace': workspace,
         'timeout_seconds': timeout_seconds,
@@ -183,7 +184,7 @@ def build_task(task_id, objective, workspace, checks, instruction,
             'measured_evidence': None, 'provider_availability': None,
             'budget': {'wall_time_seconds': 600, 'token_limit': None,
                        'cost_limit_usd': None, 'resource_limits': None,
-                       'repair_allowance': 1},
+                       'repair_allowance': repair_allowance},
         },
     }
     return spec, resolved

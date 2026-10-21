@@ -166,8 +166,10 @@ What is missing:
   `unpause --note` on the factory CLI record a dispatch pause checked inside the
   dispatch transaction (`overseer/factory.py:2222`); a paused factory starts no
   new job while running work is untouched. It pauses dispatch, not running work.
-- **M3-e. No factory-side feed loop.** No runner turns one job's worker
-  instruction into the next job.
+- **M3-e. ~~No factory-side feed loop.~~ LANDED by increment 9.**
+  `overseer/orchestrate.py:74` turns one job's worker report into the next job,
+  feeding `NEXT_AGENT_INSTRUCTION` into the next iteration, bounded by the pause,
+  freeze, approval, needs-input, and daily-cap stop conditions.
 - **M3-f. No escalation route.** Routing moves a pane only on a *provider* failure
   (`overseer/scheduler.py:148`), never because work halted.
 
@@ -694,6 +696,19 @@ in the context manifest. It hands the attempt `OVERSEER_SPEC_PATH` and
 > iteration and feed the next instruction from the worker report. It remains
 > unwritten, and the safety brake of increment 6 lands before it, since this is
 > the first increment that sends work unattended.
+
+> **Landed (ahead of increment 6).** `overseer/orchestrate.py` (203 lines, under
+> 280) implements `run_loop` and the CLI. Nine tests pass in
+> `tests/test_loop.py` with a fake worker driven by a counter file, and the six
+> mutations were confirmed caught. Deviations recorded honestly: it was built
+> before the monitor-side brake (increment 6), but the factory feed loop is a
+> different path fenced by the factory-side brakes (1, 3, 4, 5) plus its own
+> stop conditions; it drives the free OpenCode gateway by default and never
+> inherits a paid session unattended; and it calls `provider.build_task` per
+> iteration rather than a raw `{instruction}` template. Real multi-step
+> autonomy against a live free model additionally needs text-format output and a
+> prompt that makes the model emit the status block (a small follow-up); the
+> loop logic itself is proven with the fake.
 
 **Objective.** Add `python3 -m overseer.orchestrate --db DB --loop LOOP.json
 --target DIR [--once] [--dry-run]`. Each iteration:
