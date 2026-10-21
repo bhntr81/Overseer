@@ -3665,3 +3665,62 @@ feed loop (increment 9) builds a job each iteration from the adapter and feeds t
 next instruction from the worker report; it is unwritten, and increment 6 precedes
 it. The free models are rate- and quality-limited, and their default output is not
 an AGENTS.md status block unless the prompt asks for one in text form.
+
+### Provider adapter extended: session detection, inheritance, and task builder
+
+Operator direction via a pasted prompt artifact (PROVIDER_ADAPTER_NEXT_PROMPT.md,
+created this turn, consistent with the project's NEXT_PROMPT convention): extend
+the adapter with environment auto-detection, inheritance of the active runner,
+safe argv for headless execution with $PWD, factory integration, and tests on a
+mock binary and mocked env markers.
+
+Session markers found on this machine: Claude Code sets CLAUDECODE (and
+CLAUDE_CODE_*); opencode, claude, and codex binaries are all on PATH.
+
+`overseer/provider.py` (now 210 lines, under 300, red-green):
+- `detect_session(env)` reads a recorded marker table (`SESSION_MARKERS`,
+  snapshot 2026-10-21, can go stale) and returns the active runner, the marker,
+  and a detail, or a null runner. It reads only the given mapping; no process
+  inspection.
+- `resolve_worker(instruction, model=None, runner=None, env=None, ...)` chooses a
+  runner by precedence — explicit > inherited detected session > the
+  execution-safe default OpenCode — and returns the runner, the model, the argv,
+  the detected session, and the source of the choice. OpenCode uses the free
+  default model and `--format json`; Claude and Codex argv are built (`claude -p
+  --permission-mode acceptEdits`, `codex exec`) but are unverified here and are
+  marked as spending the account's credits.
+- `build_task(...)` returns a `(spec, resolved)` pair: a submittable command-mode
+  task whose implementation is the resolved argv, with a minimal valid contract
+  whose acceptance ids match the checks. The factory is unchanged; integration is
+  at the task-building level, not by mutating `run_one` or the closed, hashed
+  spec.
+- `main` / `python3 -m overseer.provider <instruction> [--runner] [--model]`
+  prints the resolved invocation as JSON and dispatches nothing.
+
+Safety judgment, recorded: this very session is Claude Code (CLAUDECODE set), so a
+naive auto-inherit would make the factory invoke `claude` and spend Anthropic
+credits, possibly recursively. The operator had chosen OpenCode free to avoid
+cost. The adapter therefore detects and can inherit a session, but the
+execution-safe default is OpenCode free, an inherited paid runner is named in the
+result rather than chosen silently, and nothing is wired into `run_one` to
+auto-execute: a task must be built and submitted explicitly. The cost caveat is
+stated in the module, the TOOLS row, and the README.
+
+Tests `tests/test_provider.py` (20 total; 12 added): detection of a Claude,
+OpenCode, and Codex session and of a bare environment; fallback to OpenCode free;
+inheritance of a detected session; explicit runner and model overrides; an
+unknown runner refused; the resolved instruction kept as one whole element; and
+`build_task` producing a spec a real `Factory` accepts and queues. The earlier
+mock-binary test still proves no shell splitting. Full suite 431, OK.
+
+Mutations confirmed to fail, each reverted: detection ignoring its marker (caught
+by the inherit test); the explicit runner ignored (caught by the override test,
+after a first sed that silently did not match was redone as a verified edit).
+
+Live integration (scratch, not committed): `build_task(..., env={})` resolved to
+OpenCode free (correctly not inheriting this Claude session), and submitting and
+running it had a free model implement `add()` that the factory's check verified —
+state `passed`. No citation remap was needed; the factory did not change.
+
+Still not real: nothing calls the adapter automatically; the feed loop (increment
+9) does, and increment 6 precedes it. Claude and Codex invocations are unverified.

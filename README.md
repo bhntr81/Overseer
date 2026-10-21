@@ -275,8 +275,25 @@ instruction placed as one whole argument that is never passed through a shell.
 OpenCode's `opencode/*-free` gateway models cost nothing and need no
 credentials. The factory runs that command with the child's PWD set to the
 workspace, so the model's file edits land in the workspace, and the acceptance
-commands then verify them by exit code. The adapter builds the command; nothing
-calls it automatically yet — the unattended feed loop that would is not built.
+commands then verify them by exit code.
+
+The adapter can also detect the active coding-agent session from the
+environment and inherit its runner, so a job is driven by whatever CLI launched
+Overseer (Claude Code, Codex, or OpenCode) instead of a hardcoded one:
+
+```sh
+python3 -m overseer.provider "implement add() in calc.py"        # reports the resolved invocation
+python3 -m overseer.provider "..." --runner opencode --model opencode/glm-5.3-flash-free
+```
+
+The execution-safe default is the free OpenCode gateway: when no session is
+detected, OpenCode free is used. An inherited **Claude or Codex** runner spends
+that account's credits, so it is reported in the result rather than chosen
+silently; pass `--runner opencode` (or a free `--model`) to stay free.
+`overseer.provider.build_task` returns a submittable factory task whose
+implementation is the resolved invocation. The adapter builds the command and
+the task; nothing calls it automatically yet — the unattended feed loop that
+would is not built.
 
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.

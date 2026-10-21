@@ -659,11 +659,16 @@ in the context manifest. It hands the attempt `OVERSEER_SPEC_PATH` and
 
 > **Building block ready (out of order).** The worker-invocation adapter this
 > loop needs is already built: `overseer/provider.py:45` constructs the OpenCode
-> argv with the instruction as one whole, un-shell-interpolated element, and
-> `overseer/provider.py:25` registers the free gateway models. A real free model
-> has written files the factory's checks verified (see the work log). This loop
-> remains unwritten, and the safety brake of increment 6 lands before it, since
-> this is the first increment that sends work unattended.
+> argv with the instruction as one whole, un-shell-interpolated element,
+> `overseer/provider.py:25` registers the free gateway models,
+> `overseer/provider.py:131` detects and (optionally) inherits the active
+> session's runner with the free OpenCode gateway as the execution-safe default,
+> and `overseer/provider.py:163` builds a submittable task from an instruction. A
+> real free model has written files the factory's checks verified via that
+> builder (see the work log). This loop still only needs to call `build_task` per
+> iteration and feed the next instruction from the worker report. It remains
+> unwritten, and the safety brake of increment 6 lands before it, since this is
+> the first increment that sends work unattended.
 
 **Objective.** Add `python3 -m overseer.orchestrate --db DB --loop LOOP.json
 --target DIR [--once] [--dry-run]`. Each iteration:
