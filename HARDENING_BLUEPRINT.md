@@ -179,9 +179,9 @@ cost is spent on noise instead of escalating.
   (`overseer/strikes.py:108`) and counts its consecutive non-`passed` terminal
   states, freezing at `min(3, 1 + repair_allowance)` (`overseer/strikes.py:52`,
   `overseer/strikes.py:132`). The strike is recorded in the same transaction as
-  the job's final transition, in `run_one` (`overseer/factory.py:2419`) and in
-  `resolve` (`overseer/factory.py:788`); a frozen lineage refuses a further
-  repair until an operator releases it (`overseer/factory.py:813`). This is the
+  the job's final transition, in `run_one` (`overseer/factory.py:2439`) and in
+  `resolve` (`overseer/factory.py:789`); a frozen lineage refuses a further
+  repair until an operator releases it (`overseer/factory.py:814`). This is the
   user's "3 consecutive self-correction attempts" (`AGENTS.md:31`) and the
   blueprint's one attempt plus two repairs
   (`docs/SOFTWARE_FACTORY_BLUEPRINT_V2.txt:352`). Filed against the STATE row
@@ -190,7 +190,7 @@ cost is spent on noise instead of escalating.
   fingerprint of the failing and not-run identifiers, the failing command's exit
   code and timeout flag, and the patch digest (`overseer/strikes.py:78`) freezes
   a lineage *before* its bound when two consecutive failed attempts repeat it
-  unchanged (`overseer/strikes.py:201`, built at `overseer/factory.py:2395`). The
+  unchanged (`overseer/strikes.py:201`, built at `overseer/factory.py:2414`). The
   comparison is byte-equal, never semantic. Filed against EVIDENCE
   (`docs/HARNESS_FRAMEWORK.md:36`).
 - **Explicit escalation request.** *PARTIAL (parser and factory action
@@ -199,7 +199,7 @@ cost is spent on noise instead of escalating.
   (`AGENTS.md:62`) is parsed by a bounded, never-evaluated parser
   (`overseer/statusblock.py:96`) and now acted on in the factory: after the
   implementation command, the log is read and a stuck block freezes the job's
-  lineage (`overseer/factory.py:2424`, `overseer/strikes.py:171`). The monitor
+  lineage (`overseer/factory.py:2444`, `overseer/strikes.py:171`). The monitor
   still does not react to a stuck block in a pane; increment 6 adds that hold.
 - **Hop-distance counter.** *FILED (subsumed by the lineage).* A per-prompt
   `hop_count` is realized as the lineage's strike chain rather than a free
@@ -210,7 +210,7 @@ cost is spent on noise instead of escalating.
 - **Immutable ground-truth injection.** *PARTIAL + FILED.* The handoff record
   already carries the base and candidate revisions of each attempt
   (`overseer/handoff.py:66`, `overseer/handoff.py:187`), and the codebase map
-  (`overseer/codemap.py:1058`) and recall (`overseer/factory.py:986`) hand the
+  (`overseer/codemap.py:1058`) and recall (`overseer/factory.py:987`) hand the
   attempt its selected code and prior decisions. What is not yet injected into
   *every* prompt is the target's own `SPEC.md`; autonomy increment 8 adds the
   `SPEC.md` pointer (CONTEXT row, `docs/HARNESS_FRAMEWORK.md:32`).
@@ -231,7 +231,7 @@ ledger stops reflecting reality.
 
 - **Execution timeout breaker.** *IMPLEMENTED.* Every command runs under a
   wall-clock `timeout` and, in the `finally` path, its whole process group is
-  killed with `SIGKILL` (`overseer/factory.py:1581`), so a runaway child cannot
+  killed with `SIGKILL` (`overseer/factory.py:1595`), so a runaway child cannot
   outlive its attempt. The bound is the task's per-command timeout, **not** a
   fixed 60 seconds; the fixed figure in earlier drafts is corrected here to the
   per-command value the spec sets.
@@ -242,14 +242,14 @@ ledger stops reflecting reality.
 ### 4.2 Preventive mitigations
 
 - **Single-writer serialization.** *IMPLEMENTED.* Dispatch runs inside a
-  `BEGIN IMMEDIATE` transaction (`overseer/factory.py:2203`), a worker lock
-  serializes `run_one` (`overseer/factory.py:724`), and the controller row holds
-  the epoch (`overseer/factory.py:427`). The monitor has its own single-writer
+  `BEGIN IMMEDIATE` transaction (`overseer/factory.py:2217`), a worker lock
+  serializes `run_one` (`overseer/factory.py:725`), and the controller row holds
+  the epoch (`overseer/factory.py:428`). The monitor has its own single-writer
   lock (`overseer/__main__.py:265`). This is the race-condition control: shared
   state has exactly one writer at a time.
 - **Fenced recovery.** *IMPLEMENTED.* Restore re-creates the side tables and
-  fences the restored ledger under a fresh epoch (`overseer/factory.py:2119`,
-  `overseer/factory.py:2154`), so a stale lease from before a restore cannot
+  fences the restored ledger under a fresh epoch (`overseer/factory.py:2133`,
+  `overseer/factory.py:2168`), so a stale lease from before a restore cannot
   publish.
 - **Ephemeral execution containers.** *PARTIAL.* A bubblewrap profile probes a
   disposable runtime and fails closed when `bwrap` is absent
@@ -279,7 +279,7 @@ its state fragments across stores that disagree.
 
 - **Single source of truth.** *IMPLEMENTED, with a stated divergence from the
   literal rule.* Overseer keeps **one** authoritative store, the SQLite ledger
-  (`overseer/factory.py:413`), written by a single lock; it does not run
+  (`overseer/factory.py:414`), written by a single lock; it does not run
   multiple state databases. The literal advice "derive all state from git
   history" is **not** followed, by design: the ledger records tokens, approvals,
   memory kinds, and exit codes that git cannot express. Git is instead the

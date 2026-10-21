@@ -12,10 +12,13 @@ process.
 import hashlib
 import json
 import os
+from pathlib import Path
 
 from overseer.handoff import MAX_COMMANDS, MAX_IDENTIFIERS, acceptance
 
 MAX_MANIFEST_BYTES = 1024 * 1024
+SPEC_NAME = 'SPEC.md'
+MAX_SPEC_BYTES = 64 * 1024
 CATEGORIES = ('completed', 'failing', 'not_run')
 NOUN = 'context manifest'
 
@@ -64,6 +67,38 @@ def read_bytes(path, bound, noun):
     if len(data) > bound:
         return None, too_large
     return data, None
+
+
+def _spec_absent(reason, path):
+    return {'present': False, 'path': path, 'sha256': None, 'bytes': None, 'reason': reason}
+
+
+def read_spec(workspace, bound=MAX_SPEC_BYTES):
+    """Return the target SPEC.md pointer: present with its path and digest, or
+    absent with the reason.
+
+    A SPEC.md that is a symlink resolving outside the workspace is refused and
+    recorded as absent; otherwise the file is read bounded, size checked first.
+    A missing SPEC.md is absent, never an error. The spec is context only;
+    nothing here enforces it.
+    """
+    if not workspace:
+        return _spec_absent('the attempt has no workspace', None)
+    root = Path(workspace)
+    spec = root / SPEC_NAME
+    if spec.is_symlink():
+        real = os.path.realpath(str(spec))
+        root_real = os.path.realpath(str(root))
+        if real != root_real and not real.startswith(root_real + os.sep):
+            return _spec_absent(
+                'SPEC.md is a symlink that resolves outside the workspace; refused', str(spec))
+    elif not spec.exists():
+        return _spec_absent('no SPEC.md in the workspace', None)
+    data, reason = read_bytes(spec, bound, 'target SPEC.md')
+    if data is None:
+        return _spec_absent(reason, str(spec))
+    return {'present': True, 'path': str(spec), 'sha256': hashlib.sha256(data).hexdigest(),
+            'bytes': len(data), 'reason': None}
 
 
 def parse_object(data, noun, max_depth):

@@ -3773,3 +3773,45 @@ reconciled as `agree` only vacuously (no base to compare); a scaffolded target
 has an anchored initial commit, so the base revision is measured and the
 agreement is real. Increment 8 (the target's SPEC.md pointer into the attempt)
 and the safety brake increment 6 remain before the unattended loop.
+
+### Increment 8: the target's SPEC.md pointer (CONTEXT)
+
+Red-green, one commit. Phase 0 re-read the increment 8 spec, `readback.read_bytes`
+(size checked before opening, read capped), and the run_one skills-env and
+`_context_manifest` integration points. Phase 1 wrote the five named tests as
+`tests/test_factory.SpecPointerTests` (digest
+`836c3a277867378775293a51beed7e25c98449122db5217e8f56b5aacb929ca1`); red failed
+on the missing manifest `spec` block and env vars.
+
+Implementation:
+- `overseer/readback.py` gains `read_spec(workspace, bound=64 KiB)`: it returns
+  a pointer — present with the path and sha256, or absent with the reason —
+  reusing `read_bytes` for the bounded read. A `SPEC.md` that is a symlink whose
+  realpath is outside the workspace is refused and recorded as absent; a missing
+  `SPEC.md` is absent, never an error.
+- `overseer/factory.py` (+20 lines, under +30): a `_spec_environment` that sets
+  `OVERSEER_SPEC_PATH` and `OVERSEER_SPEC_SHA256` only when a spec was read; the
+  read call beside the skills environment in `run_one`; and a `spec` block in the
+  context manifest with present/path/sha256/reason. No spec field is added to the
+  closed spec, and nothing enforces the spec.
+
+Verification:
+- `tests.test_factory.SpecPointerTests`: 5 tests, OK — a present spec recorded
+  with its digest; a missing spec recorded absent with the reason; an oversized
+  (>64 KiB) spec not read; a symlink resolving outside the workspace refused; and
+  the two env vars reaching the attempt (a worker that exits 0 only when both are
+  set correctly reaches `passed`).
+- Full suite: `Ran 441 tests ... OK` (was 436; +5).
+- Mutations confirmed to fail, each reverted and re-parsed: the digest omitted
+  (digest test); the symlink-out check removed (symlink test); the 64 KiB bound
+  bypassed (oversized test).
+- All 155 `overseer/factory.py` citations across the three harness docs re-mapped
+  by content (file end 2506 to 2526).
+
+Docs: the CONTEXT pillar row records the spec pointer and the honest limit that
+nothing checks the work against it; `AUTONOMY_BLUEPRINT.md` marks M2-b and
+increment 8 landed; `README.md` gains the SPEC.md behavior.
+
+Subsystem 2 (target scope) is now complete: a target is scaffolded (increment 7)
+and its SPEC.md is read into the attempt (increment 8). The safety brake increment
+6 and the unattended feed loop increment 9 remain; 6 precedes 9.

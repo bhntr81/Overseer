@@ -5,6 +5,7 @@ import fcntl
 from overseer.codemap import assemble as assemble_codebase
 from overseer.codemap import summary as codebase_summary
 from overseer import handoff
+from overseer import readback
 from overseer import reconcile
 from overseer.isolation import run_isolation_probe
 from overseer.skills import provenance as skill_provenance
@@ -1101,9 +1102,17 @@ class Factory:
         env['OVERSEER_SKILLS_VERIFIED'] = str(skills.get('installed_verified_count') or 0)
         return env
 
+    @staticmethod
+    def _spec_environment(spec_pointer):
+        """Return the two SPEC.md variables when a spec was read, else nothing."""
+        if not spec_pointer.get('present'):
+            return {}
+        return {'OVERSEER_SPEC_PATH': spec_pointer['path'],
+                'OVERSEER_SPEC_SHA256': spec_pointer['sha256']}
+
     def _context_manifest(self, job_id, run_id, spec, spec_hash, results, epoch, recall=None,
                           codebase=None, skills=None, workspace_diff=None, handoff_info=None,
-                          worker_report=None):
+                          worker_report=None, spec_pointer=None):
         """Record what the controller supplied for this attempt, and why."""
         contract = spec.get('contract') or {}
         acceptance_ids = list(contract.get('acceptance_ids') or [])
@@ -1305,6 +1314,11 @@ class Factory:
             'handoff': self._manifest_handoff(handoff_info),
             'worker_report': ({'path': worker_report['path'], 'sha256': worker_report['sha256']}
                               if worker_report else None),
+            'spec': ({'present': bool(spec_pointer.get('present')),
+                      'path': spec_pointer.get('path'), 'sha256': spec_pointer.get('sha256'),
+                      'reason': spec_pointer.get('reason')}
+                     if spec_pointer else {'present': False, 'path': None, 'sha256': None,
+                                           'reason': 'the spec pointer was not read'}),
             'candidate_revision': candidate,
             'unmeasured': [name for name in ('tokens', 'cost_usd', 'candidate_revision',
                                              'remaining_budget', 'unresolved_effects',
@@ -2278,6 +2292,11 @@ class Factory:
             skills_digest = hashlib.sha256(skills_path.read_bytes()).hexdigest()
             skills_info = {'record': skills, 'path': str(skills_path), 'sha256': skills_digest}
             child_env.update(self._skills_environment(skills, skills_path))
+            # The target's SPEC.md is read bounded and handed to the attempt as
+            # context; it is recorded, never enforced, and its absence is not an
+            # error.
+            spec_pointer = readback.read_spec(spec.get('workspace'))
+            child_env.update(self._spec_environment(spec_pointer))
             self.db.execute("UPDATE jobs SET state='running',run_id=?,evidence=?,started=? WHERE id=?",
                             (run_id, str(evidence), time.time(), job_id))
             self.event(job_id, 'running', 'durable reservation before command launch')
@@ -2400,7 +2419,8 @@ class Factory:
             # final state change, in one transaction.
             manifest = self._context_manifest(
                 job_id, run_id, spec, row['spec_hash'], results, epoch, recall_info,
-                codebase_info, skills_info, diff_info, handoff_info, worker_report_info)
+                codebase_info, skills_info, diff_info, handoff_info, worker_report_info,
+                spec_pointer)
             manifest_path = evidence / 'context.json'
             manifest_path.write_text(json.dumps(manifest, indent=2))
             manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()

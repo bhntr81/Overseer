@@ -309,6 +309,14 @@ prints one JSON object (the path, the head commit, whether a spec was copied) or
 a JSON error with a non-zero exit. Its writing git runner is separate from the
 read-only runner used for evidence.
 
+At the start of every attempt the factory also reads the target's
+`<workspace>/SPEC.md`, bounded to 64 KiB, and records its path and digest (or
+its absence and the reason) in the context manifest, handing the attempt
+`OVERSEER_SPEC_PATH` and `OVERSEER_SPEC_SHA256`. A `SPEC.md` symlink that
+resolves outside the workspace is refused and recorded as absent, and a missing
+`SPEC.md` is absent rather than an error. The spec is context only: nothing
+checks the work against it.
+
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 

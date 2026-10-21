@@ -5017,3 +5017,70 @@ class WorkerPwdTests(unittest.TestCase):
                                 'checks': [[sys.executable, '-c', 'pass']]})
         self.f.submit(spec)
         self.assertEqual(self.f.run_one()['state'], 'passed')
+
+
+class SpecPointerTests(unittest.TestCase):
+    """Increment 8: the target's SPEC.md is read, recorded, and handed to the attempt.
+
+    It is context, never enforced: nothing checks the work against it.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.root = self.base / 'ws'
+        self.root.mkdir()
+        self.f = Factory(self.base / 'state' / 'jobs.sqlite3')
+        self.addCleanup(self.f.close)
+
+    def run_job(self, name='j', impl=None):
+        impl = impl or [sys.executable, '-c', 'pass']
+        spec = attach_contract({'id': name, 'objective': 'run with a spec pointer',
+                                'workspace': str(self.root), 'timeout_seconds': 5,
+                                'implementation': impl,
+                                'checks': [[sys.executable, '-c', 'pass']]})
+        self.f.submit(spec)
+        return self.f.run_one()
+
+    def manifest(self, result):
+        return json.loads((Path(result['evidence']) / 'context.json').read_text())
+
+    def test_a_target_spec_is_recorded_with_its_digest(self):
+        body = b'# Build the widget\nrules here\n'
+        (self.root / 'SPEC.md').write_bytes(body)
+        result = self.run_job()
+        spec = self.manifest(result)['spec']
+        self.assertTrue(spec['present'])
+        self.assertTrue(spec['path'].endswith('SPEC.md'))
+        self.assertEqual(spec['sha256'], hashlib.sha256(body).hexdigest())
+
+    def test_a_missing_spec_is_recorded_as_absent_with_the_reason(self):
+        spec = self.manifest(self.run_job())['spec']
+        self.assertFalse(spec['present'])
+        self.assertIn('no SPEC.md', spec['reason'])
+        self.assertIsNone(spec['sha256'])
+
+    def test_an_oversized_spec_is_not_read(self):
+        (self.root / 'SPEC.md').write_bytes(b'x' * (64 * 1024 + 1))
+        spec = self.manifest(self.run_job())['spec']
+        self.assertFalse(spec['present'])
+        self.assertIn('bound', spec['reason'])
+        self.assertIsNone(spec['sha256'])
+
+    def test_a_symlinked_spec_outside_the_workspace_is_refused(self):
+        outside = self.base / 'outside.md'
+        outside.write_bytes(b'secret outside the workspace\n')
+        (self.root / 'SPEC.md').symlink_to(outside)
+        spec = self.manifest(self.run_job())['spec']
+        self.assertFalse(spec['present'])
+        self.assertIn('outside the workspace', spec['reason'])
+        self.assertIsNone(spec['sha256'])
+
+    def test_the_spec_path_reaches_the_attempt_environment(self):
+        (self.root / 'SPEC.md').write_bytes(b'spec body\n')
+        code = ("import os, sys; "
+                "sys.exit(0 if os.environ.get('OVERSEER_SPEC_PATH', '').endswith('SPEC.md') "
+                "and len(os.environ.get('OVERSEER_SPEC_SHA256', '')) == 64 else 1)")
+        result = self.run_job(impl=[sys.executable, '-c', code])
+        self.assertEqual(result['state'], 'passed')
