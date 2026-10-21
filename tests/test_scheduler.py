@@ -288,3 +288,12 @@ class SchedulerTests(unittest.TestCase):
         self.change('%0', ERROR)
         self.run_tick(12)
         self.assertEqual(self.backend.send.call_args.args[0].pane, '%1')
+
+    def test_the_queue_path_records_a_halt_for_a_stopped_pane(self):
+        self.change('%0', 'OVERSEER_DONE\n' + QUESTION)
+        self.run_tick(0)
+        self.assertEqual(self.state['%0:0']['halt']['reason'],
+                         'client requested no further automatic continuation')
+        self.assertEqual(self.state['%0:0']['halt']['kind'], 'HALTED')
+        panes = [call.args[0].pane for call in self.backend.send.call_args_list]
+        self.assertNotIn('%0', panes)

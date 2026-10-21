@@ -3958,3 +3958,89 @@ evidence that the work progresses; the monitor's `phase()` heuristic
 *finished*, which changes no send path because `Policy.consider` applies the
 hold; and the unfreeze command reports the poll interval from `config.json`,
 so it fails closed if that file cannot be read.
+
+### Increment 11: explicit halted status for intentional monitor halts (PERMISSIONS)
+
+Red-green, one commit. The prompt was written by the dedicated prompt-writing
+agent (`MONITOR_HALT_NOTICE_NEXT_PROMPT.md`, from the operator's task and the
+increment 11 section of `docs/AUTONOMY_BLUEPRINT.md`); this agent executed it.
+Phase 0 re-read the blueprint's locality rule, the pillar map, the monitor, the
+queue path, the policy and the house tests. Phase 1 wrote the eleven named tests
+first (`tests/test_halt.py` new, `tests/test_monitor.py`, `tests/test_scheduler.py`;
+sha256 `ae3b633acd3abf06e9ce6f2b729c14fb581c5e52b8ac127abef6c333f0c7dea5`,
+`6ef69bbd392bc0b288284e21b9fd67b0ed09bc20fda86b047a002a9d66c9d79e`,
+`8380d73c415e1cdbe1834c6127a973d80c7bcf6da748cac57c5035b57fa2b9ac`); red failed
+on the missing `overseer.halt` module, the missing halt records and the missing
+notice. The digests were unchanged after the implementation phase.
+
+What landed:
+- New `overseer/halt.py` (156 lines, under the 200-line target). It owns the
+  halt vocabulary, the per-pane record, the transition notice and the status
+  rendering. Only named reasons are halts: the client stop reason, the
+  `OVERSEER_NEEDS_INPUT` marker, the report stop reason, the two escalation hold
+  reasons, the model-decision pause, the exhausted-credit status, a routed pane
+  and the capacity retry limit. Every other reason is transient: it is neither
+  recorded nor written over an existing record, and it never clears one.
+- The record is `entry["halt"] = {reason, kind, resume, session, pane, at}` in
+  the pane's own `<pane>:<pid>` entry of the monitor's JSON state file. The
+  factory's sqlite ledger and the repair-lineage freeze are a different store
+  and are untouched.
+- The exact reason distinguishes two situations the policy reports alike: a
+  current turn carrying `OVERSEER_NEEDS_INPUT` records that marker, any other
+  client stop records `client requested no further automatic continuation`. A
+  marker in an earlier turn does not count.
+- The notice is `[OVERSEER] Session <session_name> paused automatic turns:
+  <reason>`, logged once per transition through the `overseer` logger, with a
+  second line naming what resumes it. The session name is resolved once, at the
+  transition, and stored, so it survives the session closing.
+- `overseer/__main__.py` grew by 6 net lines (8 changed: the import, two record
+  calls in `tick`, the clear after a successful send, the tolerant state read,
+  the status rendering; 404 to 410). `overseer/scheduler.py` grew by 7 lines
+  (372 to 379): the import, one record pass over the observed panes — which
+  covers every branch that sets a halting `queue_reason`, including the
+  `stopped` phase branch that never calls `consider` — and the clear after a
+  successful send. Both files were already over the 300-line flag of
+  `HARDENING_BLUEPRINT.md`; the edits are call sites only and the logic lives in
+  the new module.
+- `overseer/policy.py` is byte-identical to its committed state, and so are
+  `overseer/escalation.py`, `overseer/factory.py`, `overseer/strikes.py`,
+  `overseer/statusblock.py`, `overseer/modelchoice.py`, `overseer/route.py`,
+  `overseer/tmux.py` and `overseer/orchestrate.py`. Nothing about *when* the
+  monitor sends changed: a stopped, held or paused pane still receives no
+  routine continuation, no report prompt, no writer handoff, no capacity retry
+  and no routed resume.
+
+Verification:
+- The eleven named tests pass, including the guardrail tests that a stopped pane
+  and a needs-input pane are recorded and still sent nothing.
+- Full suite: `Ran 481 tests ... OK` (was 470; +11).
+- Five mutations confirmed to fail, each reverted: the notice logged on every
+  poll (caught by the notice-not-repeated test, 3 notices instead of 1); a
+  transient reason clearing the halt record (caught by the transient-reason
+  test); the `OVERSEER_NEEDS_INPUT` marker not distinguished from the plain
+  client stop (caught by the marker test); the halted section dropped from the
+  status view (caught by the status-command test); the record not cleared after
+  a successful send (caught by the clear test).
+- CLI smoke: `python3 -m overseer status --state <file>` printed
+  `HALTED / PAUSED SESSIONS:` with one block per halted pane — `Reason:
+  OVERSEER_NEEDS_INPUT` for a live session and `Reason: three consecutive
+  failed or unchanged step reports` for a pane whose tmux session was already
+  gone — and exited 0.
+- Citations re-mapped by content: 29 values into `overseer/__main__.py` and
+  `overseer/scheduler.py` (17 in `docs/HARNESS_FRAMEWORK.md`, 12 in
+  `docs/AUTONOMY_BLUEPRINT.md`); every new citation was opened and checked
+  against the line it names. `scripts/check-doc-references` exits 0 for
+  `docs/HARNESS_FRAMEWORK.md` (269 references), `docs/AUTONOMY_BLUEPRINT.md`
+  (91), `README.md` (0) and `WORK_LOG.md`.
+
+Honest limits: the halted section is a record, not a diagnosis — it says what
+the monitor last saw and why it stopped answering, and does not prove that a
+session is stuck, that the work is progressing, or that the reason is still
+true. A closed tmux session stays listed until a successful send clears the
+record. A pane whose process was replaced is a new `<pane>:<pid>` entry and
+therefore a new record. The notice is informational and changes no send
+decision. The `status` command now reads the state file tolerantly, so a
+corrupt file yields an empty queue and an empty section instead of an error;
+the monitor itself still fails closed on a corrupt state file. The running
+service was not restarted by this work: the monitor picks up the new module
+when the service is next restarted.

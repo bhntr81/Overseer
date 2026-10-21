@@ -4,6 +4,7 @@ import logging
 import re
 import time
 
+from .halt import clear, note
 from .modelchoice import (
     RESOLUTIONS, detect, fallback_policy, next_hop, opencode_answer, opencode_empty,
     providers, running_marker,
@@ -309,6 +310,11 @@ def tick_queue(backend, policy, state, config, path, now, save):
         if key in candidates and key not in waiting:
             waiting.append(key)
             LOG.info('queue enqueued %s at position %s', snapshots[key].pane, len(waiting))
+    # Every branch that set a halting queue_reason is recorded here.
+    for key, snapshot in snapshots.items():
+        entry = state.get(key)
+        if isinstance(entry, dict):
+            note(entry, entry.get('queue_reason'), snapshot.text, snapshot.pane, now)
     save(path, state)
     if queue.get('active') or any(p == 'active' for p in phases.values()) or not waiting:
         return
@@ -361,6 +367,7 @@ def tick_queue(backend, policy, state, config, path, now, save):
     save(path, state)
     try:
         backend.send(s, outgoing)
+        clear(entry)
         if kind in {'report-based prompt', 'writer handoff prompt'}:
             LOG.info('%s sent %s', s.pane, kind)
         elif kind == 'routed continuation':

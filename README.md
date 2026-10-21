@@ -485,6 +485,38 @@ monitor applies it at its next poll. Two limits are worth knowing: a pane whose
 process is replaced is a new entry and is not frozen, and the release reaches a
 running monitor one poll late.
 
+## Halted sessions
+
+When the monitor stops answering a pane on purpose — the client asked for no
+further automatic continuation, the turn needs input, a report ended the
+continuation, the escalation hold above applies, a model decision is pending,
+the credits are exhausted, the work was routed away, or the capacity retry
+limit was reached — it says so once, in the log:
+
+```text
+[OVERSEER] Session my-project paused automatic turns: OVERSEER_NEEDS_INPUT
+[OVERSEER] Session my-project resumes when: the client is waiting for an answer; answer it in the pane to resume
+```
+
+`python3 -m overseer status` then lists every such pane:
+
+```text
+HALTED / PAUSED SESSIONS:
+  %0 session=my-project HALTED
+    Reason: OVERSEER_NEEDS_INPUT
+    Resume: the client is waiting for an answer; answer it in the pane to resume
+```
+
+The section is read from the monitor's state file, so a pane whose tmux session
+has already closed is still listed with the reason it stopped for. A successful
+send clears the record, because the session resumed.
+
+Three limits are worth knowing: the section records what the monitor last saw,
+so it does not prove that a session is stuck or that the work is progressing; a
+closed session stays listed until it is sent to again; and the notice changes
+nothing about what the monitor sends — a halted pane still receives no
+automated reply.
+
 ## Model decisions
 
 When a client reports that its model, its account, or its credits cannot be

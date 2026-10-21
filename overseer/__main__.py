@@ -10,6 +10,7 @@ import sys
 import time
 
 from .escalation import adopt, release
+from .halt import clear, note, read_state, render
 from .modelchoice import RESOLUTIONS, model_id, opencode_empty, providers, running_marker
 from .policy import DEFAULT_REPLY, Policy, hold, next_prompt
 from .route import resolve_route
@@ -232,11 +233,13 @@ def tick(backend, policy, state, config, path, now):
                          and bool(entry.get("ran_turn")))
             eligible, reason = policy.consider(entry, snapshot.text, now, completed=completed)
             if not eligible:
+                note(entry, reason, snapshot.text, pane, now)
                 LOG.debug("%s skipped: %s", pane, reason)
                 continue
             prompt, kind = next_prompt(snapshot.text, config.get("reply", DEFAULT_REPLY))
             if prompt is None:
                 hold(entry, snapshot.text, kind)
+                note(entry, kind, snapshot.text, pane, now)
                 LOG.info("%s skipped: %s", pane, kind)
                 continue
             if config["dry_run"]:
@@ -250,6 +253,7 @@ def tick(backend, policy, state, config, path, now):
             policy.acknowledge(entry, snapshot.text, now)
             save(path, state)
             backend.send(snapshot, prompt)
+            clear(entry)
             if kind in {"report-based prompt", "writer handoff prompt"}:
                 LOG.info("%s sent %s", pane, kind)
             else:
@@ -337,11 +341,11 @@ def main():
             return run(args)
         if args.action == "status":
             config = settings(ROOT / "config.json")
+            state = read_state(args.state)
             print("Mode: " + ("dry run" if config["dry_run"] else "automatic replies"))
             print("Exclusions: " + ", ".join(config.get("exclude", [])))
             print("FIFO queue: " + ("enabled" if config.get("serial_queue", False) else "disabled"))
             if config.get("serial_queue", False):
-                state = json.loads(args.state.read_text()) if args.state.exists() else {}
                 queue = state.get("_queue", {})
                 active = queue.get("active")
                 print("Active reservation: " + (active['key'] if active else "none"))
@@ -364,6 +368,8 @@ def main():
                       f"({record.get('detail')}) — providers: "
                       f"{', '.join(record.get('providers') or [])}")
                 print(f"  resolve with: python3 -m overseer model-select {pane}")
+            for line in render(state):
+                print(line)
         elif args.action in {"exclude", "include"}:
             path = ROOT / "config.json"
             config = settings(path)

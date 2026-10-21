@@ -268,5 +268,51 @@ class EscalationMonitorTests(unittest.TestCase):
             self.assertIn("No hold is recorded for %2.", missing.stderr)
 
 
+class HaltedPaneTests(unittest.TestCase):
+    """A stopped pane is recorded, announced once, and still sent nothing."""
+
+    STOPPED = Snapshot("%0", "codex", "123", "OVERSEER_DONE\n›", "›", "0", "0")
+    NEEDS_INPUT = Snapshot("%0", "codex", "123", "OVERSEER_NEEDS_INPUT\n›", "›", "0", "0")
+
+    def drive(self, screen, ticks=1):
+        backend = Mock()
+        backend.panes.return_value = ["%0"]
+        backend.snapshot.return_value = screen
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            state = {}
+            config = {"dry_run": False, "reply": "Please continue."}
+            policy = Policy(idle_seconds=0, cooldown_seconds=0)
+            with self.assertLogs("overseer", level="INFO") as logs:
+                for index in range(ticks):
+                    tick(backend, policy, state, config, path, index * 100)
+        return backend, state, logs.output
+
+    def test_a_stopped_pane_records_a_halt_and_is_not_sent_to(self):
+        backend, state, logs = self.drive(self.STOPPED)
+        entry = state["%0:123"]
+        self.assertEqual(entry["halt"]["reason"],
+                         "client requested no further automatic continuation")
+        self.assertEqual(entry["halt"]["kind"], "HALTED")
+        backend.send.assert_not_called()
+        notices = [line for line in logs if "paused automatic turns" in line]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("[OVERSEER] Session ", notices[0])
+
+    def test_a_needs_input_pane_records_the_marker_reason(self):
+        backend, state, logs = self.drive(self.NEEDS_INPUT)
+        entry = state["%0:123"]
+        self.assertEqual(entry["halt"]["reason"], "OVERSEER_NEEDS_INPUT")
+        self.assertEqual(entry["halt"]["kind"], "HALTED")
+        backend.send.assert_not_called()
+
+    def test_the_halt_notice_is_not_repeated_on_the_next_poll(self):
+        backend, state, logs = self.drive(self.STOPPED, ticks=3)
+        notices = [line for line in logs if "paused automatic turns" in line]
+        self.assertEqual(len(notices), 1)
+        self.assertEqual(state["%0:123"]["halt"]["at"], 0)
+        backend.send.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

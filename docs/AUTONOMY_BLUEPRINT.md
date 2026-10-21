@@ -61,8 +61,8 @@ What exists. Do not propose any of it again.
       (`overseer/reconcile.py:158`). So an unborn repository reconciles as
       agreeing without any anchored revision.
 - **The monitor already scopes panes by directory.** The `target_paths` and
-  `targets` settings are validated at `overseer/__main__.py:53`. A relative path
-  resolves against the directory holding `config.json` (`overseer/__main__.py:57`).
+  `targets` settings are validated at `overseer/__main__.py:54`. A relative path
+  resolves against the directory holding `config.json` (`overseer/__main__.py:58`).
   Panes are filtered by `Tmux.targeted` (`overseer/tmux.py:116`) using `under`
   (`overseer/tmux.py:18`).
 - **The workspace is only read during capture and reconciliation.** The read-only
@@ -95,9 +95,9 @@ What exists. Do not propose any of it again.
 
 - **The monitor already runs an unattended feed loop into worker panes.** Its
   pieces:
-  - `run` polls (`overseer/__main__.py:262`) and `tick` acts
-    (`overseer/__main__.py:212`). With `serial_queue`, `tick_queue` takes over
-    (`overseer/scheduler.py:174`).
+  - `run` polls (`overseer/__main__.py:266`) and `tick` acts
+    (`overseer/__main__.py:213`). With `serial_queue`, `tick_queue` takes over
+    (`overseer/scheduler.py:175`).
   - It parses the latest `OVERSEER_REPORT` JSON line (`overseer/policy.py:62`,
     `overseer/policy.py:82`).
   - It sends the report's `remaining` field as the next prompt
@@ -105,7 +105,7 @@ What exists. Do not propose any of it again.
   - On a `step_done` report it sends a writer-handoff prompt
     (`overseer/policy.py:217`, `overseer/policy.py:158`).
   - It reserves before it sends, so a send is never retried
-    (`overseer/__main__.py:250`).
+    (`overseer/__main__.py:253`).
 - **The limits a loop must keep already exist:**
   - Stop markers. `OVERSEER_NEEDS_INPUT` anywhere in the current turn always stops
     (`overseer/policy.py:30`, `overseer/policy.py:172`).
@@ -114,9 +114,9 @@ What exists. Do not propose any of it again.
   - The idle threshold, "already replied", cooldown, and daily limit apply
     (`overseer/policy.py:325`, `overseer/policy.py:345`, `overseer/policy.py:349`,
     `overseer/policy.py:353`).
-  - `dry_run` mode exists (`overseer/__main__.py:242`).
+  - `dry_run` mode exists (`overseer/__main__.py:255`).
   - Capacity retries are bounded by `capacity_max_retries`
-    (`overseer/scheduler.py:283`).
+    (`overseer/scheduler.py:284`).
   - Provider-failure routing exists: failure detection
     (`overseer/modelchoice.py:85`), fallback chain (`overseer/modelchoice.py:157`,
     `overseer/modelchoice.py:169`), and session routing (`overseer/route.py:74`,
@@ -161,7 +161,7 @@ What is missing:
   the implementation log, and a `STUCK_NEEDS_ESCALATION` block freezes the job's
   lineage (`overseer/factory.py:2444`, `overseer/strikes.py:171`). The monitor
   holds the pane instead of sending to it (`overseer/escalation.py:56`), and only
-  `python3 -m overseer unfreeze <pane>` releases it (`overseer/__main__.py:383`).
+  `python3 -m overseer unfreeze <pane>` releases it (`overseer/__main__.py:389`).
 - **M3-d. ~~No operator pause of dispatch.~~ LANDED by increment 5.** `pause`/
   `unpause --note` on the factory CLI record a dispatch pause checked inside the
   dispatch transaction (`overseer/factory.py:2222`); a paused factory starts no
@@ -171,7 +171,7 @@ What is missing:
   feeding `NEXT_AGENT_INSTRUCTION` into the next iteration, bounded by the pause,
   freeze, approval, needs-input, and daily-cap stop conditions.
 - **M3-f. No escalation route.** Routing moves a pane only on a *provider* failure
-  (`overseer/scheduler.py:148`), never because work halted.
+  (`overseer/scheduler.py:149`), never because work halted.
 
 ### 1.3 Locality facts that constrain placement
 
@@ -228,6 +228,8 @@ the safety work, before the feed loop that needs a target argument.
 9. **STATE.** The unattended factory feed loop (`--target`, feeding
    `NEXT_AGENT_INSTRUCTION`).
 10. **PERMISSIONS.** Escalation route to a Claude session when a loop halts.
+11. **PERMISSIONS.** Explicit halted status: an intentional monitor halt is
+    recorded, announced once, and rendered by `overseer status`.
 
 Every increment's prompt carries the house rules:
 
@@ -548,7 +550,7 @@ because the PERMISSIONS row asks for a pause of *running* work and this pauses
 > path, so a needs-input screen still reports the stop reason
 > (`overseer/policy.py:333`). The state lives in the monitor's own JSON state
 > file, never in the factory ledger, and `python3 -m overseer unfreeze <pane>`
-> (`overseer/__main__.py:383`) releases that pane alone; the release reaches a
+> (`overseer/__main__.py:389`) releases that pane alone; the release reaches a
 > running monitor through a sidecar file the command writes, folded at the start
 > of the next tick (`overseer/escalation.py:137`). Seven tests pass, including the
 > five the blueprint names; three mutations were confirmed caught. Honest limits:
@@ -847,6 +849,87 @@ from ledger facts only:
 | no once-only record | the routes-once test |
 | prompt includes raw log text | the ledger-facts test |
 
+### Increment 11: explicit halted status for intentional monitor halts (PERMISSIONS, `docs/HARNESS_FRAMEWORK.md:35`) — LANDED
+
+> **Landed.** `overseer/halt.py` (156 lines) records an intentional monitor halt
+> in the pane's own entry of the monitor's JSON state file, announces it once,
+> and renders it in `overseer status`. The halting reasons are the client stop
+> reason, the `OVERSEER_NEEDS_INPUT` marker, the report stop reason, the two
+> escalation hold reasons, the model-decision pause, the exhausted-credit
+> status, a routed pane and the capacity retry limit; every other reason is
+> transient, and is neither recorded nor able to clear a record. The notice is
+> `[OVERSEER] Session <session_name> paused automatic turns: <reason>`, logged
+> once per transition, with a second line naming what resumes it. The plain path
+> records it (`overseer/__main__.py:236`) and the queue path records every
+> halting `queue_reason` (`overseer/scheduler.py:317`); a successful send clears
+> the record, because the session resumed. `overseer/policy.py` is byte-identical:
+> nothing about *when* the monitor sends changed. Eleven tests pass, including
+> the guardrail test that a stopped pane still receives no reply, and five
+> mutations were confirmed caught. The honest limits are in §4.
+
+**Objective.** When a monitored pane hits a policy gate — the client asked for no
+further automatic continuation, the turn carries `OVERSEER_NEEDS_INPUT`, a
+report ended the continuation, the escalation gate holds the pane, a model
+decision is pending, the credits are exhausted, the work was routed away, or the
+capacity retry limit was reached — the monitor stops answering it. It used to
+do so silently, so an intentional wait looked exactly like a crash, a stall or a
+socket failure. The halt is now recorded, announced once, and shown.
+
+**Files and budgets:**
+- New `overseer/halt.py`, ≤ 200 lines (156 as landed), under 300.
+- `overseer/__main__.py`, ≤ 15 changed lines (8 as landed: the import, two
+  record calls in `tick`, the clear after a successful send, the tolerant state
+  read and the status rendering). The file was already over the 300-line flag.
+- `overseer/scheduler.py`, ≤ 15 changed lines (7 as landed: the import, the
+  record pass over the observed panes, the clear after a successful send). The
+  file was already over the 300-line flag.
+- `overseer/policy.py` and every other module: byte-identical. Not changing the
+  send decisions is how the guardrail is proved.
+- Tests in `tests/test_halt.py` (new), `tests/test_monitor.py` and
+  `tests/test_scheduler.py`.
+
+**Decisions to settle:**
+1. **The record lives in the pane's own entry** of the monitor's JSON state
+   file, under `halt`. It outlives the tmux session that produced it, so a
+   closed session stays listed with the reason it stopped for. It is a separate
+   store from the factory's SQLite ledger and from the repair-lineage freeze.
+2. **Only named reasons are halts.** The default is transient: a reason that is
+   not named is not a halt, so it is neither recorded nor written over an
+   existing record, and it never clears one.
+3. **The exact reason distinguishes two situations.** The policy returns one
+   reason for two, so the current turn is read: a turn carrying
+   `OVERSEER_NEEDS_INPUT` records that marker, any other client stop records
+   `client requested no further automatic continuation`. A marker in an earlier
+   turn does not count.
+4. **The notice fires once per transition.** The same reason is never
+   re-announced on a later poll, and a different halting reason announces
+   again. The session name is resolved once, at the transition, and stored.
+5. **A successful send clears the record**, because the session resumed. A
+   failed or uncertain send does not.
+
+**Tests:**
+- `test_a_client_stop_records_a_halted_entry_with_the_exact_reason`
+- `test_a_needs_input_turn_records_the_marker_itself`
+- `test_the_notice_is_logged_once_and_not_repeated`
+- `test_a_transient_reason_neither_records_nor_clears_a_halt`
+- `test_a_successful_send_clears_the_halt_record`
+- `test_the_halted_section_lists_a_pane_whose_session_is_gone`
+- `test_the_status_command_shows_the_halted_section`
+- `test_a_stopped_pane_records_a_halt_and_is_not_sent_to`
+- `test_a_needs_input_pane_records_the_marker_reason`
+- `test_the_halt_notice_is_not_repeated_on_the_next_poll`
+- `test_the_queue_path_records_a_halt_for_a_stopped_pane`
+
+**Mutations that must fail:**
+
+| Mutation | Must be caught by |
+|---|---|
+| the notice logged on every poll | the notice-not-repeated test |
+| a transient reason clearing the halt record | the transient-reason test |
+| the needs-input marker not distinguished | the marker test |
+| the halted section dropped from the status view | the status-command test |
+| the record not cleared after a successful send | the clear test |
+
 ## 4. Honest limits
 
 **"Route to Claude on architectural intervention" can be detected only from
@@ -887,6 +970,13 @@ observable signals:**
   contract's choice, recorded as such.
 - **Tests use a fake worker.** No real model is exercised by the suite, so the
   loop's behaviour with a real model is unmeasured.
+- **The halted section is a record, not a diagnosis.** It is read from the
+  monitor's state file, so it says what the monitor last saw and why it stopped
+  answering; it does not prove that the session is stuck, that the work is
+  progressing, or that the reason is still true. A closed tmux session stays
+  listed until a successful send clears the record, and a pane whose process was
+  replaced is a new `<pane>:<pid>` entry and therefore a new record. The notice
+  is informational and changes no send decision.
 
 ## 5. Where the coordinator's measurements need correcting
 
