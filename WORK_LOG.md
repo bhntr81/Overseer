@@ -3136,3 +3136,117 @@ job, so only the latest run's record is reachable through it. Whether the
 worktree is dirty is reported and not compared. A workspace that moved on
 after the attempt is reported as an unanchored revision, which is not proof
 that the record is wrong.
+
+### The handoff record's identifier lists reconciled against the recorded exit codes
+
+The user asked: "Close the reconciliation gap in `overseer/reconcile.py` and
+`overseer/factory.py`: 1. Modify reconciliation so it compares the handoff
+record's completed/failing/not-run acceptance IDs not just against the ledger
+contract, but against the actual command exit codes and run evidence (e.g.,
+verifying that claimed "completed" IDs actually map to successful execution
+exits). 2. Ensure any mismatch surfaces a proper disagreement
+dictionary/report instead of blindly trusting a faithful but incorrect record.
+3. Add a corresponding test case in `tests/test_factory.py`. 4. Adhere strictly
+to AGENTS.md hardening mandates." It is the first half of the CONTEXT row's
+previous next increment, and it is filed against CONTEXT; no other row's
+verdict changes. The prompt, `CONTEXT_RECONCILE_RESULTS_NEXT_PROMPT.md`, was
+written by the dedicated prompt-writing agent and executed by the primary
+agent; it is committed with this increment.
+
+The six decisions were settled in the prompt and are kept. The authority for
+the exit codes is `commands_actually_run` in the run's `context.json`, because
+its digest is sealed in the ledger's `context_manifest` event in the same
+transaction as the final state change. `results.json` is rewritten after every
+command and has no digest anywhere, and `summary.json`'s `results` has no
+digest and is itself rewritten by the reconciliation, so neither is an
+authority; the record's own `commands_actually_run` is part of the record
+under test. The ledger digest proves that the factory's record is unchanged
+since the attempt, not that the factory observed the exits correctly, and the
+report's `results.source` says so. The classification rule is one function:
+`handoff._acceptance` became the public `handoff.acceptance` and the
+reconciliation applies it to the manifest's commands, so the record and its
+check cannot drift apart; a test asserts the two names are the same object.
+The new disagreement kind, `acceptance_results_mismatch`, takes the closed
+list from nine to ten; the three lists are compared as sets, and one entry
+names both sides in full plus each differing identifier with its recorded exit
+code, bounded at 20. A manifest the ledger did not seal, that is missing,
+oversized, re-digested, malformed, or whose command list has the wrong shape
+is unverifiable with an exact reason, and a job with no usable contract
+records the results check as not applicable. The report stays read-only and
+keeps its three writes; it gains a `results` block. The bounded readers moved
+out of `reconcile.py` into the new leaf module `overseer/readback.py`, with
+their reason strings unchanged for the record, and the factory reads both
+recorded digests through one `_recorded_digest` lookup. No departure from the
+prompt was needed.
+
+The red-green separation held with no return to Phase 1. Phase 1 added two
+helpers, one optional helper, and ten tests to `HandoffReconciliationTests`;
+the class ran 31 tests and failed with 7 failures and 3 errors, all ten in the
+new tests, and the 21 existing tests passed. The digest at the end of Phase 1
+was `d16240453ae9192eb1275c00a85128109b772db189015995b1975078d4bd270d`, and it
+is the same at the end of Phase 2 and after Phases 3 and 4. The class passed
+on the first green run.
+
+Line counts, before and after: `overseer/reconcile.py` 298 to 256,
+`overseer/readback.py` new at 174, `overseer/factory.py` 2387 to 2395 (8
+lines, 0.3%), `overseer/handoff.py` 287 to 287 (the rename only).
+
+The commands and their real output on the final tree:
+
+```text
+$ python3 scripts/check </dev/null
+Ran 381 tests in 53.123s
+OK
+$ python3 scripts/check-doc-references
+208 references checked in HARNESS_FRAMEWORK.md
+$ grep -n "overseer.factory\|overseer.codemap\|subprocess" overseer/reconcile.py overseer/readback.py
+(no output, exit 1)
+$ python3 -m overseer.factory --db <scratch>/jobs.sqlite3 reconcile-handoff demo
+verdict disagree, ['acceptance_results_mismatch'], A2 recorded completed,
+derived failing, exit_code 3; exit 0
+$ python3 -m overseer.factory --db <scratch>/jobs.sqlite3 reconcile-handoff nope
+{"error": "unknown job"}; exit 1
+```
+
+The demo job ran two checks; the second exited 3, so the job failed, and the
+record was forged to list A2 as completed and resealed. The test count went
+from 371 to 381 and the reference count from 204 to 208.
+
+The mutations, one at a time on implementation code only, each run against the
+class alone, and every `overseer/*.py` restored byte for byte by digest:
+
+- M1, the disagreement never appended: T1, T3, and T8.
+- M2, the categories compared as ordered lists: the existing
+  `test_the_identifier_lists_are_compared_as_sets`.
+- M3, the manifest digest check skipped: T5.
+- M4, an unread authority appending nothing: T4, T5, T6, and T7.
+- M5, the authority derived from the record's own commands: T1 and T8.
+- M6, the authority read from `results.json`: T1 and eight more.
+- M7, the manifest digest taken from the `handoff` event: T1, T2, and six more.
+- M8, the per-identifier detail emptied: T1 and T3.
+- M9, the mismatch appended to `unverifiable`: T1, T3, and T8.
+- M10, the command-shape validation removed: T5.
+- M11, the size bound removed and the whole file read: T6. Removing only the
+  pre-open size check is not observable, because the capped read gives the
+  same reason, so M11 removes the bound as a whole.
+- M12, the reconciliation rewriting `context.json`: T1, T8, and the existing
+  `test_the_result_is_recorded_in_the_evidence_directory_the_summary_and_the_event`.
+
+The citations. Every `overseer/factory.py` citation was shifted by the
+measured hunks (unchanged up to line 1437, +4 and +6 between the edited hunks,
++8 after line 1477), and each shifted line was compared by content with the
+line it named at `2ef797d`: all 78 distinct citations matched. The eight
+`overseer/reconcile.py` citations were re-derived by content, and the bounded
+read now cites `overseer/readback.py`. The `tests/test_factory.py` citations
+lie before the new tests and did not move. The four new citations were read
+by content. The earlier entry's sentence that `summary.json` "is the only file
+besides the record that the reconciliation opens" is superseded:
+`context.json` is now read too, and never written.
+
+The limits that remain. The reconciliation reports a disagreement and nothing
+acts on it. The exit codes it checks the lists against are the factory's own
+record in the context manifest: the ledger digest proves that record
+unchanged since the attempt, not that the factory observed the exits
+correctly, and the per-command logs are not re-read. The ledger holds one
+evidence pointer per job, so only the latest run's record and manifest are
+reachable through it.

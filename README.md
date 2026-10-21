@@ -101,25 +101,31 @@ ledger and the workspace against it and reconcile a disagreement.
 
 A successor asks for that check with
 `python3 -m overseer.factory reconcile-handoff <id>`. It reads the job's
-`handoff.json` back and compares it with three authorities: the ledger row
+`handoff.json` back and compares it with four authorities: the ledger row
 (the job's identity, state, detail, specification hash, and run id, and the
 contract's acceptance identifiers), the digest the ledger recorded for the
-record file, and the workspace's current HEAD, read through the read-only git
-snapshot. A disagreement is one of a closed list of nine kinds —
+record file, the exit codes recorded in the run's `context.json`, whose digest
+the ledger sealed, and the workspace's current HEAD, read through the
+read-only git snapshot. The completed, failing, and not-run lists must follow
+from those exit codes by the same rule the record itself uses. A
+disagreement is one of a closed list of ten kinds —
 `job_id_mismatch`, `run_id_mismatch`, `spec_hash_mismatch`, `state_mismatch`,
-`detail_mismatch`, `acceptance_ids_mismatch`, `digest_mismatch`,
-`candidate_revision_mismatch`, and `base_revision_unanchored` — and each one
-names what the record says and what the authority says. The verdict is
+`detail_mismatch`, `acceptance_ids_mismatch`, `acceptance_results_mismatch`,
+`digest_mismatch`, `candidate_revision_mismatch`, and
+`base_revision_unanchored` — and each one names what the record says and what
+the authority says. The verdict is
 `agree`, `disagree`, or `unverifiable`: a missing or malformed record, a
-missing ledger digest, or a workspace that cannot be read is unverifiable with
-its reason and is never reported as agreement. The result goes into
+missing ledger digest, a missing, oversized, malformed, or re-digested context
+manifest, or a workspace that cannot be read is unverifiable with its reason
+and is never reported as agreement. No command is re-run: the exit codes are
+the factory's own record of the attempt. The result goes into
 `reconciliation.json` beside the record, a `reconciliation` key in
 `summary.json`, and one `reconciliation` event in the ledger. It is a
 read-only report: it records a disagreement and does not resolve one, it
 never changes the job's state or rewrites `handoff.json`, and it does not
-rewrite the context manifest, because the manifest's digest is already in the
-ledger. An unknown job id prints a JSON error and exits 1; a finding is a
-report and exits 0.
+rewrite the context manifest, which it reads, because the manifest's digest is
+already in the ledger. An unknown job id prints a JSON error and exits 1; a
+finding is a report and exits 0.
 The [harness framework](docs/HARNESS_FRAMEWORK.md) maps that design onto the six
 harness pillars and the code that implements them.
 

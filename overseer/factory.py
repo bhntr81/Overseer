@@ -1435,27 +1435,33 @@ class Factory:
         ids = contract.get('acceptance_ids') if isinstance(contract, dict) else None
         facts = {key: row[key] for key in ('id', 'state', 'detail', 'spec_hash', 'run_id',
                                            'evidence')}
-        facts.update(found=True, recorded_sha256=None, recorded_sha256_reason=None,
-                     acceptance_ids=ids if isinstance(ids, list) else None)
-        event = self.db.execute("SELECT detail FROM events WHERE job_id=? AND state='handoff' "
-                                'ORDER BY seq DESC LIMIT 1', (row['id'],)).fetchone()
-        match = re.fullmatch(r'handoff\.json sha256=([0-9a-f]{64})', event['detail'] or '') \
-            if event else None
-        if match:
-            facts['recorded_sha256'] = match.group(1)
-        else:
-            facts['recorded_sha256_reason'] = (
-                'the ledger records no digest for the handoff record'
-                + ('' if event is None else ': %s' % event['detail']))
+        facts.update(found=True, acceptance_ids=ids if isinstance(ids, list) else None)
+        facts['recorded_sha256'], facts['recorded_sha256_reason'] = self._recorded_digest(
+            row['id'], 'handoff', 'handoff.json', 'handoff record')
+        facts['manifest_sha256'], facts['manifest_sha256_reason'] = self._recorded_digest(
+            row['id'], 'context_manifest', 'context.json', 'context manifest')
         return facts, spec
+
+    def _recorded_digest(self, job_id, state, filename, label):
+        """Return the digest the job's latest event of a state recorded, or why there is none."""
+        event = self.db.execute('SELECT detail FROM events WHERE job_id=? AND state=? '
+                                'ORDER BY seq DESC LIMIT 1', (job_id, state)).fetchone()
+        match = re.fullmatch(re.escape(filename) + r' sha256=([0-9a-f]{64})',
+                             event['detail'] or '') if event else None
+        if match:
+            return match.group(1), None
+        return None, ('the ledger records no digest for the %s' % label
+                      + ('' if event is None else ': %s' % event['detail']))
 
     def reconcile_handoff(self, job_id):
         """Read a job's handoff record back and reconcile it with the ledger and workspace.
 
-        The reconciliation is a report, never a gate: it writes
-        reconciliation.json, adds one key to summary.json, and records one
-        event. It never transitions the job and never rewrites handoff.json; a
-        write that fails is recorded with its reason.
+        It also reads the run's context manifest, whose recorded exit codes the
+        record's identifier lists are compared with. The reconciliation is a
+        report, never a gate: it writes reconciliation.json, adds one key to
+        summary.json, and records one event. It never transitions the job and
+        never rewrites handoff.json or context.json; a write that fails is
+        recorded with its reason.
         """
         with self.worker_lock():
             row = self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -1474,7 +1480,9 @@ class Factory:
                      'head': snap.get('head'), 'dirty': bool(snap.get('status'))}
             report = reconcile.compare(
                 reconcile.read_record(evidence / 'handoff.json' if evidence else None),
-                ledger, facts)
+                ledger, facts, reconcile.read_results(
+                    evidence / 'context.json' if evidence else None,
+                    ledger['manifest_sha256'], ledger['manifest_sha256_reason']))
             report.update(written=evidence is not None, written_reason=None if evidence
                           else 'the job has no run evidence directory')
             detail = 'reconciliation verdict=%s disagreements=%d' % (

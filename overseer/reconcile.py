@@ -17,8 +17,10 @@ not be obtained, and it is never counted as agreement.
 
 import hashlib
 import json
-import os
 from pathlib import Path
+
+from overseer.readback import (MAX_COMMANDS, MAX_MANIFEST_BYTES, compare_results, parse_object,
+                               read_bytes, read_results)
 
 MAX_RECORD_BYTES = 64 * 1024
 MAX_JSON_DEPTH = 64
@@ -26,7 +28,8 @@ MAX_IDENTIFIERS = 20
 MAX_DISAGREEMENTS = 32
 
 LIMITS = {'max_record_bytes': MAX_RECORD_BYTES, 'max_json_depth': MAX_JSON_DEPTH,
-          'max_identifiers': MAX_IDENTIFIERS, 'max_disagreements': MAX_DISAGREEMENTS}
+          'max_identifiers': MAX_IDENTIFIERS, 'max_disagreements': MAX_DISAGREEMENTS,
+          'max_manifest_bytes': MAX_MANIFEST_BYTES, 'max_commands': MAX_COMMANDS}
 
 RECORD_KIND = 'handoff_record'
 REPORT_KIND = 'handoff_reconciliation'
@@ -52,7 +55,8 @@ IDENTITY = (('job_id', 'id', 'job_id_mismatch'),
             ('state', 'state', 'state_mismatch'),
             ('detail', 'detail', 'detail_mismatch'))
 LEDGER_KEYS = ('id', 'state', 'detail', 'spec_hash', 'run_id', 'evidence', 'acceptance_ids',
-               'recorded_sha256', 'recorded_sha256_reason')
+               'recorded_sha256', 'recorded_sha256_reason', 'manifest_sha256',
+               'manifest_sha256_reason')
 WORKSPACE_KEYS = ('path', 'reason', 'root', 'head')
 
 NOTE = ('this report records a disagreement between the handoff record, the ledger row, and '
@@ -72,22 +76,6 @@ def is_secret(path):
     if any(name.endswith(suffix) for suffix in SECRET_SUFFIXES):
         return True
     return 'secret' in name or 'credential' in name or 'password' in name
-
-
-def _depth(value):
-    """Return the nesting depth of a parsed value, without recursing."""
-    deepest = 0
-    stack = [(value, 1)]
-    while stack:
-        item, depth = stack.pop()
-        deepest = max(deepest, depth)
-        if depth > MAX_JSON_DEPTH:
-            return depth
-        if isinstance(item, dict):
-            stack.extend((child, depth + 1) for child in item.values())
-        elif isinstance(item, list):
-            stack.extend((child, depth + 1) for child in item)
-    return deepest
 
 
 def _schema_problem(record):
@@ -111,27 +99,6 @@ def _schema_problem(record):
     return None
 
 
-def _read_bytes(path):
-    """Return the record's bytes, or the reason they could not be read.
-
-    The size is checked before the file is opened, and the read is capped, so
-    a file that grows after its size was taken is not read whole.
-    """
-    too_large = 'the record is larger than the %d byte bound' % MAX_RECORD_BYTES
-    try:
-        if os.stat(path).st_size > MAX_RECORD_BYTES:
-            return None, too_large
-        with path.open('rb') as handle:
-            data = handle.read(MAX_RECORD_BYTES + 1)
-    except FileNotFoundError:
-        return None, 'the record does not exist'
-    except OSError as error:
-        return None, 'the record could not be read: %s' % type(error).__name__
-    if len(data) > MAX_RECORD_BYTES:
-        return None, too_large
-    return data, None
-
-
 def read_record(path):
     """Return the record's digest and value, or the reason it could not be read."""
     result = {'path': str(path) if path is not None else None, 'sha256': None,
@@ -143,26 +110,12 @@ def read_record(path):
     if is_secret(path):
         result['reason'] = 'the file name marks it as a secret'
         return result
-    data, result['reason'] = _read_bytes(path)
+    data, result['reason'] = read_bytes(path, MAX_RECORD_BYTES, 'record')
     if data is None:
         return result
     result['sha256'] = hashlib.sha256(data).hexdigest()
-    try:
-        parsed = json.loads(data.decode('utf-8'))
-    except UnicodeDecodeError:
-        result['reason'] = 'the record is not UTF-8 text'
-        return result
-    except RecursionError:
-        result['reason'] = 'the record is nested deeper than the parser allows'
-        return result
-    except json.JSONDecodeError:
-        result['reason'] = 'the record is not JSON'
-        return result
-    if not isinstance(parsed, dict):
-        result['reason'] = 'the record is not a JSON object'
-    elif _depth(parsed) > MAX_JSON_DEPTH:
-        result['reason'] = 'the record is nested deeper than the %d level bound' % MAX_JSON_DEPTH
-    else:
+    parsed, result['reason'] = parse_object(data, 'record', MAX_JSON_DEPTH)
+    if parsed is not None:
         result['reason'] = _schema_problem(parsed)
     if result['reason'] is None:
         result['record'] = parsed
@@ -239,8 +192,10 @@ def _verdict(disagreements, unverifiable):
     return 'agree', 'the record agrees with the ledger row and with the workspace'
 
 
-def compare(record_info, ledger, workspace):
-    """Return the report comparing the record with the ledger row and the workspace."""
+def compare(record_info, ledger, workspace, results_info=None):
+    """Return the report comparing the record with the ledger row, its results, and the workspace."""
+    results_info = results_info or {'read': False,
+                                    'reason': 'no run-results authority was supplied'}
     disagreements = []
     unverifiable, not_applicable = [], []
     record = record_info.get('record')
@@ -255,6 +210,8 @@ def compare(record_info, ledger, workspace):
                     kind, record.get(field), ledger.get(key),
                     'the record\'s %s and the ledger row\'s %s differ' % (field, key)))
         _compare_identifiers(record, ledger.get('acceptance_ids'), disagreements, unverifiable)
+        compare_results(record, ledger.get('acceptance_ids'), results_info, disagreements,
+                        unverifiable, not_applicable)
         recorded = ledger.get('recorded_sha256')
         if recorded is None:
             unverifiable.append({'fact': 'recorded_sha256',
@@ -285,6 +242,7 @@ def compare(record_info, ledger, workspace):
         'record': {'path': record_info.get('path'), 'sha256': record_info.get('sha256'),
                    'read': bool(record_info.get('read')), 'reason': record_info.get('reason')},
         'ledger': ledger_block,
+        'results': {key: value for key, value in results_info.items() if key != 'commands'},
         'workspace': workspace_block,
         'disagreements': disagreements,
         'disagreement_count': len(disagreements),

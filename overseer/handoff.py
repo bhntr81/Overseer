@@ -81,7 +81,7 @@ def candidate_revision(receipt):
                       'unmeasured: no workspace diff was captured'}
 
 
-def _acceptance(identifiers, results):
+def acceptance(identifiers, results):
     """Return the completed, failing, and not-run identifiers of this run.
 
     The contract names one identifier per acceptance command, and the run loop
@@ -197,7 +197,7 @@ def build(job_id, run_id, spec, spec_hash, epoch, results, receipt,
     contract = spec.get('contract') or {}
     mode = spec.get('mode') or 'command'
     identifiers = [str(value) for value in (contract.get('acceptance_ids') or [])][:MAX_IDENTIFIERS]
-    completed, failing, not_run, ran = _acceptance(identifiers, results)
+    completed, failing, not_run, ran = acceptance(identifiers, results)
     identity = base_identity or {}
     if identity.get('present'):
         base = {'value': identity.get('base_commit'),

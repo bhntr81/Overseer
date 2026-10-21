@@ -4311,6 +4311,188 @@ class HandoffReconciliationTests(unittest.TestCase):
                      'server.pem', 'private.key', 'secrets.json', 'notes.txt', 'main.py'):
             self.assertEqual(is_secret(name), codemap_is_secret(name), name)
 
+    TWO = [[sys.executable, '-c', 'pass'], [sys.executable, '-c', 'raise SystemExit(3)']]
+    THREE = TWO + [[sys.executable, '-c', 'pass']]
+
+    def manifest_digest(self, job_id):
+        """Return the digest the ledger recorded for the context manifest."""
+        detail = self.f.db.execute(
+            "SELECT detail FROM events WHERE job_id=? AND state='context_manifest' "
+            'ORDER BY seq DESC LIMIT 1', (job_id,)).fetchone()
+        self.assertIsNotNone(detail)
+        return detail['detail'].rsplit('=', 1)[1]
+
+    def reseal_manifest(self, job_id, path):
+        """Reseal the digest the ledger recorded for a rewritten context manifest."""
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.f.db.execute("UPDATE events SET detail=? WHERE job_id=? AND state='context_manifest'",
+                          ('context.json sha256=%s' % digest, job_id))
+        self.f.db.commit()
+        return digest
+
+    def forge_completed(self, job_id, evidence, record):
+        """Make the record, results.json, and summary.json all claim that A2 passed."""
+        record['completed_acceptance_ids']['value'] = ['A1', 'A2']
+        record['failing_acceptance_ids']['value'] = []
+        record['commands_actually_run']['value'][2]['exit_code'] = 0
+        for name, key in (('results.json', None), ('summary.json', 'results')):
+            path = evidence / name
+            data = json.loads(path.read_text())
+            (data if key is None else data[key])[2]['exit_code'] = 0
+            path.write_text(json.dumps(data, indent=2))
+        self.reseal_record(job_id, record)
+
+    def test_a_completed_identifier_whose_command_failed_is_a_results_disagreement(self):
+        result, record, evidence = self.run_record(self.spec('forged', checks=self.TWO))
+        self.forge_completed('forged', evidence, record)
+        report = self.f.reconcile_handoff('forged')
+        self.assertEqual(report['verdict'], 'disagree')
+        self.assertEqual(self.kinds(report), ['acceptance_results_mismatch'])
+        entry = self.entry(report, 'acceptance_results_mismatch')
+        self.assertEqual(entry['record'], {'completed': ['A1', 'A2'], 'failing': [], 'not_run': []})
+        self.assertEqual(entry['authority'], {'completed': ['A1'], 'failing': ['A2'], 'not_run': []})
+        self.assertEqual(entry['identifiers'], [{'id': 'A2', 'record': ['completed'],
+                                                 'authority': 'failing', 'exit_code': 3,
+                                                 'timed_out': False}])
+        self.assertEqual(entry['identifiers_beyond_bound'], 0)
+        self.assertIn('exit', entry['reason'])
+        self.assertIs(report['results']['read'], True)
+        digest = hashlib.sha256((evidence / 'context.json').read_bytes()).hexdigest()
+        self.assertEqual(report['results']['sha256'], digest)
+        self.assertEqual(report['results']['recorded_sha256'], digest)
+        self.assertEqual(self.manifest_digest('forged'), digest)
+        self.assertIn('context.json', report['results']['source'])
+
+    def test_a_faithful_record_of_a_partly_failed_run_agrees_with_the_recorded_exit_codes(self):
+        result, record, evidence = self.run_record(self.spec('faithful', checks=self.THREE))
+        self.assertEqual(record['completed_acceptance_ids']['value'], ['A1'])
+        self.assertEqual(record['failing_acceptance_ids']['value'], ['A2'])
+        self.assertEqual(record['not_run_acceptance_ids']['value'], ['A3'])
+        report = self.f.reconcile_handoff('faithful')
+        self.assertEqual(report['verdict'], 'agree')
+        self.assertEqual(report['disagreements'], [])
+        self.assertEqual(report['unverifiable'], [])
+        self.assertNotIn('acceptance_results', [item['fact'] for item in report['not_applicable']])
+        self.assertIsNone(report['results']['reason'])
+        self.assertEqual(report['ledger']['manifest_sha256'], self.manifest_digest('faithful'))
+
+    def test_swapped_failing_and_not_run_lists_are_a_results_disagreement(self):
+        result, record, evidence = self.run_record(self.spec('swapped', checks=self.THREE))
+        record['failing_acceptance_ids']['value'] = ['A3']
+        record['not_run_acceptance_ids']['value'] = ['A2']
+        self.reseal_record('swapped', record)
+        report = self.f.reconcile_handoff('swapped')
+        self.assertEqual(self.kinds(report), ['acceptance_results_mismatch'])
+        entry = self.entry(report, 'acceptance_results_mismatch')
+        self.assertEqual(entry['record'], {'completed': ['A1'], 'failing': ['A3'], 'not_run': ['A2']})
+        self.assertEqual(entry['authority'], {'completed': ['A1'], 'failing': ['A2'], 'not_run': ['A3']})
+        self.assertEqual(entry['identifiers'], [
+            {'id': 'A2', 'record': ['not_run'], 'authority': 'failing', 'exit_code': 3,
+             'timed_out': False},
+            {'id': 'A3', 'record': ['failing'], 'authority': 'not_run', 'exit_code': None,
+             'timed_out': None}])
+
+    def test_a_missing_context_manifest_makes_the_results_unverifiable(self):
+        result, record, evidence = self.run_record(self.spec('nomanifest'))
+        (evidence / 'context.json').unlink()
+        report = self.f.reconcile_handoff('nomanifest')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertEqual(self.unverifiable_fact(report, 'acceptance_results')['reason'],
+                         'the context manifest does not exist')
+        self.assertIs(report['results']['read'], False)
+        self.assertEqual(report['disagreements'], [])
+
+    def test_a_malformed_or_tampered_context_manifest_is_unverifiable_with_the_reason(self):
+        result, record, evidence = self.run_record(self.spec('array-manifest'))
+        path = evidence / 'context.json'
+        path.write_text('[]')
+        self.reseal_manifest('array-manifest', path)
+        report = self.f.reconcile_handoff('array-manifest')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertEqual(self.unverifiable_fact(report, 'acceptance_results')['reason'],
+                         'the context manifest is not a JSON object')
+
+        result, record, evidence = self.run_record(self.spec('typed-manifest'))
+        path = evidence / 'context.json'
+        manifest = json.loads(path.read_text())
+        manifest['commands_actually_run'][1]['exit_code'] = '0'
+        path.write_text(json.dumps(manifest, indent=2))
+        self.reseal_manifest('typed-manifest', path)
+        report = self.f.reconcile_handoff('typed-manifest')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertEqual(self.unverifiable_fact(report, 'acceptance_results')['reason'],
+                         "the context manifest's command at index 1 is malformed")
+
+        result, record, evidence = self.run_record(self.spec('tampered-manifest', checks=self.TWO))
+        self.forge_completed('tampered-manifest', evidence, record)
+        path = evidence / 'context.json'
+        manifest = json.loads(path.read_text())
+        manifest['commands_actually_run'][2]['exit_code'] = 0
+        path.write_text(json.dumps(manifest, indent=2))
+        report = self.f.reconcile_handoff('tampered-manifest')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertEqual(report['disagreements'], [])
+        self.assertEqual(self.unverifiable_fact(report, 'acceptance_results')['reason'],
+                         'the digest of the context manifest as read back is not the digest '
+                         'the ledger recorded for it')
+
+    def test_an_oversized_context_manifest_is_unverifiable_before_it_is_read(self):
+        from overseer.readback import MAX_MANIFEST_BYTES
+        result, record, evidence = self.run_record(self.spec('huge'))
+        (evidence / 'context.json').write_bytes(b' ' * (MAX_MANIFEST_BYTES + 1))
+        report = self.f.reconcile_handoff('huge')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertEqual(self.unverifiable_fact(report, 'acceptance_results')['reason'],
+                         'the context manifest is larger than the %d byte bound'
+                         % MAX_MANIFEST_BYTES)
+
+    def test_a_context_manifest_without_a_ledger_digest_is_unverifiable(self):
+        self.run_record(self.spec('unsealed'))
+        self.f.db.execute("DELETE FROM events WHERE job_id='unsealed' AND state='context_manifest'")
+        self.f.db.commit()
+        report = self.f.reconcile_handoff('unsealed')
+        self.assertEqual(report['verdict'], 'unverifiable')
+        self.assertEqual(self.unverifiable_fact(report, 'acceptance_results')['reason'],
+                         'the ledger records no digest for the context manifest')
+        self.assertIsNone(report['ledger']['manifest_sha256'])
+
+    def test_a_results_disagreement_changes_nothing(self):
+        result, record, evidence = self.run_record(self.spec('still', checks=self.TWO))
+        self.forge_completed('still', evidence, record)
+        before = self.ledger_row('still')
+        files = {name: (evidence / name).read_bytes()
+                 for name in ('handoff.json', 'context.json', 'results.json')}
+        count = self.f.db.execute(
+            'SELECT COUNT(*) AS n FROM events WHERE job_id=?', ('still',)).fetchone()['n']
+        report = self.f.reconcile_handoff('still')
+        self.assertEqual(report['verdict'], 'disagree')
+        after = self.ledger_row('still')
+        for key in ('state', 'detail', 'run_id', 'spec_hash'):
+            self.assertEqual(after[key], before[key], key)
+        self.assertEqual(self.f.db.execute(
+            'SELECT COUNT(*) AS n FROM events WHERE job_id=?', ('still',)).fetchone()['n'],
+            count + 1)
+        self.assertEqual(self.f.db.execute(
+            'SELECT state FROM events WHERE job_id=? ORDER BY seq DESC LIMIT 1',
+            ('still',)).fetchone()['state'], 'reconciliation')
+        for name, data in files.items():
+            self.assertEqual((evidence / name).read_bytes(), data, name)
+
+    def test_the_results_check_uses_the_handoff_classification_rule(self):
+        from overseer import handoff, readback
+        self.assertIs(readback.acceptance, handoff.acceptance)
+
+    def test_a_job_without_a_contract_skips_the_results_check_as_not_applicable(self):
+        spec = self.spec('legacy')
+        spec.pop('contract')
+        store_legacy_job(self.f, spec)
+        self.f.run_one()
+        report = self.f.reconcile_handoff('legacy')
+        unverifiable = [item['fact'] for item in report['unverifiable']]
+        self.assertIn('acceptance_ids', unverifiable)
+        self.assertNotIn('acceptance_results', unverifiable)
+        self.assertIn('acceptance_results', [item['fact'] for item in report['not_applicable']])
+
 
 class RequiredContractTests(unittest.TestCase):
     """The contract block is required for new command-mode submissions."""
