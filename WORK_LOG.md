@@ -3361,3 +3361,54 @@ to the bound. Nothing consumes `repair_allowance` beyond the bound; it is not
 the remaining budget. The lineage lives in the factory ledger only; the
 monitor's pane hold (increment 6) is a separate store. Increments 2–10 of the
 autonomy blueprint are still owed before unattended operation.
+
+### Increment 2: the status-block parser (CONTEXT)
+
+Red-green, one commit, no change to any existing file. Phase 0 re-read the
+increment 2 spec and the monitor's sent-line rule (`overseer/policy.py`: the
+`ANSI` regex and `_controls`, ord < 32 or == 127). Phase 1 wrote the eight named
+tests as `tests/test_statusblock.py` and recorded the digest
+`c5e4cd0b6daaf272b9e17eeeec3c6e2b78e0033df0ca82d31108f52fe06118e4`; they failed
+on the missing module. Phase 2 implemented `overseer/statusblock.py` (123 lines,
+under the 180 budget); the test digest was unchanged after the green phase.
+
+The parser reads the AGENTS.md worker status block out of bounded text: the last
+complete four-line block (STATUS, TESTS_PASSED, FILES_MODIFIED,
+NEXT_AGENT_INSTRUCTION, in order) wins, ANSI is stripped, and only the last
+64 KiB is considered. Values are closed: STATUS in {SUCCESS,
+STUCK_NEEDS_ESCALATION}, TESTS_PASSED in {TRUE, FALSE}, FILES_MODIFIED a
+bracketed list of at most 200 entries, and the instruction a JSON-quoted string
+decoded with `json.loads` as data — never evaluated — at most 4000 characters
+and no control character. The unfilled template line
+`[SUCCESS | STUCK_NEEDS_ESCALATION]` is "template not filled", and every
+over-bound or unknown value is reported invalid with its reason, never truncated
+into validity. Result shape: `{found, valid, reason, status, tests_passed,
+files_modified, next_instruction}`.
+
+Decision settled beyond the spec letter: the control-character rule and the ANSI
+regex are imported from `overseer/policy.py` rather than re-implemented, so the
+parser and the monitor stay in step; the length bound for the instruction is the
+spec's 4000, not the monitor's 1000 `MAX_PROMPT`. This is the only cross-module
+dependency; the module otherwise uses the standard library alone, and no other
+file changed.
+
+Verification:
+- `python3 -m unittest tests.test_statusblock`: 8 tests, OK.
+- Full suite: `Ran 398 tests ... OK` (was 390; +8).
+- Mutations confirmed to fail the suite, each reverted: first block wins (caught
+  by `test_the_last_block_wins`); template accepted (template test); truncation
+  instead of rejection (over-long test); status values not closed (unknown-status
+  test).
+- `check-doc-references`: all three docs still resolve. No existing `.py` file
+  changed, so no citation moved and none needed re-deriving.
+
+Docs: the CONTEXT pillar row records the parser and says plainly that no caller
+reads it yet; `AUTONOMY_BLUEPRINT.md` marks M3-b and increment 2 landed;
+`HARDENING_BLUEPRINT.md` moves the explicit-escalation detection to PARTIAL
+(parser built, acting on it still filed). `README.md` is intentionally
+unchanged: increment 2 adds no command and no observable behavior — the parser
+has no caller until increment 3.
+
+Limit that remains: the parser is pure data extraction. Nothing yet reads a
+worker's block, so `STUCK_NEEDS_ESCALATION` still triggers nothing; increments 3
+(factory) and 6 (monitor) wire it in.

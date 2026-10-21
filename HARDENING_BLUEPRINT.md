@@ -190,11 +190,13 @@ cost is spent on noise instead of escalating.
   fingerprint of failing identifiers, the failing command's exit code, and the
   patch digest freezes a lineage *before* its bound when a failure repeats
   unchanged. Filed against EVIDENCE (`docs/HARNESS_FRAMEWORK.md:36`).
-- **Explicit escalation request.** *FILED (autonomy increments 2, 3, 6).* The
+- **Explicit escalation request.** *PARTIAL (parser IMPLEMENTED, autonomy
+  increment 2; acting on it FILED, increments 3 and 6).* The
   `STATUS: STUCK_NEEDS_ESCALATION` line of the `AGENTS.md` status block
-  (`AGENTS.md:62`) is parsed by no code today; increment 2 adds a bounded,
-  never-evaluated parser, increment 3 freezes the lineage on it in the factory,
-  and increment 6 holds the pane on it in the monitor.
+  (`AGENTS.md:62`) is now parsed by a bounded, never-evaluated parser
+  (`overseer/statusblock.py:96`), but no code acts on it yet: increment 3
+  freezes the lineage on it in the factory, and increment 6 holds the pane on it
+  in the monitor.
 - **Hop-distance counter.** *FILED (subsumed by the lineage).* A per-prompt
   `hop_count` is realized as the lineage's strike chain rather than a free
   counter, so it is durable in the ledger and cannot be reset by a new prompt.
@@ -317,7 +319,7 @@ Stated plainly, so no reader over-trusts these controls:
 |---|---|---|---|
 | 1 Locality trap | DATA-ONLY (loc delta in `diff.json`) | BY DISCIPLINE (size rule) | CONTEXT threshold increment |
 | 2 Gaming the harness | DATA-ONLY (`tests/` edits in `diff.json`) | BY DISCIPLINE (red-green) | EVIDENCE enforcement increment |
-| 3 Context rot / cascades | PARTIAL (lineage strike-count IMPLEMENTED; fingerprint, status block FILED) | PARTIAL + FILED (ground truth, reset) | Autonomy increment 1 landed; 2–4, 6, 8, 10 owed |
+| 3 Context rot / cascades | PARTIAL (lineage strike-count and status-block parser IMPLEMENTED; fingerprint, and acting on the block, FILED) | PARTIAL + FILED (ground truth, reset) | Autonomy increments 1–2 landed; 3–4, 6, 8, 10 owed |
 | 4 Non-determinism / races | IMPLEMENTED (timeout+SIGKILL) | IMPLEMENTED (single writer, fenced restore); PARTIAL (sandbox probe) | TOOLS row for real sandboxing |
 | 5 Orchestrator overhead | OUT OF SCOPE (ratio); proxy via size budgets | IMPLEMENTED (one ledger; read-only git authority) | — |
 

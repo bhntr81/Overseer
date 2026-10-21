@@ -145,11 +145,13 @@ What is missing:
   `overseer/factory.py:2352`). A frozen lineage refuses a further repair until an
   operator releases it (`overseer/factory.py:791`). The counter and freeze this
   bullet named no longer the gap; the remaining M3 items (b–f) are still open.
-- **M3-b. The `NEXT_AGENT_INSTRUCTION` status block is never parsed.** The status
-  block that AGENTS.md requires (the `STATUS:` / `TESTS_PASSED:` /
-  `FILES_MODIFIED:` / `NEXT_AGENT_INSTRUCTION:` lines) is read by no code. The
-  monitor reads only `OVERSEER_REPORT`. The factory never reads a worker's
-  output, only exit codes.
+- **M3-b. ~~The `NEXT_AGENT_INSTRUCTION` status block is never parsed.~~ PARSER
+  LANDED by increment 2; wiring still open.** The block that AGENTS.md requires
+  (the `STATUS:` / `TESTS_PASSED:` / `FILES_MODIFIED:` / `NEXT_AGENT_INSTRUCTION:`
+  lines) now has a bounded, never-evaluated parser (`overseer/statusblock.py:96`).
+  It is not yet read by any caller: the monitor still reads only
+  `OVERSEER_REPORT`, and the factory still reads only exit codes. Increment 3
+  wires the parser into the factory and increment 6 into the monitor.
 - **M3-c. `STUCK_NEEDS_ESCALATION` is detected nowhere.** Neither the monitor nor
   the factory reacts to it.
 - **M3-d. No operator pause of dispatch.** The PERMISSIONS row's own Next increment
@@ -321,7 +323,14 @@ submissions until an operator releases it with a named, recorded note.
 | release without a note | the release test |
 | tables missing from `_ensure_side_tables` | the backup and restore test |
 
-### Increment 2: the status-block parser (CONTEXT, `docs/HARNESS_FRAMEWORK.md:32`)
+### Increment 2: the status-block parser (CONTEXT, `docs/HARNESS_FRAMEWORK.md:32`) — LANDED
+
+> **Landed.** Implemented in `overseer/statusblock.py` (123 lines, under the 180
+> budget, standard library plus the monitor's own `ANSI` and `_controls` rules
+> reused from `overseer/policy.py`). All eight named tests pass in
+> `tests/test_statusblock.py`, the full suite is 398 tests, and the four
+> mutation checks below were confirmed to fail the suite. No other file changed;
+> the parser has no caller yet (increments 3 and 6 wire it).
 
 **Objective.** Parse the AGENTS.md status block out of bounded terminal or log
 text. The result is data: never evaluated, closed values, bounded fields.
