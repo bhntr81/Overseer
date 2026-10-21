@@ -4564,3 +4564,147 @@ class RequiredContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn('contract', json.loads(result.stdout)['error'])
         self.assertNotIn('Traceback', result.stderr)
+
+
+class RepairLineageTests(unittest.TestCase):
+    """Increment 1: repair lineage and the three-strike freeze.
+
+    Filed against the STATE row of docs/HARNESS_FRAMEWORK.md and the
+    AUTONOMY_BLUEPRINT.md increment 1 objective. These tests drive the public
+    Factory API only; they read the lineage through the ledger.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.db = self.root / 'state' / 'jobs.sqlite3'
+        self.f = Factory(self.db)
+        self.addCleanup(self.f.close)
+
+    def _budget(self, allowance):
+        return {'wall_time_seconds': 600, 'token_limit': None, 'cost_limit_usd': None,
+                'resource_limits': None, 'repair_allowance': allowance}
+
+    def fail_spec(self, name, allowance=0):
+        spec = {'id': name, 'objective': 'fail on purpose for the lineage',
+                'workspace': str(self.root), 'timeout_seconds': 5,
+                'implementation': [sys.executable, '-c', 'import sys; sys.exit(1)'],
+                'checks': [[sys.executable, '-c', 'pass']]}
+        return attach_contract(spec, budget=self._budget(allowance))
+
+    def pass_spec(self, name, allowance=0):
+        spec = {'id': name, 'objective': 'succeed for the lineage',
+                'workspace': str(self.root), 'timeout_seconds': 5,
+                'implementation': [sys.executable, '-c', 'pass'],
+                'checks': [[sys.executable, '-c', 'pass']]}
+        return attach_contract(spec, budget=self._budget(allowance))
+
+    def lineage(self, lineage_id):
+        return self.f.db.execute(
+            'SELECT * FROM lineages WHERE lineage_id=?', (lineage_id,)).fetchone()
+
+    def test_three_consecutive_failures_freeze_the_lineage(self):
+        self.f.submit(self.fail_spec('a', allowance=2))
+        self.f.run_one()
+        self.assertEqual(self.lineage('a')['state'], 'open')
+        self.assertEqual(self.lineage('a')['strikes'], 1)
+        self.f.submit(self.fail_spec('b', allowance=2), repair_of='a')
+        self.f.run_one()
+        self.assertEqual(self.lineage('a')['state'], 'open')
+        self.assertEqual(self.lineage('a')['strikes'], 2)
+        self.f.submit(self.fail_spec('c', allowance=2), repair_of='b')
+        self.f.run_one()
+        lin = self.lineage('a')
+        self.assertEqual(lin['state'], 'frozen')
+        self.assertEqual(lin['strikes'], 3)
+        self.assertEqual(lin['bound'], 3)
+        self.assertEqual(lin['bound_source'], 'blueprint')
+
+    def test_a_frozen_lineage_refuses_a_further_repair(self):
+        self.f.submit(self.fail_spec('a', allowance=0))
+        self.f.run_one()
+        self.assertEqual(self.lineage('a')['state'], 'frozen')
+        with self.assertRaises(ValueError) as ctx:
+            self.f.submit(self.fail_spec('b', allowance=0), repair_of='a')
+        message = str(ctx.exception)
+        self.assertIn('a', message)
+        self.assertIn('frozen', message)
+        # The refused repair job was never inserted (the insert rolled back).
+        with self.assertRaises(ValueError):
+            self.f.inspect('b')
+
+    def test_the_contract_repair_allowance_lowers_the_bound(self):
+        self.f.submit(self.fail_spec('a', allowance=0))
+        self.f.run_one()
+        lin = self.lineage('a')
+        self.assertEqual(lin['bound'], 1)
+        self.assertEqual(lin['bound_source'], 'contract_allowance')
+        self.assertEqual(lin['state'], 'frozen')
+
+    def test_a_passed_attempt_closes_the_lineage(self):
+        self.f.submit(self.fail_spec('a', allowance=2))
+        self.f.run_one()
+        self.f.submit(self.pass_spec('b', allowance=2), repair_of='a')
+        self.assertEqual(self.f.run_one()['state'], 'passed')
+        self.assertEqual(self.lineage('a')['state'], 'closed')
+
+    def test_a_cancelled_job_is_neither_a_strike_nor_a_reset(self):
+        self.f.submit(self.fail_spec('a', allowance=2))
+        self.f.run_one()
+        self.f.submit(self.fail_spec('b', allowance=2), repair_of='a')
+        self.f.cancel('b')
+        lin = self.lineage('a')
+        self.assertEqual(lin['strikes'], 1)
+        self.assertEqual(lin['state'], 'open')
+
+    def test_release_requires_a_named_decider_and_a_note(self):
+        self.f.submit(self.fail_spec('a', allowance=0))
+        self.f.run_one()
+        self.assertEqual(self.lineage('a')['state'], 'frozen')
+        with self.assertRaises(ValueError):
+            self.f.release('a', '', 'a note')
+        with self.assertRaises(ValueError):
+            self.f.release('a', 'operator', '   ')
+        self.f.release('a', 'operator', 'investigated the flake, retrying')
+        lin = self.lineage('a')
+        self.assertEqual(lin['state'], 'released')
+        self.assertEqual(lin['strikes'], 0)
+        # Release grants a fresh bound of attempts: a further repair is allowed.
+        self.assertTrue(self.f.submit(self.fail_spec('b', allowance=0), repair_of='a'))
+        self.assertEqual(self.f.run_one()['state'], 'failed')
+        self.assertEqual(self.lineage('a')['state'], 'frozen')
+
+    def test_a_resolved_interrupted_attempt_counts_as_a_strike(self):
+        self.f.submit(self.fail_spec('a', allowance=2))
+        self.f.run_one()
+        self.assertEqual(self.lineage('a')['strikes'], 1)
+        self.f.submit(self.fail_spec('b', allowance=2), repair_of='a')
+        self.f.db.execute("UPDATE jobs SET state='running' WHERE id='b'")
+        self.f.db.commit()
+        self.assertEqual(self.f.reconcile(), 1)
+        self.f.resolve('b', 'inspected the workspace, no automatic retry')
+        self.assertEqual(self.f.inspect('b')['state'], 'failed')
+        self.assertEqual(self.lineage('a')['strikes'], 2)
+
+    def test_the_freeze_never_changes_a_job_state(self):
+        self.f.submit(self.fail_spec('a', allowance=0))
+        result = self.f.run_one()
+        self.assertEqual(result['state'], 'failed')
+        self.assertEqual(self.f.inspect('a')['state'], 'failed')
+        self.assertEqual(self.lineage('a')['state'], 'frozen')
+
+    def test_the_lineage_survives_backup_and_restore(self):
+        self.f.submit(self.fail_spec('a', allowance=0))
+        self.f.run_one()
+        self.assertEqual(self.lineage('a')['state'], 'frozen')
+        backup = self.root / 'backup.sqlite3'
+        self.f.backup(backup)
+        other = Factory(self.root / 'state2' / 'jobs.sqlite3')
+        self.addCleanup(other.close)
+        other.restore(backup)
+        row = other.db.execute(
+            'SELECT * FROM lineages WHERE lineage_id=?', ('a',)).fetchone()
+        self.assertEqual(row['state'], 'frozen')
+        self.assertEqual(row['strikes'], 1)
+        self.assertEqual(row['bound'], 1)

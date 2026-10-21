@@ -205,6 +205,38 @@ who decided. Give the decision with the runner's own command:
 python3 -m overseer.factory decide <task-id> --decision granted --decider operator
 ```
 
+A repair is submitted against the job it repairs, and the two share a lineage:
+
+```sh
+python3 -m overseer.factory submit repair.json --repair-of <failed-task-id>
+```
+
+The lineage counts its consecutive attempts that end in any terminal state
+other than `passed`. When the count reaches its bound, `min(3, 1 +
+repair_allowance)` — the blueprint's one attempt plus two repairs, lowered by a
+smaller contract allowance — the lineage is frozen, and a further
+`--repair-of` submission against it is refused, naming the lineage, its
+strikes, and its bound; the refused job is not stored. A `passed` attempt
+closes the lineage, and a `cancelled` or refused job is neither a strike nor a
+reset. The strike is recorded in the same transaction as the job's final
+transition, so the ledger cannot show a terminal state without its strike. The
+freeze never changes any job's own state: the job that tripped it stays
+`failed`, and only the lineage is frozen. The bound source is recorded, so a
+lineage frozen after one attempt says plainly that its contract set
+`repair_allowance: 0`. An operator reopens a frozen lineage, resetting the
+count and granting a fresh bound, with a named, recorded note:
+
+```sh
+python3 -m overseer.factory release <lineage-id> --decider operator --note "investigated the flake"
+```
+
+The decider is recorded, not authorized, exactly as a decision is. Only
+command-mode jobs carry a lineage; the fixture, fake-provider, and
+isolation-probe modes do not. The lineage is context for deciding whether to
+keep repairing, not a verdict: nothing consumes the contract's
+`repair_allowance` beyond setting the bound, and the freeze caps cost, it does
+not diagnose the failure.
+
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 

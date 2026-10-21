@@ -3250,3 +3250,114 @@ unchanged since the attempt, not that the factory observed the exits
 correctly, and the per-command logs are not re-read. The ledger holds one
 evidence pointer per job, so only the latest run's record and manifest are
 reachable through it.
+
+## 2026-10-20 — Hardening blueprint rewrite and the repair-lineage freeze
+
+### User objective and order
+
+The operator asked, in order: (1) rewrite the mediocre `HARDENING_BLUEPRINT.md`
+to the rigor of `docs/AUTONOMY_BLUEPRINT.md`, choosing between folding it into
+the measurable frame (option a) or quarantining it as principles (option b);
+(2) implement autonomy increment 1, the repair lineage and three-strike freeze.
+Option (a) was chosen. A full project evaluation and a `DESCRIPTION.txt` were
+also produced earlier in the same session.
+
+### The hardening blueprint, wired to the code
+
+`HARDENING_BLUEPRINT.md` was rewritten from aspirational prose into a
+measured document. It is anchored to commit `f28bb7d`; every `path:line`
+resolves with `python3 scripts/check-doc-references HARDENING_BLUEPRINT.md` (34
+references). Each of the five failure modes now carries a status vocabulary
+(IMPLEMENTED / DATA-ONLY / BY DISCIPLINE / FILED / OUT OF SCOPE), a citation or
+a filing for every signal and mitigation, a §0 tying it to the harness map and
+the autonomy plan, the real table of seven over-300-line files with the rule
+scoped to new modules, two honest corrections (the per-command timeout and
+SIGKILL at `overseer/factory.py:1536`, not a fixed 60 s; one SQLite ledger with
+git as read-only revision authority, a deliberate divergence from "derive all
+state from git"), a scorecard, and a "what hardening cannot detect" section.
+The LaTeX notation was removed. The file stays at the repository root so the
+autonomy blueprint's references to it keep resolving.
+
+### Increment 1: repair lineage and the three-strike freeze (STATE)
+
+Red-green, one commit. Phase 0 re-read the increment 1 spec and the factory
+schema, `submit`, `run_one`, `resolve`, `cancel`, `_ensure_side_tables`,
+`backup`, and `restore`. Phase 1 wrote the nine named tests as
+`tests/test_factory.RepairLineageTests` and recorded the file digest
+`169b78b2aaa89a1fc808d5f5f8cb2d9c9f9e8dbb96a393bd80773a0cde34ba35`; all nine
+failed ("no such table: lineages"). Phase 2 implemented it; the test digest was
+unchanged after the green phase.
+
+New module `overseer/strikes.py` (192 lines, under the 300-line rule; over the
+blueprint's ≤160 estimate — recorded honestly as the one deviation). It is
+self-contained ledger logic over a passed-in sqlite3 connection: it never
+imports `overseer.factory` or `subprocess`, runs no command, and reads no file
+outside the database. It holds the schema for two tables (`repairs`,
+`lineages`), the bound (`bound_for`), the strike test, the lazy lineage
+creation, `join_lineage`, `record_terminal`, and `release`.
+
+`overseer/factory.py` grew by a net +33 lines (within the +40 budget), all
+small call sites: `strikes.ensure_tables` in the schema (`:459`) and in
+`_ensure_side_tables` (`:2033`); a `repair_of` keyword on `submit` whose join
+(`:494`) runs inside the submit transaction so a frozen-lineage refusal rolls
+the new job back; `strikes.record_terminal` inside the terminal transaction of
+`run_one` (`:2352`) and of `resolve` (`:784`), placed before the transition's
+own event so the terminal state stays the job's last event; and a public
+`lineage` read (`:787`) and `release` method and CLI subcommand (`:791`), plus
+`--repair-of` on `submit`.
+
+Design decisions settled in the implementation, matching the blueprint's
+recommended answers: two tables, `lineage_id` keyed by the root job id; a strike
+is a terminal `failed` state only (`passed` closes, `cancelled`/refused are
+neither); `bound = min(3, 1 + repair_allowance)` with `bound_source` naming
+which limit applied; a freeze raises on a further `submit(..., repair_of=...)`
+and never changes a job state; `release(lineage, decider, note)` requires both
+and resets the count; both tables survive backup and restore (the whole-db
+backup copies them, and `_ensure_side_tables` recreates them when a pre-schema
+backup is restored). One scoping choice beyond the blueprint: only command-mode
+jobs carry a lineage, so the fixture, fake-provider, and isolation-probe tests
+are untouched. Verified that no existing test asserts a full event sequence, and
+that the two `ORDER BY seq DESC LIMIT 1` assertions both expect the
+post-reconcile event; recording the strike before the transition keeps them
+valid.
+
+### Verification
+
+- `python3 -m unittest tests.test_factory.RepairLineageTests`: 9 tests, OK.
+- Full suite: `Ran 390 tests ... OK` (was 381; +9).
+- Mutations confirmed to fail the suite, each reverted after: bound fixed at 4
+  (caught by `test_three_consecutive_failures_freeze_the_lineage`); `passed` not
+  closing (caught by `test_a_passed_attempt_closes_the_lineage`); the strike
+  skipped in `resolve` (caught by `test_a_resolved_interrupted_attempt_counts_as_a_strike`).
+- `python3 scripts/check-doc-references`: 208 in HARNESS_FRAMEWORK.md, 66 in
+  AUTONOMY_BLUEPRINT.md, 34 in HARDENING_BLUEPRINT.md, all resolving.
+
+### Citations re-derived by content
+
+The +33-line `overseer/factory.py` edit shifted every later line. All 131
+`overseer/factory.py:NNN` citations across the three harness docs were re-mapped
+by content with a difflib old→new line map (HEAD vs the working tree), not by
+hand; none were left unmapped, and the file end moved 2395→2428 (+33),
+consistent with the measured delta. Spot checks confirmed the new targets
+(`def execute` at `:1556`, `def worker_lock` at `:720`, `def run_one` at
+`:2170`, `def restore` at `:2121`). Citations into `tests/test_factory.py` sit
+before the appended class and did not move; no other `overseer/*.py` file
+changed, so their citations were left alone.
+
+### Docs updated
+
+The STATE pillar row of `docs/HARNESS_FRAMEWORK.md` now records the lineage with
+its citations, verdict, and next increment; `docs/AUTONOMY_BLUEPRINT.md` marks
+M3-a and increment 1 as landed with the one size deviation noted;
+`HARDENING_BLUEPRINT.md` moves the repair-lineage strike count from FILED to
+IMPLEMENTED in Pillar 3 and the scorecard; `README.md` gains the repair-lineage,
+freeze, and release paragraph.
+
+### Limits that remain
+
+The freeze is a cost cap, not a diagnosis: a worker that changes its patch each
+time produces "new evidence" by the (not-yet-built) fingerprint rule and runs
+to the bound. Nothing consumes `repair_allowance` beyond the bound; it is not
+the remaining budget. The lineage lives in the factory ledger only; the
+monitor's pane hold (increment 6) is a separate store. Increments 2–10 of the
+autonomy blueprint are still owed before unattended operation.

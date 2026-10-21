@@ -9,6 +9,7 @@ from overseer import reconcile
 from overseer.isolation import run_isolation_probe
 from overseer.skills import provenance as skill_provenance
 from overseer.skills import unchecked as unchecked_provenance
+from overseer import strikes
 from overseer import workdiff
 import hashlib
 import json
@@ -455,6 +456,7 @@ class Factory:
                 revision TEXT, environment TEXT, owner TEXT, reason TEXT,
                 supersedes TEXT, verified INTEGER NOT NULL);
         ''')
+        strikes.ensure_tables(self.db)
         self._lock_depth = 0
 
     def close(self):
@@ -464,7 +466,7 @@ class Factory:
         self.db.execute('INSERT INTO events(job_id,at,state,detail) VALUES(?,?,?,?)',
                         (job_id, time.time(), state, detail))
 
-    def submit(self, spec):
+    def submit(self, spec, repair_of=None):
         validate(spec)
         data = canonical(spec)
         digest = hashlib.sha256(data.encode()).hexdigest()
@@ -486,6 +488,10 @@ class Factory:
                 self.db.execute('INSERT INTO jobs(id,spec,spec_hash,state,created) VALUES(?,?,?,?,?)',
                                 (spec['id'], data, digest, 'queued', time.time()))
                 self.event(spec['id'], 'queued', 'explicit submission')
+            # A repair joins the lineage of the job it repairs. A frozen lineage
+            # raises here, and the open transaction rolls the new job back.
+            if repair_of is not None:
+                strikes.join_lineage(self.db, spec['id'], repair_of)
         return True
 
     def inspect(self, job_id):
@@ -772,7 +778,21 @@ class Factory:
                     pass
                 else:
                     raise RuntimeError('recorded child process group still exists; inspect before resolution')
-            self.transition(job_id, 'failed', 'operator reconciled, no automatic retry: ' + note)
+            with self.db:
+                # The strike is recorded in the same transaction as the final
+                # transition, and before it, so 'failed' stays the last event.
+                strikes.record_terminal(self.db, job_id, 'failed', row['spec'])
+                self.transition(job_id, 'failed', 'operator reconciled, no automatic retry: ' + note)
+
+    def lineage(self, lineage_id):
+        """Return the repair lineage's recorded state, or None if unknown."""
+        return strikes.lineage(self.db, lineage_id)
+
+    def release(self, lineage_id, decider, note):
+        """Reopen a frozen repair lineage with a named, recorded note."""
+        with self.worker_lock():
+            with self.db:
+                return strikes.release(self.db, lineage_id, decider, note)
 
     def decide(self, job_id, decision, decider, note=''):
         """Record the operator's decision for a task that is waiting.
@@ -2010,6 +2030,7 @@ class Factory:
                 revision TEXT, environment TEXT, owner TEXT, reason TEXT,
                 supersedes TEXT, verified INTEGER NOT NULL);
         ''')
+        strikes.ensure_tables(self.db)
 
     def _mark_restored_invalid(self, job, problem):
         detail = 'restored acceptance invalidated: ' + problem
@@ -2325,6 +2346,10 @@ class Factory:
             with self.db:
                 self.event(job_id, 'context_manifest',
                            f'context.json sha256={manifest_digest}')
+                # The strike or close is recorded in the same transaction as the
+                # final transition, and before it, so the terminal state stays
+                # the job's last event.
+                strikes.record_terminal(self.db, job_id, final, spec)
                 self.transition(job_id, final, detail)
             with self.db:
                 self.db.execute('UPDATE jobs SET finished=? WHERE id=?', (time.time(), job_id))
@@ -2337,6 +2362,11 @@ def main():
     sub = parser.add_subparsers(dest='action', required=True)
     submit = sub.add_parser('submit')
     submit.add_argument('file', type=Path)
+    submit.add_argument('--repair-of', dest='repair_of', default=None)
+    release = sub.add_parser('release')
+    release.add_argument('id')
+    release.add_argument('--decider', required=True)
+    release.add_argument('--note', required=True)
     sub.add_parser('status')
     sub.add_parser('run-one')
     sub.add_parser('reconcile')
@@ -2355,7 +2385,10 @@ def main():
     factory = Factory(args.db)
     try:
         if args.action == 'submit':
-            result = {'created': factory.submit(json.loads(args.file.read_text()))}
+            result = {'created': factory.submit(json.loads(args.file.read_text()),
+                                                repair_of=args.repair_of)}
+        elif args.action == 'release':
+            result = factory.release(args.id, args.decider, args.note)
         elif args.action == 'run-one':
             result = factory.run_one()
         elif args.action == 'inspect':
