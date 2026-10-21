@@ -27,8 +27,10 @@ import os
 import time
 from pathlib import Path
 
+from overseer import route
 from overseer.factory import Factory
 from overseer.provider import build_task
+from overseer.tmux import CLIENTS
 
 DAILY_CAP = 12
 NEEDS_INPUT = 'OVERSEER_NEEDS_INPUT'
@@ -72,9 +74,11 @@ def _result(state, iterations, last_job, detail):
 
 
 def run_loop(db_path, loop_spec, target, once=False, dry_run=False, env=None,
-             opencode='opencode', now=None):
+             opencode='opencode', now=None, router=None):
     """Drive the factory from the loop spec until a stop condition. Returns a result."""
     now = time.time if now is None else now
+    router = route.start_session if router is None else router
+    escalate_to = loop_spec.get('escalate_to') or 'none'
     cap = loop_spec.get('daily_cap', DAILY_CAP)
     runner = loop_spec.get('runner') or 'opencode'
     checks = loop_spec.get('checks') or []
@@ -89,13 +93,55 @@ def run_loop(db_path, loop_spec, target, once=False, dry_run=False, env=None,
         factory = Factory(db_path)
         try:
             return _drive(factory, loop_spec, target, prefix, checks, runner, cap,
-                          once, dry_run, env, opencode, now)
+                          once, dry_run, env, opencode, now, escalate_to, router)
         finally:
             factory.close()
 
 
+def _escalation_prompt(factory, lineage_root, lineage):
+    """Build the escalation prompt from ledger facts only; never raw log text."""
+    rows = factory.db.execute(
+        'SELECT j.id, j.run_id, j.evidence FROM jobs j JOIN repairs r ON j.id=r.job_id'
+        ' WHERE r.lineage_id=? ORDER BY j.seq', (lineage_root,)).fetchall()
+    attempts = '; '.join('%s run=%s' % (row['id'], row['run_id'] or '?') for row in rows)
+    evidence = '; '.join(row['evidence'] for row in rows if row['evidence'])
+    failing = []
+    if rows and rows[-1]['evidence']:
+        try:
+            record = json.loads((Path(rows[-1]['evidence']) / 'handoff.json').read_text())
+            failing = (record.get('failing_acceptance_ids') or {}).get('value') or []
+        except (OSError, ValueError):
+            failing = []
+    return ('Overseer escalation. Lineage %s froze: %s. Attempts: %s. '
+            'Failing acceptance identifiers: %s. Evidence directories: %s. '
+            'Investigate the root cause from the evidence; do not blindly retry.'
+            % (lineage_root, lineage['detail'], attempts,
+               ', '.join(failing) or 'none', evidence))
+
+
+def _escalate(factory, lineage_root, lineage, escalate_to, target, dry_run, router, cap, now):
+    """Route one escalation session for a frozen lineage. Only a freeze routes.
+
+    At most once per lineage: a recorded escalation_routed event blocks a second
+    route. Honours dry-run and the daily cap. No model may answer a human
+    decision, so a pause or an approval wait never reaches here.
+    """
+    if escalate_to == 'none' or escalate_to not in CLIENTS or dry_run:
+        return
+    if factory.db.execute("SELECT 1 FROM events WHERE job_id=? AND state='escalation_routed'",
+                          (lineage_root,)).fetchone():
+        return
+    if _daily_count(factory.db, now()) >= cap:
+        return
+    prompt = _escalation_prompt(factory, lineage_root, lineage)
+    pane = router('overseer-escalate-%s' % lineage_root, escalate_to, target, prompt)
+    with factory.db:
+        factory.event(lineage_root, 'escalation_routed',
+                      'routed a frozen lineage to %s; pane %s' % (escalate_to, pane))
+
+
 def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
-           once, dry_run, env, opencode, now):
+           once, dry_run, env, opencode, now, escalate_to, router):
     instruction = loop_spec['objective']
     last_job = None
     last_failed = False
@@ -109,6 +155,8 @@ def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
         if lineage_root is not None:
             lineage = factory.lineage(lineage_root)
             if lineage and lineage['state'] == 'frozen':
+                _escalate(factory, lineage_root, lineage, escalate_to, target,
+                          dry_run, router, cap, now)
                 return _result('frozen', iteration, last_job, lineage['detail'])
         if last_job is not None and factory.inspect(last_job)['state'] == 'awaiting_approval':
             return _result('needs_input', iteration, last_job,

@@ -3871,3 +3871,90 @@ prompt that makes the model emit the AGENTS.md status block — with the default
 needs_input after the first iteration. That text-format-and-prompt follow-up,
 the monitor-side hold (increment 6), and the Claude escalation route (increment
 10) remain.
+
+### Increment 6: the monitor escalation hold and the pane 3-strike freeze (PERMISSIONS)
+
+Red-green, one commit. The prompt that produced this work was written by a
+dedicated prompt-writing agent (`MONITOR_ESCALATION_HOLD_NEXT_PROMPT.md`) from
+the increment 6 section of `docs/AUTONOMY_BLUEPRINT.md` and the operator's
+summary; this agent executed it. Phase 0 re-read the spec, `overseer/policy.py`,
+`overseer/statusblock.py`, `overseer/__main__.py`, `overseer/scheduler.py`,
+`overseer/strikes.py` and the house tests. Phase 1 wrote the five named tests
+plus two supporting ones first (`tests/test_policy.py`, `tests/test_monitor.py`,
+sha256 `2a3da8831d41742fb18fb6c385ae1ac5789684e9eae9180c198b05165a8d4760` and
+`aaf02500652b9710218ade92a2bf3aefcd6e6a28b91bc40586267d48d626ec12`); red failed
+on the missing `overseer.escalation` module. The digests were unchanged after
+the implementation phase: the tests were read-only while the code was written.
+
+Implementation:
+- New `overseer/escalation.py` (160 lines, at the blueprint's budget). It holds
+  a pane in two cases: the current turn carries a valid AGENTS.md status block
+  whose STATUS is `STUCK_NEEDS_ESCALATION` (parsed with `overseer/statusblock.py`),
+  and three consecutive step reports of that pane show `TESTS_PASSED: FALSE` or
+  an unchanged remaining fingerprint. A step report is a turn carrying report
+  evidence: a valid status block and/or an `OVERSEER_REPORT` whose status is
+  `continue` or `step_done`. A turn with no evidence neither advances nor resets
+  the counter, and the same screen seen on two polls counts once. The remaining
+  fingerprint is the fingerprint of the report's `remaining`, or of the block's
+  `next_instruction` when the turn has no report.
+- The hold is one call inside `classify` (`overseer/policy.py:304`), placed
+  after `stop_requested` and before the `BLOCKED` deny list, so a needs-input
+  screen still reports the stop reason. `Policy.consider`
+  (`overseer/policy.py:325`) applies the hold ahead of the capacity-retry and
+  routed-resume branches (`overseer/policy.py:333`), so a frozen pane is sent
+  nothing on any path.
+- `overseer/policy.py` grew by 9 net lines (12 added, 3 removed; the file was
+  already 350 lines and is now 359) and `overseer/__main__.py` by 13 lines (391
+  to 404). Both files are over the 300-line flag; the work is call sites only,
+  and the new logic is in the new module.
+- `python3 -m overseer unfreeze <pane>` (`overseer/__main__.py:383`) releases
+  exactly that pane. The running monitor owns the state file and rewrites it
+  from memory every poll, so the command writes a release record to a sidecar
+  file beside the state file (`escalation-releases.json`, the pattern the
+  operator model decision already uses) and the monitor folds it into its own
+  state at the start of the next tick (`overseer/escalation.py:137`). A release
+  names the id of the freeze it releases, so a stale record never releases a
+  later freeze. The command never writes the state file.
+- The hold lives in the monitor's JSON state file, inside the pane's own
+  `<pane>:<pid>` entry. The factory's sqlite ledger and the repair-lineage
+  freeze in `overseer/strikes.py` are a different store and are untouched;
+  `overseer/factory.py` and `overseer/strikes.py` are byte-identical to their
+  committed state.
+
+Verification:
+- `tests.test_policy.EscalationHoldTests` (5 tests) and
+  `tests.test_monitor.EscalationMonitorTests` (2 tests), OK. They cover the
+  five names the blueprint requires — `test_stuck_needs_escalation_holds_the_pane`,
+  `test_three_failed_step_reports_freeze_the_pane`,
+  `test_a_frozen_pane_is_not_sent_a_capacity_retry`,
+  `test_unfreeze_clears_only_the_named_pane`,
+  `test_the_daily_limit_and_needs_input_still_stop_first` — plus an unchanged
+  remaining freezing the pane and a clean report resetting the counter.
+- Full suite: `Ran 470 tests ... OK` (was 463; +7).
+- Mutations confirmed to fail, each reverted: the hold skipped for capacity and
+  for the routed resume (caught by the capacity test, the reason became
+  `waiting for idle threshold`); the counter reset on any new screen (caught by
+  the three-reports test, 2 != 3); the hold placed before `stop_requested`
+  (caught by the needs-input test, the reason became the hold reason).
+- CLI smoke: `python3 -m overseer unfreeze %0 --state <file>` printed
+  `unfreeze: %0; applied at the next poll (within 30 seconds)` and exited 0,
+  wrote the release record beside the state file and left the state file
+  untouched; the same command for a pane with no hold printed
+  `No hold is recorded for %2.` and exited 1.
+- Citations re-mapped by content: 26 citation values into `overseer/policy.py`
+  and `overseer/__main__.py` across `docs/HARNESS_FRAMEWORK.md` (15) and
+  `docs/AUTONOMY_BLUEPRINT.md` (11), plus five stale `overseer/strikes.py`
+  pointers in the STATE row that pointed at blank lines and are now correct.
+  The new citations for this increment were checked against the line they
+  name, not only against the file's length.
+  `scripts/check-doc-references` exits 0 for `docs/HARNESS_FRAMEWORK.md` (261
+  references), `docs/AUTONOMY_BLUEPRINT.md` (89) and `README.md` (0).
+
+Honest limits: a replaced pane process is a new `<pane>:<pid>` entry and is
+therefore not frozen; a release reaches a running monitor one poll late; the
+hold reads visible text, not the work itself, so it is a gate on sending and not
+evidence that the work progresses; the monitor's `phase()` heuristic
+(`overseer/scheduler.py:67`) calls a stuck pane *unknown* rather than
+*finished*, which changes no send path because `Policy.consider` applies the
+hold; and the unfreeze command reports the poll interval from `config.json`,
+so it fails closed if that file cannot be read.

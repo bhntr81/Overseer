@@ -323,7 +323,7 @@ Stated plainly, so no reader over-trusts these controls:
 |---|---|---|---|
 | 1 Locality trap | DATA-ONLY (loc delta in `diff.json`) | BY DISCIPLINE (size rule) | CONTEXT threshold increment |
 | 2 Gaming the harness | DATA-ONLY (`tests/` edits in `diff.json`) | BY DISCIPLINE (red-green) | EVIDENCE enforcement increment |
-| 3 Context rot / cascades | PARTIAL (lineage strike-count, status-block parser, factory-side stuck-escalation, and no-new-evidence early freeze IMPLEMENTED; monitor-side escalation FILED) | PARTIAL + FILED (ground truth, reset) | Autonomy increments 1–5 and 7–9 landed; 6 and 10 owed |
+| 3 Context rot / cascades | PARTIAL (lineage strike-count, status-block parser, factory-side stuck-escalation, and no-new-evidence early freeze IMPLEMENTED; monitor-side escalation FILED) | PARTIAL + FILED (ground truth, reset) | Autonomy increments 1–5 and 7–10 landed; only the monitor-side hold (6) owed |
 | 4 Non-determinism / races | IMPLEMENTED (timeout+SIGKILL) | IMPLEMENTED (single writer, fenced restore); PARTIAL (sandbox probe) | TOOLS row for real sandboxing |
 | 5 Orchestrator overhead | OUT OF SCOPE (ratio); proxy via size budgets | IMPLEMENTED (one ledger; read-only git authority) | — |
 
@@ -332,7 +332,7 @@ consecutive-failure freeze (autonomy increment 1) is now built too, so the
 first cost-cap control exists, the status-block parser, the factory-side
 stuck-escalation freeze, and the no-new-evidence early freeze are built too
 (increments 2–4), while the rest of the cost-cap and escalation hardening is
-specified; increments 5, 7, 8, and 9 (the unattended loop) are now built, leaving the monitor-side hold (6) and the Claude escalation route (10); architectural-rot
+specified; increments 5, 7, 8, and 9 (the unattended loop) are now built, leaving only the monitor-side hold (6); the Claude escalation route (10) is built; architectural-rot
 and test-drift detection have the evidence captured but not yet the thresholds
 that act on it.** No mitigation on this page is claimed without a citation or a
 filing.

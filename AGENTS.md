@@ -52,7 +52,12 @@ execute the following terminal checks:
    its corresponding test suite.
 3. **Status Logging:** Output a brief handoff block at the end of your
    response:
+###
 
+## HARDENING COMPLIANCE MANDATES
+1. **RED-GREEN SEPARATION:** When assigned an implementation task, you are STRICTLY FORBIDDEN from modifying any file inside `tests/`. Test files are read-only during coding phases.
+2. **LOCALITY LIMIT:** Keep file growth lean. If a single module modification adds more than 15% new lines or creates massive duplicate functions, split the logic or flag it for structural review.
+3. **GROUND TRUTH RE-READ:** Always re-read the core feature intent from `SPEC.md` or the primary spec before writing code to prevent prompt drift.
    ```yaml
    STATUS: [SUCCESS | STUCK_NEEDS_ESCALATION]
    TESTS_PASSED: [TRUE | FALSE]

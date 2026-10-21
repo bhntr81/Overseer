@@ -459,6 +459,32 @@ Do not type in a watched pane while the bot is responding; desktop input and
 tmux writes cannot be made atomic together. Unwatch the pane first when taking
 over manually.
 
+## The escalation hold
+
+The monitor holds a pane and sends it nothing at all in two cases:
+
+- the current turn of the pane carries a valid status block with
+  `STATUS: STUCK_NEEDS_ESCALATION`
+- three consecutive step reports of that pane show `TESTS_PASSED: FALSE` or an
+  unchanged remaining fingerprint
+
+A held pane receives no routine continuation, no report prompt, no writer
+handoff, no capacity retry, and no routed-session resume. The hold is recorded
+in the monitor's own state file, so it survives a restart, and it is not the
+same store as the factory's repair-lineage freeze: the two never see each other.
+A new turn, a changed screen, and a restart do not clear a hold.
+
+Only the operator releases a pane, and only that pane:
+
+```sh
+python3 -m overseer unfreeze %0
+```
+
+The command writes a release record beside the state file and the running
+monitor applies it at its next poll. Two limits are worth knowing: a pane whose
+process is replaced is a new entry and is not frozen, and the release reaches a
+running monitor one poll late.
+
 ## Model decisions
 
 When a client reports that its model, its account, or its credits cannot be

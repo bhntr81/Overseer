@@ -61,8 +61,8 @@ What exists. Do not propose any of it again.
       (`overseer/reconcile.py:158`). So an unborn repository reconciles as
       agreeing without any anchored revision.
 - **The monitor already scopes panes by directory.** The `target_paths` and
-  `targets` settings are validated at `overseer/__main__.py:52`. A relative path
-  resolves against the directory holding `config.json` (`overseer/__main__.py:56`).
+  `targets` settings are validated at `overseer/__main__.py:53`. A relative path
+  resolves against the directory holding `config.json` (`overseer/__main__.py:57`).
   Panes are filtered by `Tmux.targeted` (`overseer/tmux.py:116`) using `under`
   (`overseer/tmux.py:18`).
 - **The workspace is only read during capture and reconciliation.** The read-only
@@ -95,8 +95,8 @@ What exists. Do not propose any of it again.
 
 - **The monitor already runs an unattended feed loop into worker panes.** Its
   pieces:
-  - `run` polls (`overseer/__main__.py:260`) and `tick` acts
-    (`overseer/__main__.py:211`). With `serial_queue`, `tick_queue` takes over
+  - `run` polls (`overseer/__main__.py:262`) and `tick` acts
+    (`overseer/__main__.py:212`). With `serial_queue`, `tick_queue` takes over
     (`overseer/scheduler.py:174`).
   - It parses the latest `OVERSEER_REPORT` JSON line (`overseer/policy.py:62`,
     `overseer/policy.py:82`).
@@ -105,16 +105,16 @@ What exists. Do not propose any of it again.
   - On a `step_done` report it sends a writer-handoff prompt
     (`overseer/policy.py:217`, `overseer/policy.py:158`).
   - It reserves before it sends, so a send is never retried
-    (`overseer/__main__.py:248`).
+    (`overseer/__main__.py:250`).
 - **The limits a loop must keep already exist:**
   - Stop markers. `OVERSEER_NEEDS_INPUT` anywhere in the current turn always stops
     (`overseer/policy.py:30`, `overseer/policy.py:172`).
   - Permission, approval, and generation screens are never answered
     (`overseer/policy.py:19`, `overseer/policy.py:296`).
   - The idle threshold, "already replied", cooldown, and daily limit apply
-    (`overseer/policy.py:319`, `overseer/policy.py:336`, `overseer/policy.py:340`,
-    `overseer/policy.py:344`).
-  - `dry_run` mode exists (`overseer/__main__.py:240`).
+    (`overseer/policy.py:325`, `overseer/policy.py:345`, `overseer/policy.py:349`,
+    `overseer/policy.py:353`).
+  - `dry_run` mode exists (`overseer/__main__.py:242`).
   - Capacity retries are bounded by `capacity_max_retries`
     (`overseer/scheduler.py:283`).
   - Provider-failure routing exists: failure detection
@@ -154,20 +154,20 @@ What is missing:
   LANDED by increment 2; wiring still open.** The block that AGENTS.md requires
   (the `STATUS:` / `TESTS_PASSED:` / `FILES_MODIFIED:` / `NEXT_AGENT_INSTRUCTION:`
   lines) now has a bounded, never-evaluated parser (`overseer/statusblock.py:96`).
-  It is not yet read by any caller: the monitor still reads only
-  `OVERSEER_REPORT`, and the factory still reads only exit codes. Increment 3
-  wires the parser into the factory and increment 6 into the monitor.
-- **M3-c. ~~`STUCK_NEEDS_ESCALATION` is detected nowhere.~~ FACTORY SIDE LANDED
-  by increment 3.** The factory now reads the implementation log, and a
-  `STUCK_NEEDS_ESCALATION` block freezes the job's lineage
-  (`overseer/factory.py:2444`, `overseer/strikes.py:171`). The monitor still
-  does not react to it; increment 6 adds the pane-side hold.
+  The factory reads it (increment 3) and the monitor reads it for its escalation
+  hold (increment 6, `overseer/escalation.py:70`).
+- **M3-c. ~~`STUCK_NEEDS_ESCALATION` is detected nowhere.~~ LANDED by increment 3
+  on the factory side and by increment 6 on the monitor side.** The factory reads
+  the implementation log, and a `STUCK_NEEDS_ESCALATION` block freezes the job's
+  lineage (`overseer/factory.py:2444`, `overseer/strikes.py:171`). The monitor
+  holds the pane instead of sending to it (`overseer/escalation.py:56`), and only
+  `python3 -m overseer unfreeze <pane>` releases it (`overseer/__main__.py:383`).
 - **M3-d. ~~No operator pause of dispatch.~~ LANDED by increment 5.** `pause`/
   `unpause --note` on the factory CLI record a dispatch pause checked inside the
   dispatch transaction (`overseer/factory.py:2222`); a paused factory starts no
   new job while running work is untouched. It pauses dispatch, not running work.
 - **M3-e. ~~No factory-side feed loop.~~ LANDED by increment 9.**
-  `overseer/orchestrate.py:74` turns one job's worker report into the next job,
+  `overseer/orchestrate.py:76` turns one job's worker report into the next job,
   feeding `NEXT_AGENT_INSTRUCTION` into the next iteration, bounded by the pause,
   freeze, approval, needs-input, and daily-cap stop conditions.
 - **M3-f. No escalation route.** Routing moves a pane only on a *provider* failure
@@ -537,7 +537,24 @@ because the PERMISSIONS row asks for a pause of *running* work and this pauses
 | check outside the transaction | the dispatch test, using a race helper that pauses between two reads |
 | note not required | the unpause test |
 
-### Increment 6: monitor escalation hold and pane 3-strike freeze (PERMISSIONS, `docs/HARNESS_FRAMEWORK.md:35`)
+### Increment 6: monitor escalation hold and pane 3-strike freeze (PERMISSIONS, `docs/HARNESS_FRAMEWORK.md:35`) — LANDED
+
+> **Landed.** `overseer/escalation.py` (160 lines, at the budget) holds a pane
+> and nothing sends to it: a valid `STATUS: STUCK_NEEDS_ESCALATION` block in the
+> current turn, and three consecutive step reports that show `TESTS_PASSED: FALSE`
+> or an unchanged remaining fingerprint, both freeze the pane
+> (`overseer/escalation.py:56`). The hold is one call inside `classify`
+> (`overseer/policy.py:304`), placed after `stop_requested` and before every send
+> path, so a needs-input screen still reports the stop reason
+> (`overseer/policy.py:333`). The state lives in the monitor's own JSON state
+> file, never in the factory ledger, and `python3 -m overseer unfreeze <pane>`
+> (`overseer/__main__.py:383`) releases that pane alone; the release reaches a
+> running monitor through a sidecar file the command writes, folded at the start
+> of the next tick (`overseer/escalation.py:137`). Seven tests pass, including the
+> five the blueprint names; three mutations were confirmed caught. Honest limits:
+> a replaced pane process is a new `<pane>:<pid>` entry and is not frozen; the
+> release lands one poll late; the hold reads visible text, not the work itself;
+> and the monitor's `phase()` heuristic no longer calls a stuck pane *finished*.
 
 **Objective.** The monitor holds a pane, never sending to it, in two cases:
 
@@ -559,7 +576,7 @@ The hold is persisted in the monitor's state file. An explicit operator
 
 **Decisions to settle:**
 1. **Precedence.** The hold is evaluated after `stop_requested` and before any
-   send path, including the capacity retry path (`overseer/policy.py:319`). The
+   send path, including the capacity retry path (`overseer/policy.py:325`). The
    capacity retry must never send to a frozen pane.
 2. **Persistence.** The freeze lives in the monitor's state file, not in the
    factory ledger. The docs say plainly that the two stores are separate.
@@ -776,7 +793,18 @@ is driven by a counter file.
 | cap kept in memory only | the restart test |
 | instruction substituted into a substring | the argv test |
 
-### Increment 10: escalation route to a Claude session (PERMISSIONS, `docs/HARNESS_FRAMEWORK.md:35`)
+### Increment 10: escalation route to a Claude session (PERMISSIONS, `docs/HARNESS_FRAMEWORK.md:35`) — LANDED
+
+> **Landed.** `overseer/orchestrate.py` gained `_escalate`
+> (`overseer/orchestrate.py:122`) and `_escalation_prompt`
+> (`overseer/orchestrate.py:101`) within its budget (now 251 lines, under 280).
+> When the loop stops on a freeze, and only then, it routes one session to the
+> loop spec's `escalate_to` client through `overseer/route.py`, at most once per
+> lineage (guarded by an `escalation_routed` event), with a prompt built from
+> ledger facts only — never raw log text. It never routes a pause, an approval
+> wait, or an OVERSEER_NEEDS_INPUT, and it honours dry-run and the daily cap.
+> Four tests pass (the router monkeypatched, so no tmux session starts) and the
+> three mutations were confirmed caught. No factory change.
 
 **Objective.** When a loop stops because a lineage froze, from increments 1, 3,
 or 4, the loop may start one escalation session. The route is configured by the

@@ -293,11 +293,17 @@ def hold(state, text, reason):
     state["held_reason"] = reason
 
 
-def classify(text, continue_on_completion=False, completed=False):
+def classify(text, continue_on_completion=False, completed=False, entry=None):
     tail = tail_text(text)
     stop = stop_requested(text)
     if stop:
         return False, stop
+    # Imported here, not at module level: escalation reads the status block,
+    # which reads this module, so a module-level import would close the cycle.
+    from .escalation import classify as escalation_classify
+    held = escalation_classify(entry, text)
+    if held:
+        return False, held
     if BLOCKED.search(tail):
         return False, "active generation, permission, or sensitive action visible"
     if handoff_due(text, tail):
@@ -322,12 +328,15 @@ class Policy:
         digest = fingerprint(text)
         if state.get("fingerprint") != digest or now < state.get("stable_since", now):
             state.update(fingerprint=digest, stable_since=now)
+        eligible, reason = classify(text, self.continue_on_completion, completed, entry=state)
+        holds = state.get("escalation")
+        if reason == STOP_REASON or (isinstance(holds, dict) and holds.get("held")):
+            # A stopped or held pane is never sent to, not even a capacity retry.
+            return False, reason
         if capacity:
             eligible, reason = True, "model capacity retry"
         elif resume:
             eligible, reason = True, "routed session needs a continuation"
-        else:
-            eligible, reason = classify(text, self.continue_on_completion, completed)
         if not eligible:
             return False, reason
         if now - state["stable_since"] < (retry_seconds if capacity else self.idle_seconds):

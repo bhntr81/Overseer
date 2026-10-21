@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from overseer.escalation import HOLD_ESCALATION, HOLD_STRIKES
 from overseer.policy import Policy, classify, hold, next_prompt
 
 
@@ -371,3 +372,97 @@ class WriterHandoffReviewTests(unittest.TestCase):
 
     def test_the_handoff_names_the_objective(self):
         self.assertIn("code the writer loop", next_prompt(step_screen(), "Continue.")[0])
+
+
+STUCK_BLOCK = (
+    "STATUS: STUCK_NEEDS_ESCALATION\n"
+    "TESTS_PASSED: TRUE\n"
+    "FILES_MODIFIED: [overseer/policy.py]\n"
+    'NEXT_AGENT_INSTRUCTION: "ask the operator for a decision"\n'
+)
+SUCCESS_BLOCK = (
+    "STATUS: SUCCESS\n"
+    "TESTS_PASSED: TRUE\n"
+    "FILES_MODIFIED: [overseer/policy.py]\n"
+    'NEXT_AGENT_INSTRUCTION: "ask the operator for a decision"\n'
+)
+TEMPLATE_BLOCK = (
+    "STATUS: [SUCCESS | STUCK_NEEDS_ESCALATION]\n"
+    "TESTS_PASSED: [TRUE | FALSE]\n"
+    "FILES_MODIFIED: []\n"
+    'NEXT_AGENT_INSTRUCTION: "continue"\n'
+)
+CAPACITY_SCREEN = "■ Selected model is at capacity. Please try a different model.\n›"
+STOP_REASON = "client requested no further automatic continuation"
+
+
+class EscalationHoldTests(unittest.TestCase):
+    """A pane that asks for escalation, or fails three times, is held."""
+
+    def test_stuck_needs_escalation_holds_the_pane(self):
+        screen = STUCK_BLOCK + QUESTION
+        self.assertEqual(classify(screen), (False, HOLD_ESCALATION))
+        self.assertEqual(classify(SUCCESS_BLOCK + QUESTION)[0], True)
+        self.assertEqual(classify(TEMPLATE_BLOCK + QUESTION)[0], True)
+        earlier = STUCK_BLOCK + "\n› fix the typo\n" + QUESTION
+        self.assertEqual(classify(earlier)[0], True)
+        entry = {}
+        policy = Policy(idle_seconds=0)
+        self.assertEqual(policy.consider(entry, screen, 0), (False, HOLD_ESCALATION))
+        self.assertIsNotNone(entry["escalation"]["held"])
+        self.assertEqual(entry["escalation"]["held"]["reason"], HOLD_ESCALATION)
+        self.assertNotIn("last_sent", entry)
+
+    def test_a_frozen_pane_is_not_sent_a_capacity_retry(self):
+        entry = {}
+        policy = Policy(idle_seconds=0)
+        self.assertEqual(policy.consider(entry, STUCK_BLOCK + QUESTION, 0),
+                         (False, HOLD_ESCALATION))
+        self.assertEqual(policy.consider(entry, CAPACITY_SCREEN, 10, capacity=True),
+                         (False, HOLD_ESCALATION))
+        self.assertEqual(policy.consider(entry, QUESTION, 20, resume=True),
+                         (False, HOLD_ESCALATION))
+        self.assertNotIn("last_sent", entry)
+        self.assertEqual(entry.get("sent_times", []), [])
+
+    def test_the_daily_limit_and_needs_input_still_stop_first(self):
+        entry = {}
+        policy = Policy(idle_seconds=0)
+        policy.consider(entry, STUCK_BLOCK + QUESTION, 0)
+        needs_input = STUCK_BLOCK + "\nOVERSEER_NEEDS_INPUT\n› "
+        self.assertEqual(policy.consider(entry, needs_input, 1), (False, STOP_REASON))
+        self.assertEqual(classify(needs_input), (False, STOP_REASON))
+        limited = {}
+        policy = Policy(idle_seconds=0, cooldown_seconds=0, max_per_day=1)
+        policy.acknowledge(limited, QUESTION, 0)
+        self.assertEqual(policy.consider(limited, "New\n" + QUESTION, 100),
+                         (False, "daily reply limit"))
+        self.assertNotIn("last_sent", entry)
+        self.assertEqual(entry.get("sent_times", []), [])
+
+    def test_an_unchanged_remaining_freezes_the_pane(self):
+        # The first report is the baseline; the reports after it are unchanged.
+        block = ("STATUS: SUCCESS\nTESTS_PASSED: TRUE\nFILES_MODIFIED: []\n"
+                 'NEXT_AGENT_INSTRUCTION: "keep going"\n')
+        entry = {}
+        policy = Policy(idle_seconds=0)
+        for index in range(3):
+            screen = block + "attempt %d\n" % index + QUESTION
+            eligible, reason = policy.consider(entry, screen, index)
+            self.assertTrue(eligible, reason)
+        self.assertEqual(entry["escalation"]["strikes"], 2)
+        screen = block + "attempt 3\n" + QUESTION
+        self.assertEqual(policy.consider(entry, screen, 3), (False, HOLD_STRIKES))
+        self.assertEqual(entry["escalation"]["held"]["reason"], HOLD_STRIKES)
+
+    def test_a_clean_report_resets_the_strike_counter(self):
+        block = ("STATUS: SUCCESS\nTESTS_PASSED: %s\nFILES_MODIFIED: []\n"
+                 'NEXT_AGENT_INSTRUCTION: "%s"\n')
+        entry = {}
+        policy = Policy(idle_seconds=0)
+        for index in range(2):
+            policy.consider(entry, block % ("FALSE", "step %d" % index) + QUESTION, index)
+        self.assertEqual(entry["escalation"]["strikes"], 2)
+        policy.consider(entry, block % ("TRUE", "a clean step") + QUESTION, 5)
+        self.assertEqual(entry["escalation"]["strikes"], 0)
+        self.assertIsNone(entry["escalation"]["held"])

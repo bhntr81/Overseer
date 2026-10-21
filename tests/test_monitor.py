@@ -1,10 +1,13 @@
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 from overseer.__main__ import settings, tick
+from overseer.escalation import HOLD_ESCALATION, HOLD_STRIKES
 from overseer.policy import Policy
 from overseer.tmux import Snapshot, Tmux
 
@@ -172,6 +175,97 @@ class MonitorTests(unittest.TestCase):
             path.write_text(json.dumps(config))
             with self.assertRaises(ValueError):
                 settings(path)
+
+
+QUESTION = "Would you like me to continue?\n› "
+STUCK_BLOCK = (
+    "STATUS: STUCK_NEEDS_ESCALATION\n"
+    "TESTS_PASSED: TRUE\n"
+    "FILES_MODIFIED: [overseer/policy.py]\n"
+    'NEXT_AGENT_INSTRUCTION: "ask the operator for a decision"\n'
+)
+
+
+def failing_block(name):
+    """Return a status block of a failed step report."""
+    return ("STATUS: SUCCESS\nTESTS_PASSED: FALSE\nFILES_MODIFIED: [a.py]\n"
+            'NEXT_AGENT_INSTRUCTION: "%s"\n' % name)
+
+
+class EscalationMonitorTests(unittest.TestCase):
+    """The monitor holds a pane and only the operator releases it."""
+
+    def screen(self, text, pane="%0", pid="123"):
+        return Snapshot(pane, "codex", pid, text, "›", "0", "0")
+
+    def test_three_failed_step_reports_freeze_the_pane(self):
+        backend = Mock()
+        backend.panes.return_value = ["%0"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            state = {}
+            config = {"dry_run": False, "reply": "Please continue."}
+            policy = Policy(idle_seconds=0, cooldown_seconds=0)
+            screens = [
+                self.screen(failing_block("first") + QUESTION),
+                self.screen(failing_block("first") + QUESTION),
+                self.screen(QUESTION),
+                self.screen(failing_block("second") + QUESTION),
+                self.screen(failing_block("third") + QUESTION),
+            ]
+            for now, screen in enumerate(screens):
+                backend.snapshot.return_value = screen
+                tick(backend, policy, state, config, path, now * 100)
+            entry = state["%0:123"]
+            # The same report seen twice counts once, and a screen without a
+            # report neither advances nor resets the counter.
+            self.assertEqual(entry["escalation"]["strikes"], 3)
+            self.assertEqual(entry["escalation"]["held"]["reason"], HOLD_STRIKES)
+            # The first, third and fourth screens were answered; the fifth was
+            # not, because the freeze stopped it.
+            self.assertEqual(backend.send.call_count, 3)
+            state = json.loads(path.read_text())
+            self.assertIsNotNone(state["%0:123"]["escalation"]["held"])
+            backend.snapshot.return_value = self.screen(QUESTION)
+            tick(backend, policy, state, config, path, 1000)
+        self.assertEqual(backend.send.call_count, 3)
+
+    def test_unfreeze_clears_only_the_named_pane(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            state = {}
+            config = {"dry_run": False, "reply": "Please continue."}
+            policy = Policy(idle_seconds=0, cooldown_seconds=0)
+            screens = {"%0": self.screen(STUCK_BLOCK + QUESTION, "%0", "123"),
+                       "%1": self.screen(failing_block("one") + QUESTION, "%1", "456")}
+            backend = Mock()
+            backend.panes.side_effect = lambda: list(screens)
+            backend.snapshot.side_effect = lambda pane: screens[pane]
+            tick(backend, policy, state, config, path, 0)
+            for index, name in enumerate(["two", "three"], start=1):
+                screens["%1"] = self.screen(failing_block(name) + QUESTION, "%1", "456")
+                tick(backend, policy, state, config, path, index * 100)
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved["%0:123"]["escalation"]["held"]["reason"], HOLD_ESCALATION)
+            self.assertEqual(saved["%1:456"]["escalation"]["held"]["reason"], HOLD_STRIKES)
+            self.assertEqual(saved["%1:456"]["escalation"]["strikes"], 3)
+            before = path.read_text()
+            result = subprocess.run([sys.executable, "-m", "overseer", "unfreeze", "%0",
+                                      "--state", str(path)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("unfreeze: %0", result.stdout)
+            self.assertTrue((Path(directory) / "escalation-releases.json").exists())
+            # The monitor owns the state file; the command only leaves a record.
+            self.assertEqual(path.read_text(), before)
+            tick(backend, policy, state, config, path, 1000)
+            self.assertIsNone(state["%0:123"]["escalation"]["held"])
+            self.assertEqual(state["%0:123"]["escalation"]["strikes"], 0)
+            self.assertIsNotNone(state["%1:456"]["escalation"]["held"])
+            self.assertEqual(state["%1:456"]["escalation"]["strikes"], 3)
+            missing = subprocess.run([sys.executable, "-m", "overseer", "unfreeze", "%2",
+                                      "--state", str(path)], capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 1)
+            self.assertIn("No hold is recorded for %2.", missing.stderr)
 
 
 if __name__ == "__main__":

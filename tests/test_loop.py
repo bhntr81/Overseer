@@ -41,6 +41,8 @@ class LoopTests(unittest.TestCase):
             '    print("NEXT_AGENT_INSTRUCTION: " + json.dumps(step.get("next", "")))\n'
             'for marker in step.get("markers", []):\n'
             '    print(marker)\n'
+            'if step.get("raw"):\n'
+            '    print(step["raw"])\n'
             'sys.exit(step.get("exit", 0))\n'
             % (str(self.plan_path), str(self.counter), str(self.counter), str(self.argvlog)))
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -53,10 +55,10 @@ class LoopTests(unittest.TestCase):
         s.update(over)
         return s
 
-    def drive(self, plan, once=False, dry_run=False, **over):
+    def drive(self, plan, once=False, dry_run=False, router=None, **over):
         fake = self.make_fake(plan)
         return run_loop(str(self.db), self.spec(**over), str(self.target),
-                        once=once, dry_run=dry_run, env={}, opencode=fake)
+                        once=once, dry_run=dry_run, env={}, opencode=fake, router=router)
 
     def argv_calls(self):
         return [json.loads(line) for line in self.argvlog.read_text().splitlines()]
@@ -153,3 +155,56 @@ class LoopTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FakeRouter:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, name, client, directory, prompt=None):
+        self.calls.append({'name': name, 'client': client,
+                           'directory': directory, 'prompt': prompt})
+        return 'pane-fake'
+
+
+class EscalationTests(LoopTests):
+    def test_a_frozen_loop_routes_once_to_the_configured_client(self):
+        router = FakeRouter()
+        plan = [{'exit': 1, 'next': 'retry'}] * 3
+        r1 = self.drive(plan, router=router, escalate_to='claude', repair_allowance=1)
+        self.assertEqual(r1['state'], 'frozen')
+        self.assertEqual(len(router.calls), 1)
+        self.assertEqual(router.calls[0]['client'], 'claude')
+        self.assertEqual(router.calls[0]['directory'], str(self.target))
+        # A second stop on the already-frozen lineage must not route again.
+        r2 = self.drive(plan, router=router, escalate_to='claude', repair_allowance=1)
+        self.assertEqual(r2['state'], 'frozen')
+        self.assertEqual(len(router.calls), 1)
+
+    def test_an_approval_wait_is_never_routed_to_a_model(self):
+        router = FakeRouter()
+        envelope = {'mode': 'bounded_maintenance', 'scope': ['t'],
+                    'requires_decision': True, 'decider': 'op'}
+        r = self.drive([{'next': 'x'}], router=router, escalate_to='claude', envelope=envelope)
+        self.assertEqual(r['state'], 'needs_input')
+        self.assertEqual(len(router.calls), 0)
+
+    def test_the_escalation_prompt_carries_only_ledger_facts(self):
+        router = FakeRouter()
+        plan = [{'exit': 0, 'next': 'retry', 'raw': 'SENTINEL_RAW_LOG_DATA'}] * 3
+        r = self.drive(plan, router=router, escalate_to='claude', repair_allowance=1,
+                       checks=[[sys.executable, '-c', 'import sys; sys.exit(1)']])
+        self.assertEqual(r['state'], 'frozen')
+        self.assertEqual(len(router.calls), 1)
+        prompt = router.calls[0]['prompt']
+        self.assertIn('loop-0', prompt)
+        self.assertIn('A1', prompt)
+        self.assertIn('Evidence', prompt)
+        self.assertNotIn('SENTINEL_RAW_LOG_DATA', prompt)
+
+    def test_dry_run_routes_nothing(self):
+        router = FakeRouter()
+        r = self.drive([{'exit': 1, 'next': 'retry'}] * 3, router=router,
+                       escalate_to='claude', dry_run=True, repair_allowance=1)
+        self.assertEqual(r['state'], 'dry_run')
+        self.assertEqual(len(router.calls), 0)

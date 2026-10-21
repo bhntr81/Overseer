@@ -9,6 +9,7 @@ import signal
 import sys
 import time
 
+from .escalation import adopt, release
 from .modelchoice import RESOLUTIONS, model_id, opencode_empty, providers, running_marker
 from .policy import DEFAULT_REPLY, Policy, hold, next_prompt
 from .route import resolve_route
@@ -209,6 +210,7 @@ def model_select(args):
 
 
 def tick(backend, policy, state, config, path, now):
+    adopt(state, path)
     if config.get("serial_queue", False):
         from .scheduler import tick_queue
         return tick_queue(backend, policy, state, config, path, now, save)
@@ -325,6 +327,9 @@ def main():
     select.add_argument("--provider", help="permitted provider id")
     select.add_argument("--model", help="model id within that provider")
     select.add_argument("--state", type=Path, default=STATE)
+    unfreeze = sub.add_parser("unfreeze")
+    unfreeze.add_argument("pane", help="tmux pane ID, e.g. %%0")
+    unfreeze.add_argument("--state", type=Path, default=STATE)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
@@ -375,6 +380,14 @@ def main():
             print(f"{args.action}: {pane}")
         elif args.action == "model-select":
             return model_select(args)
+        elif args.action == "unfreeze":
+            data = json.loads(args.state.read_text()) if args.state.exists() else {}
+            if isinstance(data, dict) and release(data, args.pane, args.state):
+                print("unfreeze: %s; applied at the next poll (within %d seconds)"
+                      % (args.pane, settings(ROOT / "config.json")["poll_seconds"]))
+                return 0
+            print("No hold is recorded for %s." % args.pane, file=sys.stderr)
+            return 1
         elif args.action == "start":
             shell_command = shlex.join([args.client, *args.client_args])
             pane = command("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", args.name,
