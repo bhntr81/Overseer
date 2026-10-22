@@ -27,7 +27,9 @@ import os
 import time
 from pathlib import Path
 
+from overseer import blueprint
 from overseer import route
+from overseer import sizing
 from overseer.factory import Factory
 from overseer.provider import build_task
 from overseer.tmux import CLIENTS
@@ -35,6 +37,7 @@ from overseer.tmux import CLIENTS
 DAILY_CAP = 12
 NEEDS_INPUT = 'OVERSEER_NEEDS_INPUT'
 DONE = 'OVERSEER_DONE'
+STEP_DONE = 'OVERSEER_STEP_DONE'
 # States that mean a human must look; the loop prints OVERSEER_NEEDS_INPUT and
 # exits 2 for all of them, and OVERSEER_DONE / exit 0 only for 'done'.
 HOLD_STATES = ('needs_input', 'frozen', 'paused', 'cap')
@@ -69,6 +72,41 @@ def _report_block(evidence):
         return None
 
 
+def _plan(loop_spec):
+    """Size the objective when the loop spec asks for it with ``size``.
+
+    ``size`` is true or an object of dimension overrides (see overseer.sizing).
+    An explicit ``repair_allowance``, ``model``, or contract field in the loop
+    spec always wins over the assessment.
+    """
+    size = loop_spec.get('size')
+    if not size:
+        return None
+    return sizing.assess(loop_spec['objective'], size if isinstance(size, dict) else None)
+
+
+def _plan_path(db_path):
+    return Path(db_path).with_name(Path(db_path).name + '.plan.json')
+
+
+def _load_plan(db_path, loop_spec, assessment):
+    """Resume the saved step plan for this objective, or write a fresh one."""
+    try:
+        saved = json.loads(_plan_path(db_path).read_text())
+        if saved.get('objective') == loop_spec['objective']:
+            return saved['plan']
+    except (OSError, ValueError, KeyError):
+        pass
+    return blueprint.make_plan(assessment, loop_spec.get('step_names'))
+
+
+def _save_plan(db_path, loop_spec, bp):
+    path = _plan_path(db_path)
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps({'objective': loop_spec['objective'], 'plan': bp}, indent=2))
+    temporary.replace(path)
+
+
 def _result(state, iterations, last_job, detail):
     return {'state': state, 'iterations': iterations, 'last_job': last_job, 'detail': detail}
 
@@ -95,8 +133,17 @@ def run_loop(db_path, loop_spec, target, once=False, dry_run=False, env=None,
             return _result('error', 0, None, 'another loop owns this ledger')
         factory = Factory(db_path)
         try:
-            return _drive(factory, loop_spec, target, prefix, checks, runner, cap,
-                          once, dry_run, env, opencode, now, escalate_to, router)
+            plan = _plan(loop_spec)
+            state = {'db': db_path, 'plan': None}
+            if plan is not None:
+                state['plan'] = _load_plan(db_path, loop_spec, plan)
+            result = _drive(factory, loop_spec, target, prefix, checks, runner, cap,
+                            once, dry_run, env, opencode, now, escalate_to, router, plan, state)
+            if plan is not None:
+                result['sizing'] = plan.as_dict()
+                evaluation = blueprint.evaluate(state['plan'])
+                result['blueprint'] = {'plan': state['plan'], 'evaluation': evaluation}
+            return result
         finally:
             factory.close()
 
@@ -144,7 +191,7 @@ def _escalate(factory, lineage_root, lineage, escalate_to, target, dry_run, rout
 
 
 def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
-           once, dry_run, env, opencode, now, escalate_to, router):
+           once, dry_run, env, opencode, now, escalate_to, router, plan=None, state=None):
     instruction = loop_spec['objective']
     last_job = None
     last_failed = False
@@ -175,11 +222,30 @@ def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
             return _result('needs_input', iteration, last_job, 'no instruction to feed')
 
         task_id = '%s-%d' % (prefix, iteration)
+        model = loop_spec.get('model')
+        allowance = loop_spec.get('repair_allowance')
+        wall = 600
+        if plan is not None:
+            # Start at the sized strength and move one step stronger once an
+            # attempt has failed; a configured model or allowance still wins.
+            bp = state['plan']
+            strength = blueprint._bump(bp['strength']) if last_failed else bp['strength']
+            model = model or (loop_spec.get('strength_models') or {}).get(strength)
+            if allowance is None:
+                allowance = plan.repair_allowance
+            wall = plan.budget['wall_time_seconds']
+        if allowance is None:
+            allowance = 1
+        prompt = instruction
+        if plan is not None:
+            brief = blueprint.step_brief(state['plan'])
+            if brief:
+                prompt = brief + '\n\n' + instruction
         spec, resolved = build_task(
-            task_id, loop_spec['objective'], target, checks, instruction,
-            model=loop_spec.get('model'), runner=runner, env=env,
+            task_id, loop_spec['objective'], target, checks, prompt,
+            model=model, runner=runner, env=env,
             timeout_seconds=loop_spec.get('timeout_seconds', 600),
-            opencode=opencode, repair_allowance=loop_spec.get('repair_allowance', 1))
+            opencode=opencode, repair_allowance=allowance, wall_time_seconds=wall)
         if loop_spec.get('envelope'):
             spec['envelope'] = loop_spec['envelope']
         if dry_run:
@@ -221,6 +287,26 @@ def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
                 pending_needs_input = True
         else:
             pending_needs_input = True
+
+        if plan is not None:
+            bp = state['plan']
+            step_done = STEP_DONE in tail or DONE in tail
+            files = len(block['files_modified']) if block and block.get('valid') else None
+            bp = blueprint.record(
+                bp, passed, step_done=step_done,
+                tests_claim=block.get('tests_passed') if block and block.get('valid') else None,
+                files=files, stuck=NEEDS_INPUT in tail or bool(
+                    block and block.get('valid') and block.get('status') == 'STUCK_NEEDS_ESCALATION'))
+            if done:
+                bp = blueprint.complete(bp)
+            bp, _ = blueprint.adjust(bp, blueprint.evaluate(bp))
+            state['plan'] = bp
+            _save_plan(state['db'], loop_spec, bp)
+            if bp['halt'] and not done:
+                return _result('needs_input', iteration, last_job, 'plan halted: ' + bp['halt'])
+            if blueprint.finished(bp) and not done:
+                return _result('needs_input', iteration, last_job,
+                               'plan complete: every step is finished; confirm the objective is done')
 
         if once:
             if done:

@@ -173,7 +173,7 @@ def resolve_worker(instruction, model=None, runner=None, env=None,
 
 def build_task(task_id, objective, workspace, checks, instruction,
                model=None, runner=None, env=None, timeout_seconds=600,
-               opencode=DEFAULT_OPENCODE, repair_allowance=1):
+               opencode=DEFAULT_OPENCODE, repair_allowance=1, wall_time_seconds=600):
     """Return ``(spec, resolved)``: a submittable command-mode factory task whose
     implementation is the resolved worker invocation.
 
@@ -193,7 +193,7 @@ def build_task(task_id, objective, workspace, checks, instruction,
             'acceptance_ids': ['A%d' % (index + 1) for index in range(len(checks))],
             'required_capabilities': [], 'project_constraints': [],
             'measured_evidence': None, 'provider_availability': None,
-            'budget': {'wall_time_seconds': 600, 'token_limit': None,
+            'budget': {'wall_time_seconds': wall_time_seconds, 'token_limit': None,
                        'cost_limit_usd': None, 'resource_limits': None,
                        'repair_allowance': repair_allowance},
         },

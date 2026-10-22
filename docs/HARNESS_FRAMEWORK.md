@@ -68,6 +68,37 @@ contract block `overseer/factory.py:72`, which is required for new
 command-mode submissions; the block records a risk tier, and nothing enforces
 it.
 
+## Task sizing (CONTRACT)
+
+Filed against the CONTRACT pillar: the size of the objective sets the contract's
+budget before any attempt runs. `overseer/sizing.py` scores an objective on five
+dimensions (breadth, novelty, uncertainty, integration, risk; 0 to 3 each) and
+returns a tier, a step count, a repair allowance capped at the blueprint bound,
+a model strength with a stronger one to escalate to, a reasoning effort, and a
+`budget` block the contract validator accepts. `python3 -m overseer assess
+"<objective>"` prints it. The unattended loop uses it when the loop spec sets
+`size` (true, or an object of dimension overrides): the contract's
+`repair_allowance` and `wall_time_seconds` come from the assessment, and
+`strength_models` (strength to model id) picks the worker model, one strength
+higher after a failed attempt. An explicit `repair_allowance` or `model` in the
+loop spec always wins.
+
+`overseer/blueprint.py` turns the assessment into a step plan (steps with an
+iteration budget each; `assess --plan`). With `size` set, the loop records every
+iteration against the active step, evaluates it (steps done, product state,
+whether the estimate was too low, about right, or too high), and adjusts: it
+extends an overrun step, rescales the remaining steps from the measured pace,
+raises the model strength, and halts for the operator when the plan stalls. The
+plan is saved beside the ledger as `<db>.plan.json`, and `overseer progress
+<file>` reads it. A step finishes only when its checks pass and the worker prints
+`OVERSEER_STEP_DONE`; a worker that never does leaves the pace unmeasured. Each prompt carries a step brief naming the step, what done means, and the two markers. When every step is finished without `OVERSEER_DONE`, the loop stops with needs_input so the operator confirms the objective is done; it never invents more work.
+
+Verdict: implemented and tested, but the scoring is a keyword heuristic and the
+tier tables are unmeasured starting choices, so every assessment is provisional.
+Token and cost limits stay null. Nothing is calibrated against real run results
+yet. Next increment: record each loop's assessed tier beside its measured
+iterations and outcome, then adjust the tables from that record.
+
 ## Two systems, not bridged
 
 - System A, the terminal monitor: command surface `overseer/__main__.py:309`,

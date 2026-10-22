@@ -92,6 +92,70 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(result['state'], 'frozen')
         self.assertEqual(self.lineage('loop-0')['state'], 'frozen')
 
+    def test_size_sets_the_budget_and_reports_the_assessment(self):
+        result = self.drive([{'next': '', 'markers': ['OVERSEER_DONE']}], once=True,
+                            size=True, repair_allowance=None)
+        self.assertEqual(result['sizing']['tier'], 'trivial')
+        f = Factory(self.db)
+        try:
+            budget = f.inspect('loop-0')['spec']['contract']['budget']
+        finally:
+            f.close()
+        self.assertEqual(budget['repair_allowance'], result['sizing']['repair_allowance'])
+        self.assertEqual(budget['wall_time_seconds'], result['sizing']['budget']['wall_time_seconds'])
+
+    def test_size_picks_the_model_by_strength_and_escalates_after_a_failure(self):
+        models = {'light': 'opencode/model-light', 'standard': 'opencode/model-standard', 'strong': 'opencode/model-strong'}
+        result = self.drive([
+            {'next': 'again', 'exit': 1},
+            {'next': '', 'markers': ['OVERSEER_DONE']},
+        ], size=True, strength_models=models, repair_allowance=1)
+        self.assertEqual(result['sizing']['strength'], 'light')
+        calls = self.argv_calls()
+        self.assertIn('opencode/model-light', ' '.join(calls[0]))
+        self.assertIn(models[result['sizing']['escalation_strength']], ' '.join(calls[1]))
+
+    def test_size_tracks_steps_and_saves_the_plan_beside_the_ledger(self):
+        result = self.drive([
+            {'next': 'second', 'markers': ['OVERSEER_STEP_DONE']},
+            {'next': '', 'markers': ['OVERSEER_DONE']},
+        ], size={'breadth': 2, 'novelty': 2}, repair_allowance=None)
+        evaluation = result['blueprint']['evaluation']
+        self.assertEqual(evaluation['verdict'], 'done')
+        self.assertGreaterEqual(evaluation['iterations_used'], 2)
+        saved = json.loads(Path(str(self.db) + '.plan.json').read_text())
+        self.assertEqual(saved['plan']['steps'][0]['status'], 'done')
+        self.assertEqual(saved['plan']['steps'][-1]['status'], 'closed')
+
+    def test_size_halts_for_the_operator_when_the_plan_stalls(self):
+        result = self.drive([
+            {'next': 'a', 'files': '[]'}, {'next': 'b', 'files': '[]'}, {'next': 'c', 'files': '[]'},
+        ], size={'breadth': 2, 'novelty': 2}, repair_allowance=None)
+        self.assertEqual(result['state'], 'needs_input')
+        self.assertIn('plan halted', result['detail'])
+
+    def test_size_gives_the_worker_the_step_brief_and_keeps_the_instruction(self):
+        self.drive([{'next': 'SECOND STEP: finish the work', 'markers': ['OVERSEER_STEP_DONE']},
+                    {'next': '', 'markers': ['OVERSEER_DONE']}],
+                   size={'breadth': 2, 'novelty': 2}, repair_allowance=None)
+        calls = self.argv_calls()
+        self.assertIn('[Overseer plan] Step 1 of', calls[0][-1])
+        self.assertIn('OVERSEER_STEP_DONE', calls[0][-1])
+        self.assertTrue(calls[0][-1].endswith('FIRST STEP: begin the work'))
+        self.assertIn('Step 2 of', calls[1][-1])
+        self.assertTrue(calls[1][-1].endswith('SECOND STEP: finish the work'))
+
+    def test_size_stops_for_confirmation_when_every_step_is_finished(self):
+        result = self.drive([{'next': 'more', 'markers': ['OVERSEER_STEP_DONE']},
+                             {'next': 'more', 'markers': []}], size=True, repair_allowance=None)
+        self.assertEqual(result['state'], 'needs_input')
+        self.assertIn('plan complete', result['detail'])
+        self.assertEqual(result['iterations'], 1)
+
+    def test_without_size_the_loop_is_unchanged(self):
+        result = self.drive([{'next': '', 'markers': ['OVERSEER_DONE']}], once=True)
+        self.assertNotIn('sizing', result)
+
     def test_the_loop_stops_when_dispatch_is_paused(self):
         f = Factory(self.db)
         f.pause('maintenance')

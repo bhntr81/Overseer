@@ -9,7 +9,9 @@ import signal
 import sys
 import time
 
+from . import blueprint
 from . import provider
+from . import sizing
 from . import usageguard
 from .escalation import adopt, release
 from .halt import clear, note, read_state, render
@@ -358,6 +360,16 @@ def main():
     unfreeze = sub.add_parser("unfreeze")
     unfreeze.add_argument("pane", help="tmux pane ID, e.g. %%0")
     unfreeze.add_argument("--state", type=Path, default=STATE)
+    size = sub.add_parser("assess", help="size an objective: tier, steps, repairs, model, budget")
+    size.add_argument("description", help="the objective in plain words")
+    size.add_argument("--set", action="append", default=[], metavar="DIMENSION=N",
+                      help="override a dimension (%s) with 0 to 3" % ", ".join(sizing.DIMENSIONS))
+    size.add_argument("--json", action="store_true")
+    size.add_argument("--plan", action="store_true", help="also write out the steps and their iterations")
+    size.add_argument("--steps", help="comma-separated step names to use instead of the tier's template")
+    progress = sub.add_parser("progress", help="evaluate a saved step plan (the .plan.json beside the ledger)")
+    progress.add_argument("plan_file", type=Path)
+    progress.add_argument("--json", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
@@ -408,6 +420,32 @@ def main():
             pane = command("display-message", "-p", "-t", args.pane, "#{pane_id}").strip()
             command("set-option", "-p", "-t", pane, "@overseer", "1" if args.action == "watch" else "0")
             print(f"{args.action}: {pane}")
+        elif args.action == "assess":
+            overrides = {}
+            for item in args.set:
+                name, _, value = item.partition("=")
+                if not value.isdigit():
+                    raise ValueError("--set takes DIMENSION=N, got %r" % item)
+                overrides[name] = int(value)
+            result = sizing.assess(args.description, overrides)
+            steps = None
+            if args.plan or args.steps:
+                names = [n.strip() for n in args.steps.split(",")] if args.steps else None
+                steps = blueprint.make_plan(result, names)
+            if args.json:
+                data = result.as_dict()
+                if steps:
+                    data["plan"] = steps
+                print(json.dumps(data, indent=2))
+            else:
+                print(sizing.render(result))
+                if steps:
+                    print(blueprint.render_plan(steps))
+        elif args.action == "progress":
+            saved = json.loads(args.plan_file.read_text())["plan"]
+            evaluation = blueprint.evaluate(saved)
+            print(json.dumps(evaluation, indent=2) if args.json else
+                  blueprint.render_plan(saved) + "\n" + blueprint.render_evaluation(evaluation))
         elif args.action == "model-select":
             return model_select(args)
         elif args.action == "unfreeze":
