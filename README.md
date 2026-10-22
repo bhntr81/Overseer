@@ -428,6 +428,16 @@ python3 -m overseer run
 ```
 
 To enable sending, set `dry_run` to `false` in `config.json`.
+
+`usage_winddown_percent` (default `5`) is the usage guard. When the worker's pane
+shows an account limit nearly spent — e.g. `You've used 97% of your weekly limit`
+— and at most this many percent of the most-constrained limit remain, the monitor
+sends one wind-down instruction (finish the change in progress, commit and push
+loose ends, update the handoff, then stop) in place of a routine continuation,
+and then holds the pane, so the worker reaches a clean stop instead of being cut
+off mid-change. A pane with no usage line is never wound down; a fresh session
+(new pane process) starts ungated. Set it to a negative number to disable.
+
 `reply` is the single-line instruction used when a pane has not yet printed a
 report. The included reply tells the client to follow
 `/home/kali/Programming/Projects/AGENTS.md` and the coder optimization playbook, do the next

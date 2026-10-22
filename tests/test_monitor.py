@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from overseer import usageguard
 from overseer.__main__ import settings, tick
 from overseer.escalation import HOLD_ESCALATION, HOLD_STRIKES
 from overseer.policy import Policy
@@ -55,6 +56,32 @@ class MonitorTests(unittest.TestCase):
             tick(backend, Policy(idle_seconds=0), {}, config, path, 0)
             tick(backend, Policy(idle_seconds=0), json.loads(path.read_text()), config, path, 2000)
         backend.send.assert_called_once_with(SCREEN, "Please continue.")
+
+    def test_usage_wind_down_is_sent_once_then_holds(self):
+        text = ("You've used 97% of your weekly limit\n"
+                "Would you like me to continue?\n›")
+        screen = Snapshot("%0", "codex", "123", text, "›", "0", "0")
+        backend = Mock()
+        backend.panes.return_value = ["%0"]
+        backend.snapshot.return_value = screen
+        config = {"dry_run": False, "reply": "Please continue."}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            tick(backend, Policy(idle_seconds=0), {}, config, path, 0)
+            backend.send.assert_called_once_with(screen, usageguard.winddown_prompt())
+            # A later cycle while still near the limit must not prod it again.
+            tick(backend, Policy(idle_seconds=0), json.loads(path.read_text()), config, path, 2000)
+        backend.send.assert_called_once()
+
+    def test_usage_wind_down_respects_dry_run(self):
+        text = "You've used 99% of your weekly limit\nWould you like me to continue?\n›"
+        screen = Snapshot("%0", "codex", "123", text, "›", "0", "0")
+        backend = Mock()
+        backend.panes.return_value = ["%0"]
+        backend.snapshot.return_value = screen
+        with tempfile.TemporaryDirectory() as directory:
+            tick(backend, Policy(idle_seconds=0), {}, {"dry_run": True}, Path(directory) / "state.json", 0)
+        backend.send.assert_not_called()
 
     def test_changed_screen_is_not_sent(self):
         backend = Tmux()

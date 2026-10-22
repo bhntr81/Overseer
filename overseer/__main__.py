@@ -10,6 +10,7 @@ import sys
 import time
 
 from . import provider
+from . import usageguard
 from .escalation import adopt, release
 from .halt import clear, note, read_state, render
 from .modelchoice import RESOLUTIONS, model_id, opencode_empty, providers, running_marker
@@ -229,6 +230,27 @@ def tick(backend, policy, state, config, path, now):
                 continue
             if not snapshot.ready:
                 entry.pop("fingerprint", None)
+                continue
+            # Usage guard: when the account's most-constrained limit is nearly
+            # spent, send one wind-down instruction and then hold, so the worker
+            # reaches a clean stop instead of being cut off mid-change. The flag
+            # is per pane-process (the key carries the pid), so a fresh session
+            # starts ungated.
+            winddown_at = config.get("usage_winddown_percent", usageguard.DEFAULT_THRESHOLD_PERCENT)
+            if usageguard.should_wind_down(snapshot.text, winddown_at):
+                if entry.get("wound_down"):
+                    note(entry, "usage wind-down already sent; holding", snapshot.text, pane, now)
+                    continue
+                if config["dry_run"]:
+                    LOG.info("%s would send usage wind-down (dry run)", pane)
+                    entry["wound_down"] = True
+                    continue
+                policy.acknowledge(entry, snapshot.text, now)
+                entry["wound_down"] = True
+                save(path, state)
+                backend.send(snapshot, usageguard.winddown_prompt())
+                clear(entry)
+                LOG.info("%s sent usage wind-down (<= %d%% remaining)", pane, winddown_at)
                 continue
             completed = (snapshot.process == "opencode" and opencode_empty(snapshot.cursor_line)
                          and bool(entry.get("ran_turn")))

@@ -4125,3 +4125,38 @@ state inherit-by-default with the OpenCode fallback and the credit caveat.
 Note: for the new default to take effect the monitor must be restarted; the
 already-running clubwpt-ocr opencode worker predates this change and is a
 separate monitor session, not the factory loop.
+
+## 2026-10-22 — Usage guard: wind down before the account limit cuts in
+
+Added a usage budget guard so a worker reaches a clean stop before its account
+usage runs out, instead of being cut off mid-change.
+
+- `overseer/usageguard.py` (new): reads the usage line a client prints in its
+  pane (e.g. "You've used 97% of your weekly limit"), ANSI-stripped and bound to
+  the last 64 KiB like the status-block reader. `used_percent` returns the
+  most-constrained limit's percent (clamped to 100), `remaining_percent` its
+  complement, `should_wind_down(text, threshold=5)` is true only when a usage
+  line is present and at most the threshold remains (unknown usage never winds
+  down), and `winddown_prompt()` is the one-line instruction (finish the change
+  in progress, commit/push loose ends, update the handoff, then stop; do not
+  start new work).
+- `overseer/__main__.py` `tick()`: after the ready check and before the routine
+  continuation, when `should_wind_down` holds the monitor sends the wind-down
+  prompt once (respecting `dry_run`), marks the pane entry `wound_down`, and then
+  holds — so it is sent once per pane-process and the worker is not prodded again.
+  The threshold is `config["usage_winddown_percent"]` (default 5; negative
+  disables).
+- `config.json`: `usage_winddown_percent: 5`. `README.md`: documented under the
+  monitor config.
+
+Tests: `tests/test_usageguard.py` (17; sha256
+`53c8f9bfd89ef5519ebeac4a3923f85536a387cfa993ad03af664b414e9e1cc6`) and two new
+`tests/test_monitor.py` cases (wind-down sent once then holds; dry-run never
+sends). Full suite `python3 scripts/check`: 513 OK. Mutations M1 `<=`→`<`
+(boundary), M2 drop the 100-clamp, M3 `max`→`min` (least- not most-constrained),
+M4 drop the resend guard — each failed the suite as expected, then reverted.
+
+Activation: the guard is wired on disk but the running monitor imported the old
+`__main__` at start, so it takes effect only when `overseer.service` is
+restarted. Not restarted here, to avoid disturbing the live clubwpt-claude
+autonomy run; restart to activate.
