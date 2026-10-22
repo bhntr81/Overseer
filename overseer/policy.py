@@ -34,6 +34,7 @@ NEEDS_INPUT_MARK = re.compile(r"^\s*(?:[•*-]\s*)?OVERSEER_NEEDS_INPUT\b", re.M
 STEP_DONE_MARK = re.compile(r"^\s*(?:[•*-]\s*)?OVERSEER_STEP_DONE\b", re.MULTILINE)
 STOP_REASON = "client requested no further automatic continuation"
 HANDOFF_REASON = "finished step; writer handoff due"
+INVALID_REPORT = "invalid output report"
 COMPLETED = re.compile(r"Worked for .+ •", re.IGNORECASE)
 
 
@@ -67,7 +68,8 @@ _REPORT_TAIL = (
     "status is continue, step_done, done, or needs_input. "
     "A prompt's stopping condition ends that prompt, not the objective: if a next step "
     "remains, use step_done, put it in remaining, and end with \"OVERSEER_STEP_DONE\". "
-    "Use done only when the objective has no actionable next step; do not invent work."
+    "Use done only when the objective has no actionable next step; do not invent work. "
+    "Do not insert line breaks in the report; the terminal may wrap it."
 )
 
 
@@ -77,6 +79,36 @@ def _controls(text):
 
 def _sendable(text):
     return isinstance(text, str) and bool(text.strip()) and len(text) <= MAX_PROMPT and not _controls(text)
+
+
+# A terminal that draws a long line with hard newlines (Claude Code: indented
+# two spaces, broken at a space it drops) splits a report over several lines.
+REPORT_WRAP_LINES = 12
+_WRAP_END = re.compile(r"^\s*(?:[›❯>] |OVERSEER_(?:REPORT|STEP_DONE|DONE|NEEDS_INPUT)\b)")
+
+
+def _decode_report(rest, following):
+    """Return the report object starting at `rest`, joining up to REPORT_WRAP_LINES following lines.
+
+    The parts are joined with one space, the one the terminal dropped; a word
+    broken inside gains a space, which only a value can hold. Joining stops at
+    a prompt line, another report or a marker. No pattern rewrites the JSON.
+    """
+    decoder = json.JSONDecoder()
+    candidate = rest
+    for extra in [None] + list(following):
+        if extra is not None:
+            if _WRAP_END.match(extra):
+                return None
+            candidate += " " + extra.strip()
+        try:
+            value, end = decoder.raw_decode(candidate)
+        except json.JSONDecodeError:
+            continue
+        if candidate[end:].strip() or not isinstance(value, dict):
+            return None
+        return value
+    return None
 
 
 def _report_state(text):
@@ -89,7 +121,8 @@ def _report_state(text):
     cleaned = ANSI.sub("", text)
     found = False
     payload = None
-    for line in cleaned.splitlines():
+    lines = cleaned.splitlines()
+    for index, line in enumerate(lines):
         body = line.strip()
         if not body.startswith(REPORT_MARK):
             continue
@@ -97,15 +130,7 @@ def _report_state(text):
         if not rest.startswith("{"):
             continue
         found = True
-        try:
-            value, end = json.JSONDecoder().raw_decode(rest)
-        except json.JSONDecodeError:
-            payload = None
-            continue
-        if rest[end:].strip() or not isinstance(value, dict):
-            payload = None
-            continue
-        payload = value
+        payload = _decode_report(rest, lines[index + 1:index + 1 + REPORT_WRAP_LINES])
     if not found:
         return "absent", None
     if not isinstance(payload, dict):
@@ -260,14 +285,14 @@ def next_prompt(text, fallback, *, capacity=False):
     if capacity:
         if _sendable(fallback):
             return fallback, "routine continuation"
-        return None, "invalid output report"
+        return None, INVALID_REPORT
     kind, fields = _report_state(text)
     if kind == "absent":
         if _sendable(fallback):
             return fallback, "routine continuation"
-        return None, "invalid output report"
+        return None, INVALID_REPORT
     if kind == "invalid":
-        return None, "invalid output report"
+        return None, INVALID_REPORT
     if kind == "stop":
         return None, "output report requested no further continuation"
     if kind == "empty":
@@ -279,11 +304,11 @@ def next_prompt(text, fallback, *, capacity=False):
             return None, "step report belongs to an earlier turn"
         prompt = _compose_handoff(fields)
         if prompt is None:
-            return None, "invalid output report"
+            return None, INVALID_REPORT
         return prompt, "writer handoff prompt"
     prompt = _compose(fields)
     if prompt is None:
-        return None, "invalid output report"
+        return None, INVALID_REPORT
     return prompt, "report-based prompt"
 
 
@@ -308,6 +333,10 @@ def classify(text, continue_on_completion=False, completed=False, entry=None):
         return False, "active generation, permission, or sensitive action visible"
     if handoff_due(text, tail):
         return True, HANDOFF_REASON
+    if _report_state(current_turn(text))[0] == "invalid":
+        # Eligible so that next_prompt withholds and holds it, and the halt
+        # note announces it once, instead of the pane idling unexplained.
+        return True, INVALID_REPORT
     if continue_on_completion and (COMPLETED.search(tail) or completed):
         return True, "completed turn with empty composer"
     if not CONTINUE.search(tail):

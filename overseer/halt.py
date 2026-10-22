@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 from .escalation import HOLD_ESCALATION, HOLD_STRIKES
-from .policy import NEEDS_INPUT_MARK, STOP_REASON, current_turn
+from .policy import INVALID_REPORT, NEEDS_INPUT_MARK, STOP_REASON, current_turn
 from .route import session_name
 
 LOG = logging.getLogger("overseer")
@@ -48,6 +48,7 @@ REASONS = {
     HOLD_STRIKES: (HALTED, UNFREEZE),
     MODEL_PENDING: (PAUSED, MODEL_SELECT),
     CAPACITY_LIMIT: (PAUSED, "manual intervention needed; the pane is not retried"),
+    INVALID_REPORT: (PAUSED, "print the OVERSEER_REPORT again with its JSON on one line"),
 }
 
 

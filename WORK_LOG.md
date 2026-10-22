@@ -4160,3 +4160,41 @@ Activation: the guard is wired on disk but the running monitor imported the old
 `__main__` at start, so it takes effect only when `overseer.service` is
 restarted. Not restarted here, to avoid disturbing the live clubwpt-claude
 autonomy run; restart to activate.
+
+## 2026-10-22 — Read a report the worker's terminal wrapped; announce one that stays unreadable
+
+By Claude (Opus 5.5, Claude Code) on Kali, from the clubwpt-ocr session, at
+John's request (REPORT_WRAP_NEXT_PROMPT.md). Pillar: CONTRACT (monitor report
+contract).
+
+Observed: pane %7 (clubwpt-claude, 157 columns) ended a turn with a ~700
+character OVERSEER_REPORT. Claude Code draws a long line with hard newlines
+(indented two spaces, broken at a space it drops), so `capture-pane -p`, and
+`-J` as well, gave it as six lines. `_report_state` decoded only the first,
+called the report invalid, `classify` fell through to "no recognized routine
+continuation question", nothing was announced, and the pane sat idle.
+
+- `overseer/policy.py`: `_decode_report` joins up to REPORT_WRAP_LINES (12)
+  following lines with one space each, decoding after each, and stops at a
+  prompt line, another report or a marker; the latest report still wins and
+  trailing text is still refused. `classify` returns (True, "invalid output
+  report") for an unreadable report of the current turn, so `next_prompt`
+  withholds and holds it as before and `note` can announce it. INVALID_REPORT
+  constant used throughout. The report instruction adds "Do not insert line
+  breaks in the report; the terminal may wrap it."
+- `overseer/halt.py`: INVALID_REPORT is a PAUSED reason, resumed by printing
+  the report again with its JSON on one line; announced once.
+- `docs/HARNESS_FRAMEWORK.md`: CONTRACT row references and verdict.
+
+Tests (written first, red for the 4 defect cases, then green):
+`tests/test_report_wrap.py` (9; sha256 `3d3c9eeb77f004e2343b0c160d7b3d0dfd34ff6065da44157046ad1140176a1f`). Mutations: M1
+REPORT_WRAP_LINES 12 -> 0 and M2 dropping the classify branch each fail 2 tests,
+then reverted. Dry run: the long report rendered at 157 columns (5 lines) gives
+"finished step; writer handoff due" and the writer handoff prompt.
+`python3 scripts/check`: 568 run, 1 failure, pre-existing and unrelated:
+`test_usageguard.UsedPercentTests.test_the_most_constrained_limit_wins` (40 !=
+96), failing on 0065b0d without this change. `scripts/check-doc-references`:
+271 OK.
+
+Activation: the running monitor imported the old code; it takes effect when
+John restarts it (`systemctl --user restart overseer`). Not restarted here.
