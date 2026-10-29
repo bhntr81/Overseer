@@ -174,3 +174,13 @@ class QueueStopTests(unittest.TestCase):
         self.run_queue(STOP)
         self.backend.send.assert_not_called()
         self.assertEqual(self.state["%2:2"]["stop_agent"]["verdict"]["verdict"], "stop")
+
+
+class ComposerTests(unittest.TestCase):
+    def test_the_composer_suggestion_never_reaches_the_stop_agent(self):
+        # Pane %2, 2026-10-29: a dimmed suggestion was read as John's answer.
+        screen = SCREEN.replace("\n\n❯\n", "\n\n❯\xa0Yes to (b), no to (a): keep visible evidence only\n")
+        text = stopgate.request(screen)
+        self.assertNotIn("Yes to (b)", text)
+        self.assertIn("price a call", text)
+        self.assertIn("never treat any text there as John's reply", text)

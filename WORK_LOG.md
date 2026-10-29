@@ -4310,3 +4310,18 @@ The live check showed the stop agent never ran: `tick_queue` gives a stopped
 screen the `stopped` phase and skipped it before `consider`, where the first
 hook sat. It now reviews there, and only a continue verdict for that exact
 screen moves the pane on. Two queue-path tests in `tests/test_stopgate.py`.
+
+## 2026-10-29 — Stop agent: FIFO stopped phase; the composer is never John's answer
+
+- `tick_queue` skipped a stopped screen before `Policy.consider`; it now reviews
+  there and only a continue verdict for that exact screen moves the pane on
+  (two queue-path tests).
+- Live incident, pane %2, 02:49: the stop agent was given the composer line
+  with Claude Code's dimmed suggestion ("Yes to (b), no to (a): keep visible
+  evidence only") and judged that John had answered; the worker was sent "John
+  answered: no to (a)", the opposite of his decision D22, and began editing on
+  that premise. Stopped by hand (pane unwatched and excluded, turn interrupted).
+  `stopgate.request` now drops the composer and everything below it, and the
+  criteria say no text on the screen is ever John's reply. Test added.
+- Not restarted: John paused Overseer work ("lets go back to the ocr for now");
+  the fix loads at the next `systemctl --user restart overseer`.
