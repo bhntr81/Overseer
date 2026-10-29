@@ -133,3 +133,44 @@ class StopGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueueStopTests(unittest.TestCase):
+    """The live FIFO path: a stopped screen is reviewed, then continued (pane %2)."""
+
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import Mock
+        from overseer.tmux import Snapshot
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "state.json"
+        self.screen = Snapshot("%2", "claude", "2", SCREEN, "❯", "0", "0", 2)
+        self.backend = Mock()
+        self.backend.panes.side_effect = lambda: ["%2"]
+        self.backend.snapshot.side_effect = lambda pane: self.screen
+        self.state = {}
+        self.policy = Policy(idle_seconds=0, cooldown_seconds=1)
+
+    def run_queue(self, verdict):
+        from overseer.__main__ import tick
+        cfg = dict(config(agent(verdict)), serial_queue=True, dry_run=False, reply="Continue.")
+        stopgate.JOBS.clear()
+        for second in range(60):
+            tick(self.backend, self.policy, self.state, cfg, self.path, 1000.0 + second)
+            if self.backend.send.called:
+                break
+            for process in list(stopgate.JOBS.values()):
+                process.wait(5)
+
+    def test_a_continue_verdict_is_sent_through_the_queue(self):
+        self.run_queue(CONTINUE)
+        self.assertEqual(self.backend.send.call_count, 1)
+        self.assertIn("capped at the stack", self.backend.send.call_args.args[1])
+        self.assertEqual(self.state["%2:2"]["stop_agent"]["status"], "sent")
+
+    def test_a_stop_verdict_sends_nothing_through_the_queue(self):
+        self.run_queue(STOP)
+        self.backend.send.assert_not_called()
+        self.assertEqual(self.state["%2:2"]["stop_agent"]["verdict"]["verdict"], "stop")

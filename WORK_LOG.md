@@ -4303,3 +4303,10 @@ treats it as empty only when every character after the glyph is dim (`ESC[2m`).
 Claude draws a no-break space after `❯`; both spaces are accepted.
 `tests/test_suggestion.py` (6). 608 tests OK. Single-program mode's screen model
 ignores colours, so it still cannot tell a suggestion from typed text (open).
+
+## 2026-10-29 — Stop agent wired into the FIFO queue's stopped phase
+
+The live check showed the stop agent never ran: `tick_queue` gives a stopped
+screen the `stopped` phase and skipped it before `consider`, where the first
+hook sat. It now reviews there, and only a continue verdict for that exact
+screen moves the pane on. Two queue-path tests in `tests/test_stopgate.py`.

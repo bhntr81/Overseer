@@ -12,7 +12,7 @@ from .modelchoice import (
 from . import stopgate
 from .policy import (
     ANSI, BLOCKED, COMPLETED, CONTINUE, DEFAULT_REPLY, STEP_DONE_MARK, STOP, classify,
-    current_turn, fingerprint, hold, next_prompt, stop_requested,
+    STOP_REASON, current_turn, fingerprint, hold, next_prompt, stop_requested,
 )
 from .route import resolve_route
 from .tmux import CLIENTS
@@ -233,8 +233,13 @@ def tick_queue(backend, policy, state, config, path, now, save):
         model_note = None
         entry['queue_kind'] = 'capacity' if capacity else 'continuation'
         if phases[key] == 'stopped':
-            entry['queue_reason'] = 'client requested no further automatic continuation'
-            continue
+            # The stop agent (stopgate.py) reviews the stop first; only its
+            # continue verdict for this exact screen lets the pane go on.
+            stopgate.review(entry, s.text, STOP_REASON, config, now, s.pane)
+            if not stopgate.ready_override(entry, s.text):
+                entry['queue_reason'] = STOP_REASON
+                continue
+            phases[key] = 'finished'
         if phases[key] == 'model_blocked':
             failure = model_failure(s)
             if failure is None:
