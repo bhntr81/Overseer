@@ -466,3 +466,16 @@ class EscalationHoldTests(unittest.TestCase):
         policy.consider(entry, block % ("TRUE", "a clean step") + QUESTION, 5)
         self.assertEqual(entry["escalation"]["strikes"], 0)
         self.assertIsNone(entry["escalation"]["held"])
+
+
+class ShortScreenTests(unittest.TestCase):
+    """A screen not yet full still shows its finished step (2026-10-29)."""
+
+    def test_a_step_done_above_blank_rows_is_a_handoff(self):
+        report = json.dumps({"status": "step_done", "objective": "E2E objective",
+                             "remaining": "step two", "done": "step one", "evidence": "fake"})
+        screen = ("Did step 1.\nOVERSEER_REPORT " + report + "\nOVERSEER_STEP_DONE\n\n❯\n"
+                  + "\n" * 34)
+        eligible, _ = classify(screen)
+        self.assertTrue(eligible)
+        self.assertEqual(next_prompt(screen, "x")[1], "writer handoff prompt")

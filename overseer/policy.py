@@ -53,7 +53,11 @@ def current_turn(text):
 
 
 def tail_text(text):
-    return "\n".join(ANSI.sub("", text).splitlines()[-18:]).strip()
+    # The bottom of what is drawn, not of the window: a screen not yet full
+    # (a fresh session, a tall terminal) has blank rows below the composer,
+    # and taking the last rows of those hid OVERSEER_STEP_DONE (2026-10-29,
+    # `overseer here` end-to-end check at 40 rows).
+    return "\n".join(ANSI.sub("", text).rstrip().splitlines()[-18:]).strip()
 
 
 def fingerprint(text):

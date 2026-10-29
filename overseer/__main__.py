@@ -352,6 +352,14 @@ def main():
     start.add_argument("client", nargs="?", choices=["codex", "claude", "opencode"],
                        default=None, help="client to run; defaults to the launching LLM session")
     start.add_argument("client_args", nargs=argparse.REMAINDER)
+    here = sub.add_parser("here", help="run one client in this terminal, without tmux")
+    here.add_argument("--config", type=Path, default=ROOT / "config.json")
+    here.add_argument("--state", type=Path, default=None,
+                      help="state file (default: ~/.local/state/overseer/local-<pid>.json)")
+    here.add_argument("--cwd", type=Path, default=Path.cwd())
+    here.add_argument("client", nargs="?", choices=["codex", "claude", "opencode"],
+                      default=None, help="client to run; defaults to the launching LLM session")
+    here.add_argument("client_args", nargs=argparse.REMAINDER)
     select = sub.add_parser("model-select")
     select.add_argument("pane", nargs="?", help="tmux pane ID, e.g. %%0")
     select.add_argument("--provider", help="permitted provider id")
@@ -456,6 +464,13 @@ def main():
                 return 0
             print("No hold is recorded for %s." % args.pane, file=sys.stderr)
             return 1
+        elif args.action == "here":
+            from .local import run_attached
+            client = args.client or provider.default_runner()
+            state = args.state or (Path.home() / ".local/state/overseer"
+                                   / ("local-%d.json" % os.getpid()))
+            return run_attached(client, args.client_args, args.config, state,
+                                args.cwd, settings, tick, save)
         elif args.action == "start":
             # Default to the client of the LLM session that launched Overseer, so
             # running it from Claude Code starts a claude worker; free OpenCode

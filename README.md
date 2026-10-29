@@ -466,6 +466,24 @@ report, or a continue report with no objective or remaining step, also stops
 that screen instead of falling back to `reply`. Project-specific agent and model
 requirements still apply. Draft-only requests do not grant execution authority.
 
+Run one client in your own terminal, without tmux (single-program mode):
+
+```sh
+cd /path/to/project
+python3 -m overseer here claude            # or codex, opencode; extra args follow
+python3 -m overseer here --cwd DIR claude --resume
+```
+
+`here` starts the client behind a pseudo-terminal in this terminal, relays your
+keys to it, keeps a screen model of what it draws (`overseer/terminal.py`), and
+applies the same report policy as the tmux monitor to that screen. There is one
+"pane" (`local`), no FIFO queue and no routing. Its state is
+`~/.local/state/overseer/local-<pid>.json` unless `--state` is given, and its log
+is `~/.local/state/overseer/local.log`. The client ends when you leave it.
+Put options such as `--cwd` before the client name (this also applies to
+`start`: `overseer start --cwd DIR NAME claude ...`; after NAME, `--cwd` is passed
+to the client).
+
 Manage existing tmux panes:
 
 ```sh

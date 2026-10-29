@@ -4198,3 +4198,70 @@ then reverted. Dry run: the long report rendered at 157 columns (5 lines) gives
 
 Activation: the running monitor imported the old code; it takes effect when
 John restarts it (`systemctl --user restart overseer`). Not restarted here.
+
+## 2026-10-25 — Cross-repository capability assessment
+
+### Objective and execution
+
+The user asked whether Overseer could use capabilities from the three sibling
+repositories `vibe-check-mcp`, `vibe-coding-playbook`, and `awesome-vibe-coding`.
+The dedicated `/root/prompt_writer` authored a bounded research prompt and a
+final synthesis prompt. The primary agent read Overseer’s harness, factory,
+provider and skill records, then inspected the focused source and documentation
+in each sibling repository. This was a read-only assessment; no implementation
+files changed and no tests were run.
+
+### Findings
+
+- `vibe-check-mcp` offers an optional MCP-based, session-aware reflection and
+  learning loop. An on-demand clarification or risk check could complement
+  Overseer’s existing approvals and durable memory. The project is in
+  maintenance mode, and its advice should remain advisory rather than becoming
+  an approval or outcome authority.
+- `vibe-coding-playbook` offers task-specific review prompts and checklists,
+  especially for security, performance investigation, and layered verification.
+  Overseer already captures command evidence, but the factory execution record
+  says a passed job is not product/release acceptance. The current factory also
+  records skill provenance without supplying skills to workers. Curate useful
+  checklist content before using it; do not import its unsupported numeric
+  scoring as evidence.
+- `awesome-vibe-coding` is a curated link list, not an implementation source.
+  It can inform future client-adapter research, but contains no adapter to port.
+
+### Validation and review
+
+Evidence was checked directly in repository source and documentation, including
+`docs/FACTORY_EXECUTION.md`, `docs/FACTORY_SKILLS.md`, `overseer/provider.py`,
+the Vibe Check MCP tool definitions, the playbook verification/security/performance
+templates, and the Awesome list README. No code patch was produced, so no test
+or code-review run applies. The evidence-backed ranked assessment is delivered
+in the user response.
+
+## 2026-10-29 — Single-program mode (`overseer here`) finished; short-screen tail fix
+
+From Claude (Opus 5.5, Claude Code) on Kali, at John's request ("lets finish it").
+
+- Finished the uncommitted 2026-10-27 work: `overseer/local.py` (pseudo-terminal
+  driver, `PtyBackend` with the tmux `panes/snapshot/send` contract),
+  `overseer/terminal.py` (screen model) and the `here` subcommand. Added
+  `tests/test_terminal.py` (10) and `tests/test_local.py` (9), and a README section.
+- Bug found by the end-to-end check: `policy.tail_text` took the last 18 rows of
+  the window, blank rows included, so on a screen not yet full the
+  `OVERSEER_STEP_DONE` marker was outside the tail and a finished step was
+  classed "no recognized routine continuation question". It now drops trailing
+  blank rows first. tmux's `capture-pane -p` also returns every row (checked: 30
+  rows for 2 lines of output), so this affected tmux panes too. Regression test
+  `ShortScreenTests` in `tests/test_policy.py`.
+- End-to-end, under tmux with a fake `claude` on PATH and a throwaway config
+  (poll 2 s, idle 3 s): the fake printed a `step_done` report; Overseer typed
+  the writer-handoff prompt ("local sent writer handoff prompt"), the fake
+  answered with `done`, and Overseer paused ("client requested no further
+  automatic continuation").
+- Stale bytecode: `overseer/__pycache__/usageguard.cpython-314.pyc` was compiled
+  34 ms before the source's last save, same second and size, so Python kept
+  loading old code; `test_the_most_constrained_limit_wins` failed in this tree
+  (40 != 96) but passed in a clean worktree. Caches cleared. The service had
+  imported the stale code at 00:47, so it was restarted.
+- `python3 scripts/check`: 588 tests OK (was 568).
+- Not changed, documented: in `start NAME --cwd DIR claude`, argparse hands
+  `--cwd DIR` to the client (Claude exits, status 1); put `--cwd` first.
