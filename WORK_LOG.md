@@ -4289,3 +4289,17 @@ the amount it matched, which poker trackers settled long ago.
   and Hold'em Manager do" (6.6 s); logged-out client needing John's password ->
   stop/account_or_credentials (4.4 s).
 - Enabled in `config.json` (`stop_agent`). Service restarted.
+
+## 2026-10-29 — A Claude pane showing a prompt suggestion is ready
+
+From Claude (Opus 5.5, Claude Code) on Kali. Pane %2 (clubwpt-ocr worker) ended its
+turn at 02:22 with `needs_input`, but Overseer never considered it: Claude Code
+put a dimmed suggested reply in the empty composer ("❯ Yes to (b), no to (a): keep
+visible evidence only"), `capture-pane -p` shows that as text, so
+`Snapshot.ready` was false and the turn was never answered (nor reviewed by the
+stop agent). `Tmux.snapshot` now re-captures the cursor row with `-e` when a
+claude composer has text and the cursor is at column 2, and `suggestion_only`
+treats it as empty only when every character after the glyph is dim (`ESC[2m`).
+Claude draws a no-break space after `❯`; both spaces are accepted.
+`tests/test_suggestion.py` (6). 608 tests OK. Single-program mode's screen model
+ignores colours, so it still cannot tell a suggestion from typed text (open).

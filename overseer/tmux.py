@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import fnmatch
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
 
@@ -46,6 +47,44 @@ def command(*args):
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or "tmux command failed")
     return result.stdout
+
+
+_SGR = re.compile(r"\x1b\[([0-9;]*)m")
+
+
+def suggestion_only(styled_line):
+    """Whether a Claude composer line holds only its dimmed prompt suggestion.
+
+    After a turn Claude Code shows a suggested reply in the empty composer,
+    drawn dim ("\x1b[2m") with the cursor before it, e.g. "❯ Yes to (b), no
+    to (a)" on pane %2, 2026-10-29. The plain capture cannot tell that from
+    typed text, so the pane never looked ready and a finished turn was never
+    answered. Typed text is drawn without the dim attribute.
+    """
+    line = styled_line.rstrip("\n")
+    marker = line.find("❯")
+    if marker < 0:
+        return False
+    rest = line[marker + 1:]
+    dim, seen = False, False
+    position = 0
+    for match in _SGR.finditer(rest):
+        if rest[position:match.start()].strip():
+            if not dim:
+                return False
+            seen = True
+        codes = [code for code in match.group(1).split(";") if code] or ["0"]
+        for code in codes:
+            if code == "2":
+                dim = True
+            elif code in {"0", "22"}:
+                dim = False
+        position = match.end()
+    if rest[position:].strip():
+        if not dim:
+            return False
+        seen = True
+    return seen
 
 
 @dataclass(frozen=True)
@@ -165,6 +204,12 @@ class Tmux:
         lines = text.splitlines()
         cursor = int(cursor_y)
         cursor_line = lines[cursor] if cursor < len(lines) else ""
+        # Claude Code draws a no-break space after the prompt glyph.
+        if process == "claude" and cursor_line[:2] in {"❯ ", "❯\xa0"} and cursor_line[2:].strip() \
+                and int(cursor_x) == 2:
+            styled = command("capture-pane", "-p", "-e", "-t", actual, "-S", cursor_y, "-E", cursor_y)
+            if suggestion_only(styled):
+                cursor_line = "❯"
         return Snapshot(actual, process, pid, text, cursor_line, mode, dead, int(cursor_x))
 
     def inspect(self, pane):
