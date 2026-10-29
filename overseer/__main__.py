@@ -17,6 +17,7 @@ from .escalation import adopt, release
 from .halt import clear, note, read_state, render
 from .modelchoice import RESOLUTIONS, model_id, opencode_empty, providers, running_marker
 from .policy import DEFAULT_REPLY, Policy, hold, next_prompt
+from . import stopgate
 from .route import resolve_route
 from .tmux import CLIENTS, Tmux, command
 
@@ -258,10 +259,12 @@ def tick(backend, policy, state, config, path, now):
                          and bool(entry.get("ran_turn")))
             eligible, reason = policy.consider(entry, snapshot.text, now, completed=completed)
             if not eligible:
+                stopgate.review(entry, snapshot.text, reason, config, now, pane)
                 note(entry, reason, snapshot.text, pane, now)
                 LOG.debug("%s skipped: %s", pane, reason)
                 continue
-            prompt, kind = next_prompt(snapshot.text, config.get("reply", DEFAULT_REPLY))
+            prompt, kind = stopgate.prompt_for(
+                entry, snapshot.text, lambda: next_prompt(snapshot.text, config.get("reply", DEFAULT_REPLY)))
             if prompt is None:
                 hold(entry, snapshot.text, kind)
                 note(entry, kind, snapshot.text, pane, now)
@@ -279,7 +282,9 @@ def tick(backend, policy, state, config, path, now):
             save(path, state)
             backend.send(snapshot, prompt)
             clear(entry)
-            if kind in {"report-based prompt", "writer handoff prompt"}:
+            if kind == stopgate.OVERRIDE_KIND:
+                stopgate.sent(entry)
+            if kind in {"report-based prompt", "writer handoff prompt", stopgate.OVERRIDE_KIND}:
                 LOG.info("%s sent %s", pane, kind)
             else:
                 LOG.info("%s sent routine continuation", pane)

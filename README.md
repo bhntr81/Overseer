@@ -498,6 +498,40 @@ Do not type in a watched pane while the bot is responding; desktop input and
 tmux writes cannot be made atomic together. Unwatch the pane first when taking
 over manually.
 
+## The stop agent
+
+When a worker stops on its own (`needs_input`, `OVERSEER_NEEDS_INPUT`, or a
+bare `OVERSEER_DONE`), Overseer does not simply halt the pane. It first asks a
+separate model, the stop agent (`overseer/stopgate.py`), whether the stop is
+legitimate. The criteria are fixed in that file: money, accounts or
+credentials, site terms, safety or authorization rules, deleting data, an
+action only a person can do, conventions that genuinely conflict, a finished
+objective, repeated failure, or an explicit pause. Anything else, notably a
+product question that established software of the same kind already settles,
+is not a reason to wait for John.
+
+- `stop`: the halt stands; the verdict and reason are kept in the pane's state.
+- `continue`: the same, unchanged screen gets one continuation that carries
+  the stop agent's decision; the worker logs it in its decision log and goes
+  on through its prompt-writing agent.
+
+It runs in the background (one `claude -p` call per stopped screen, a few
+seconds) and fails closed: a timeout, an error or an unreadable verdict
+leaves the stop in place. A report whose `blocker` is `money`,
+`account_or_credentials`, `site_terms`, `safety_or_authorization`,
+`delete_data` or `external_action` is never reviewed. Overrides are capped per
+pane per day (`max_overrides_per_day`, default 4) and still count against the
+cooldown and daily reply limit. `journalctl --user -u overseer.service` shows
+every verdict ("stop agent: continue (...)"). Configure it in `config.json`:
+
+```json
+"stop_agent": {"enabled": true, "timeout_seconds": 300, "max_overrides_per_day": 4}
+```
+
+`command` overrides the default (`claude -p --no-session-persistence --model
+sonnet`, with editing and shell tools disallowed). Remove the block or set
+`enabled` to `false` to halt on every stop as before.
+
 ## The escalation hold
 
 The monitor holds a pane and sends it nothing at all in two cases:

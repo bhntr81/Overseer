@@ -4265,3 +4265,27 @@ From Claude (Opus 5.5, Claude Code) on Kali, at John's request ("lets finish it"
 - `python3 scripts/check`: 588 tests OK (was 568).
 - Not changed, documented: in `start NAME --cwd DIR claude`, argparse hands
   `--cwd DIR` to the client (Claude exits, status 1); put `--cwd` first.
+
+## 2026-10-29 — The stop agent: a second opinion before a worker's stop halts the pane
+
+From Claude (Opus 5.5, Claude Code) on Kali. John: "we should create a stop agent
+whenever overseer wants to stop and prompt us; the stop agent should use criteria
+to determine if this is a legitimate stopping point or something overseer could
+handle itself ... or it could just tell overseer to continue instead of stopping."
+Trigger: a clubwpt-ocr worker had been told to ask John whether to price a call at
+the amount it matched, which poker trackers settled long ago.
+
+- `overseer/stopgate.py`: on `STOP_REASON` the monitor starts one background
+  `claude -p` (Sonnet, no edit/shell tools) per stopped screen with fixed
+  criteria; the next poll reads a one-line JSON verdict. `continue` makes that
+  exact screen eligible (`Policy.consider`) and `prompt_for` sends a
+  continuation carrying the decision; `stop` keeps the halt. Fails closed on
+  timeout, error, unreadable output; always-stop blockers are never reviewed;
+  4 overrides per pane per day. Hooked into both `__main__.tick` and
+  `scheduler.tick_queue` (the live FIFO path).
+- `tests/test_stopgate.py` (14), with fake agents; warnings-as-errors clean.
+- Real agent, two screens: call pricing -> continue/not_legitimate, decision
+  "price a call at the amount it matched, capped by the stack, as PokerTracker
+  and Hold'em Manager do" (6.6 s); logged-out client needing John's password ->
+  stop/account_or_credentials (4.4 s).
+- Enabled in `config.json` (`stop_agent`). Service restarted.

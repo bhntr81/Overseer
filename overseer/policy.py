@@ -362,6 +362,12 @@ class Policy:
         if state.get("fingerprint") != digest or now < state.get("stable_since", now):
             state.update(fingerprint=digest, stable_since=now)
         eligible, reason = classify(text, self.continue_on_completion, completed, entry=state)
+        if reason == STOP_REASON:
+            # The stop agent (stopgate.py) found this exact screen's stop not
+            # legitimate: it is answered like any eligible screen.
+            from .stopgate import OVERRIDE_REASON, ready_override
+            if ready_override(state, text):
+                eligible, reason = True, OVERRIDE_REASON
         holds = state.get("escalation")
         if reason == STOP_REASON or (isinstance(holds, dict) and holds.get("held")):
             # A stopped or held pane is never sent to, not even a capacity retry.

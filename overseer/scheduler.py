@@ -9,6 +9,7 @@ from .modelchoice import (
     RESOLUTIONS, detect, fallback_policy, next_hop, opencode_answer, opencode_empty,
     providers, running_marker,
 )
+from . import stopgate
 from .policy import (
     ANSI, BLOCKED, COMPLETED, CONTINUE, DEFAULT_REPLY, STEP_DONE_MARK, STOP, classify,
     current_turn, fingerprint, hold, next_prompt, stop_requested,
@@ -289,8 +290,10 @@ def tick_queue(backend, policy, state, config, path, now, save):
         eligible, reason = policy.consider(entry, s.text, now, capacity=capacity,
                                            retry_seconds=config.get('capacity_retry_seconds', 120),
                                            resume=resume, completed=opencode_done)
+        if not eligible:
+            stopgate.review(entry, s.text, reason, config, now, s.pane)
         if eligible and not capacity and not resume:
-            prompt, kind = next_prompt(s.text, fallback)
+            prompt, kind = stopgate.prompt_for(entry, s.text, lambda: next_prompt(s.text, fallback))
             if prompt is None:
                 eligible = False
                 reason = kind
@@ -325,7 +328,7 @@ def tick_queue(backend, policy, state, config, path, now, save):
     entry = state[key]
     if config['dry_run']:
         if entry.get('previewed') != entry['fingerprint']:
-            _, kind = ('', 'routine continuation') if phases[key] == 'capacity' else next_prompt(s.text, fallback)
+            _, kind = ('', 'routine continuation') if phases[key] == 'capacity' else stopgate.prompt_for(entry, s.text, lambda: next_prompt(s.text, fallback))
             if kind in {'report-based prompt', 'writer handoff prompt'}:
                 LOG.info('%s would send %s in FIFO queue (dry run)', s.pane, kind)
             else:
@@ -343,7 +346,7 @@ def tick_queue(backend, policy, state, config, path, now, save):
                 return
         except (RuntimeError, OSError, ValueError):
             return
-    outgoing, kind = (fallback, 'routine continuation') if phases[key] == 'capacity' else next_prompt(s.text, fallback)
+    outgoing, kind = (fallback, 'routine continuation') if phases[key] == 'capacity' else stopgate.prompt_for(entry, s.text, lambda: next_prompt(s.text, fallback))
     route_entry = routes.get(s.pane)
     if isinstance(route_entry, dict) and route_entry.get('resume'):
         # A newly routed session gets the configured continuation to start.
@@ -368,7 +371,9 @@ def tick_queue(backend, policy, state, config, path, now, save):
     try:
         backend.send(s, outgoing)
         clear(entry)
-        if kind in {'report-based prompt', 'writer handoff prompt'}:
+        if kind == stopgate.OVERRIDE_KIND:
+            stopgate.sent(entry)
+        if kind in {'report-based prompt', 'writer handoff prompt', stopgate.OVERRIDE_KIND}:
             LOG.info('%s sent %s', s.pane, kind)
         elif kind == 'routed continuation':
             LOG.info('%s dispatched the routed continuation', s.pane)
