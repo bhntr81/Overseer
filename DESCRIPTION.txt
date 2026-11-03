@@ -1,0 +1,199 @@
+OVERSEER — PROGRAM DESCRIPTION
+==============================
+Location: /home/kali/Programming/Projects/Overseer
+Language: Python 3 standard library only (no external deps, no API keys)
+Platform: Linux + tmux
+As of: 2026-10-20 (commit f28bb7d, 41 commits, 381 tests passing)
+
+
+WHAT IT IS
+----------
+Overseer is a local orchestration system for LLM coding sessions (Codex,
+Claude, OpenCode). It has grown into two distinct but related subsystems that
+share one repository and one design vocabulary ("the six-pillar harness
+frame"):
+
+  1. THE TERMINAL MONITOR  — a running, installed service that babysits live
+     LLM terminal sessions and keeps them moving.
+
+  2. THE SOFTWARE FACTORY  — a batch job runner that executes coding tasks in
+     isolated workspaces and records rigorous, tamper-evident evidence of what
+     each attempt did.
+
+Both are driven from `python3 -m overseer ...` (monitor) and
+`python3 -m overseer.factory ...` (factory).
+
+
+SUBSYSTEM 1 — THE TERMINAL MONITOR
+----------------------------------
+A background systemd user service (`overseer.service`) that polls enrolled
+tmux panes every 30 seconds and composes the next prompt for each watched LLM
+session, so a human does not have to hand-feed "continue" to every agent.
+
+How it decides what to send:
+  - It reads the latest OVERSEER_REPORT JSON line on the visible screen
+    (fields: status, objective, remaining, done, evidence) and splices those
+    fields into the next one-line prompt. It never asks another model to
+    invent the prompt and never executes terminal text.
+  - status=continue / step_done -> sends the "remaining" step as the next
+    prompt. step_done additionally triggers a writer-handoff prompt (hand the
+    result to a dedicated prompt-writing agent).
+  - status=done / needs_input, an invalid report, or a permission/generation
+    screen -> stops that pane. OVERSEER_NEEDS_INPUT anywhere also stops it.
+  - If no report is visible, after a recognized question sits unchanged for
+    3 minutes it sends the configured one-line continuation instruction.
+
+Safety / scope controls:
+  - Only panes explicitly enrolled (`watch`) or matched by configured target
+    scope (`targets`, `target_paths`) are ever touched. Everything else is
+    ignored — never snapshotted, queued, or typed into.
+  - Rate limits: <=12 replies per pane per rolling day, 15-minute cooldown,
+    3-minute idle threshold. `dry_run` mode logs instead of sending.
+  - Exclusions by pane ID, session/window substring, or glob.
+  - Model/credit handling: if a client reports an unusable model, account, or
+    exhausted credits, the pane is PAUSED (never retried, never substituted).
+    A configured fallback hierarchy can route exhausted-credit work to a
+    zero-credit provider; when all tiers are maxed, the pane waits in
+    CREDITS_EXHAUSTED_WAITING for credits to reset. No model name is ever
+    invented; models outside config are refused.
+
+Terminal hub:
+  - One QTerminal "Overseer Terminals" project window with an F12 project menu,
+    built on tmux. Six original Codex clients were migrated live via a
+    `reptyr -T` bridge (not restarted); bridge targets are validated by PID,
+    start time, process group, and executable before any input is sent.
+
+
+SUBSYSTEM 2 — THE SOFTWARE FACTORY
+----------------------------------
+A separate, explicit job runner (`overseer.factory`) that executes a coding
+task in a target workspace and produces a trail of evidence. It is built
+around one principle: THE FACTORY RECORDS, IT DOES NOT TRUST. Every claim is
+context; exit codes are the only verdict.
+
+A task is a spec with a closed, validated, hash-frozen field set. Commands are
+argument vectors only (no implicit shell). A command-mode task carries:
+  - a CONTRACT block (role, risk tier, external effects, protected paths,
+    approval requirements, acceptance identifiers, capabilities, budget, etc.)
+    — recorded and frozen with the spec hash, but ENFORCED only in part.
+  - an optional ENVELOPE block (one of four capability modes, scope, whether a
+    fresh decision is required, the decider). The one enforced piece is the
+    APPROVAL GATE: a task needing a decision waits in `awaiting_approval` and
+    is not dispatched until `decide <id> --decision granted --decider NAME`
+    records a grant in the ledger.
+
+Per-attempt evidence written into the run directory:
+  - context.json    — manifest of what the controller supplied and why.
+  - skills.json     — skill provenance: each declared skill's installed files
+                      checked against recorded SHA-256 hashes. (Nothing records
+                      a skill as actually loaded/active — honestly stated.)
+  - codebase.json   — a codebase map assembled from the workspace file tree:
+                      selected files, their structural symbols, bounded code
+                      excerpts (<=8KiB/60 lines per file, 32KiB total), and
+                      each symbol's callers and covering test files. Relations
+                      are STATIC references (Python parsed, others textual) —
+                      not proven calls. Selection is widened one round by a
+                      decision's path and by callers. Capped at 400 files/2MiB.
+  - recall.json     — relevant memory records recalled before the attempt
+                      (its own job + earlier runs in the same project).
+                      Superseded decisions and stale-revision facts are marked
+                      NOT USABLE rather than handed over as settled.
+  - diff.patch /    — a git-style patch receipt of exactly what the
+    diff.json         implementation command changed (workspace snapshotted
+                      before and after). Git is read-only. Secrets, binary,
+                      oversized, symlinked, non-UTF-8 content withheld with a
+                      reason. <=1MiB patch, <=200 files.
+  - handoff.json    — the blueprint's 10-field handoff record: objective, base
+                      and candidate revisions, completed/failing/not-run
+                      acceptance identifiers (disjoint, covering the contract),
+                      environment, commands run, unresolved effects, remaining
+                      budget, next eligible action (product_review /
+                      bounded_repair / controller_decided). Every unobservable
+                      field is null WITH a reason — tokens and cost are never
+                      estimated.
+  - reconciliation.json — produced by `reconcile-handoff <id>`: reads the
+                      handoff record back and checks it against four
+                      independent authorities (the ledger row, the ledger's
+                      sealed digests, the recorded exit codes in context.json,
+                      and the live workspace HEAD). Verdict is agree / disagree
+                      / unverifiable, with a closed list of 10 disagreement
+                      kinds. Read-only: it reports disagreements, never resolves
+                      them, never re-runs a command, never rewrites state.
+
+State and recovery:
+  - A SQLite ledger holds jobs, immutable submissions, approvals, the four
+    memory record kinds (verified fact, decision, hypothesis, historical
+    attempt), and sealed digests. A single-writer lock / controller epoch
+    guards dispatch; backup and restore fence under a fresh epoch so a stale
+    lease cannot publish.
+
+Isolation:
+  - A bubblewrap profile PROBES a disposable runtime (recorded as evidence).
+    The trusted argument-vector runner itself is not yet sandboxed. There is no
+    file/git/network/browser tool and no real provider adapter — the factory
+    runs commands you give it; it does not itself call an LLM API.
+
+
+THE DESIGN FRAME (docs/HARNESS_FRAMEWORK.md)
+-------------------------------------------
+Everything is organized around six "harness pillars" that wrap a model:
+  CONTRACT (scope/success/constraints), CONTEXT (maps/rules/evidence),
+  STATE (artifacts/decisions/memory), TOOLS (sandbox/browser/shell),
+  PERMISSIONS (policy/approval/isolation), EVIDENCE (tests/traces/recovery).
+HARNESS_FRAMEWORK.md maps each pillar to the exact file:line that implements it
+and gives an honest verdict (currently: all six "partial" or "local only").
+Every planned change is filed against exactly one pillar row.
+
+
+HOUSE RULES (AGENTS.md + HARDENING_BLUEPRINT.md)
+------------------------------------------------
+Work on Overseer is itself done under factory discipline:
+  - Red-Green separation: tests written first and frozen (sha256) while
+    implementation is written; tests are read-only during coding.
+  - No premature completion: claims must be backed by executed checks.
+  - New logic goes in new modules under 300 lines; over-limit files take only
+    small call-site edits (factory.py <= +40 lines per increment).
+  - Every change ends with `python3 scripts/check` and
+    `python3 scripts/check-doc-references` passing, then one commit.
+  - Honest docs: each feature states plainly what it does NOT do/claim.
+
+
+KEY COMMANDS
+------------
+Monitor:
+  overseer status
+  python3 -m overseer start <project> codex|claude
+  python3 -m overseer watch %0 / unwatch %0
+  python3 -m overseer run                 (manual; stop the service first)
+  python3 -m overseer model-select %3
+Factory:
+  python3 -m overseer.factory --help
+  python3 -m overseer.factory decide <id> --decision granted --decider operator
+  python3 -m overseer.factory reconcile-handoff <id>
+Verification:
+  python3 scripts/check
+  python3 scripts/check-doc-references
+  python3 -m unittest discover -s tests -v
+
+
+PACKAGE LAYOUT (overseer/)
+--------------------------
+  __main__.py    monitor CLI + poll/tick loop
+  policy.py      report parsing, prompt composition, stop/send decisions
+  scheduler.py   FIFO queue, serial dispatch, capacity retries, routing
+  tmux.py        pane transport, inspection, scope filtering
+  modelchoice.py provider-failure detection, fallback hierarchy
+  route.py       start a new session for a routed provider
+  factory.py     the job runner / ledger / dispatch (largest module, 2395 ln)
+  handoff.py     builds the 10-field handoff record
+  reconcile.py   compares a handoff record against its authorities
+  readback.py    bounded, safe file read-back
+  workdiff.py    read-only git snapshot + patch receipt capture
+  codemap.py     codebase map: symbols, excerpts, callers, memory attachment
+  skills.py      skill provenance verification
+  isolation.py   bubblewrap sandbox probe
+
+  docs/          blueprints (V1, V2), harness framework, autonomy blueprint,
+                 execution record, skills
+  factory/       routing-policy.json, skills-provenance.json, example task
+  tests/         381 tests (test_factory.py alone is ~4.5k lines)
