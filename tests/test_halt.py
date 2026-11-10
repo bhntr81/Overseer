@@ -102,9 +102,11 @@ class HaltRecordTests(unittest.TestCase):
             path = Path(directory) / "state.json"
             path.write_text(json.dumps({"%0:123": halted_entry()}))
             buffer = io.StringIO()
-            with patch.object(sys, "argv", ["overseer", "status", "--state", str(path)]):
-                with patch("sys.stdout", buffer):
-                    main()
+            example = Path(__file__).resolve().parent.parent / "config.example.json"
+            with patch.dict("os.environ", {"OVERSEER_CONFIG": str(example)}):
+                with patch.object(sys, "argv", ["overseer", "status", "--state", str(path)]):
+                    with patch("sys.stdout", buffer):
+                        main()
         output = buffer.getvalue()
         self.assertIn("HALTED", output)
         self.assertIn("Reason: %s" % STOP, output)

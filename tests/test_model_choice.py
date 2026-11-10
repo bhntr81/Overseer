@@ -1,6 +1,7 @@
 """Model decisions: provider failures pause a pane until the operator chooses."""
 import io
 import json
+import shutil
 from argparse import Namespace
 from dataclasses import replace
 from pathlib import Path
@@ -104,6 +105,12 @@ class ModelChoiceTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / 'state.json'
+        # The live config.json is local and ignored: run against the public example.
+        shutil.copyfile(Path(__file__).resolve().parent.parent / 'config.example.json',
+                        Path(self.tmp.name) / 'config.json')
+        root = patch('overseer.__main__.ROOT', Path(self.tmp.name))
+        root.start()
+        self.addCleanup(root.stop)
         self.screens = {pane: Snapshot(pane, 'codex', pane[1:], QUESTION, '›', '0', '0')
                         for pane in ['%0', '%1']}
         self.backend = Mock()

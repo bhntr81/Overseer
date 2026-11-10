@@ -9,7 +9,7 @@ import signal
 import sys
 import time
 
-from . import blueprint
+from . import blueprint, configfile
 from . import provider
 from . import sizing
 from . import usageguard
@@ -39,7 +39,7 @@ def save(path, state):
 
 
 def settings(path):
-    config = json.loads(path.read_text(encoding="utf-8"))
+    config = json.loads(configfile.read_text(path))
     for field in ("poll_seconds", "idle_seconds", "cooldown_seconds", "max_per_day"):
         if type(config.get(field)) is not int or config[field] < 1:
             raise ValueError(f"{field} must be a positive integer")
@@ -145,7 +145,7 @@ def ask_model(entry):
 
 def model_select(args):
     """Show a pending model decision and apply the operator's choice."""
-    config = settings(ROOT / "config.json")
+    config = settings(configfile.default_path(ROOT))
     allowlist = providers(config)
     pending = pending_decisions(args.state)
     if not args.pane:
@@ -340,7 +340,7 @@ def main():
     parser = argparse.ArgumentParser(description="Watch opted-in tmux LLM panes, read output reports, and submit the next prompt.")
     sub = parser.add_subparsers(dest="action", required=True)
     monitor = sub.add_parser("run")
-    monitor.add_argument("--config", type=Path, default=ROOT / "config.json")
+    monitor.add_argument("--config", type=Path, default=configfile.default_path(ROOT))
     monitor.add_argument("--state", type=Path, default=STATE)
     monitor.add_argument("--once", action="store_true")
     status = sub.add_parser("status")
@@ -358,7 +358,7 @@ def main():
                        default=None, help="client to run; defaults to the launching LLM session")
     start.add_argument("client_args", nargs=argparse.REMAINDER)
     here = sub.add_parser("here", help="run one client in this terminal, without tmux")
-    here.add_argument("--config", type=Path, default=ROOT / "config.json")
+    here.add_argument("--config", type=Path, default=configfile.default_path(ROOT))
     here.add_argument("--state", type=Path, default=None,
                       help="state file (default: ~/.local/state/overseer/local-<pid>.json)")
     here.add_argument("--cwd", type=Path, default=Path.cwd())
@@ -389,7 +389,7 @@ def main():
         if args.action == "run":
             return run(args)
         if args.action == "status":
-            config = settings(ROOT / "config.json")
+            config = settings(configfile.default_path(ROOT))
             state = read_state(args.state)
             print("Mode: " + ("dry run" if config["dry_run"] else "automatic replies"))
             print("Exclusions: " + ", ".join(config.get("exclude", [])))
@@ -420,7 +420,7 @@ def main():
             for line in render(state):
                 print(line)
         elif args.action in {"exclude", "include"}:
-            path = ROOT / "config.json"
+            path = configfile.default_path(ROOT)
             config = settings(path)
             patterns = config.setdefault("exclude", [])
             if args.action == "exclude" and args.pattern not in patterns:
@@ -465,7 +465,7 @@ def main():
             data = json.loads(args.state.read_text()) if args.state.exists() else {}
             if isinstance(data, dict) and release(data, args.pane, args.state):
                 print("unfreeze: %s; applied at the next poll (within %d seconds)"
-                      % (args.pane, settings(ROOT / "config.json")["poll_seconds"]))
+                      % (args.pane, settings(configfile.default_path(ROOT))["poll_seconds"]))
                 return 0
             print("No hold is recorded for %s." % args.pane, file=sys.stderr)
             return 1

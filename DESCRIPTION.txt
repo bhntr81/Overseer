@@ -1,9 +1,11 @@
 OVERSEER — PROGRAM DESCRIPTION
 ==============================
-Location: /home/kali/Programming/Projects/Overseer
+Location: the repository root (https://github.com/bhntr81/Overseer)
 Language: Python 3 standard library only (no external deps, no API keys)
-Platform: Linux + tmux
-As of: 2026-10-20 (commit f28bb7d, 41 commits, 381 tests passing)
+Platform: Linux + tmux (native Windows is not supported: see docs/DEVELOPMENT.md)
+As of: 2026-11-10 (611 tests passing under scripts/check; the sections below
+through "THE DESIGN FRAME" describe the 2026-10-20 state, and "ADDED SINCE
+OCTOBER 20" lists later work)
 
 
 WHAT IT IS
@@ -132,6 +134,37 @@ Isolation:
     The trusted argument-vector runner itself is not yet sandboxed. There is no
     file/git/network/browser tool and no real provider adapter — the factory
     runs commands you give it; it does not itself call an LLM API.
+
+
+ADDED SINCE OCTOBER 20 (from the commit log and WORK_LOG.md)
+-----------------------------------------------------------
+Each item states what it does not do where that matters; WORK_LOG.md has the
+full decisions.
+  - Stop agent (overseer/stopgate.py): when a worker's report asks to stop, one
+    background `claude -p` (no edit or shell tools) judges the screen against
+    fixed criteria; a `continue` verdict sends a continuation carrying the
+    decision, `stop` keeps the halt. It fails closed (timeout, error, unreadable
+    output keep the halt), never reviews always-stop blockers, and is capped per
+    pane per day. It is off in config.example.json.
+  - Task sizing and a step plan that is evaluated and adjusted as the loop
+    runs (overseer/sizing.py).
+  - Usage wind-down: the worker is wound down before its account usage runs out
+    (overseer/usageguard.py); `usage_winddown_percent` in the config.
+  - Escalation hold, three-strike hold, and recorded, announced intentional
+    halts (overseer/escalation.py, strikes.py, halt.py).
+  - Unattended factory feed loop, scaffolding of a new target repository with a
+    measurable base revision, and the target's SPEC.md read into the attempt as
+    bounded context (overseer/target.py, orchestrate.py).
+  - Single-program mode (`overseer here`), reading a report the worker's
+    terminal wrapped, and treating a Claude composer that holds only its dimmed
+    suggestion as empty.
+  - Default runner is the LLM session that launched Overseer.
+  - Configuration split: config.example.json (tracked template) and
+    config.json (local, git-ignored, never created or overwritten by Overseer).
+  - Cross-environment workflow documentation and PowerShell wrappers for the
+    verification scripts (scripts/check.ps1, check-doc-references.ps1); see
+    docs/DEVELOPMENT.md. Not a Windows port: the package still needs fcntl, tmux,
+    and POSIX process control.
 
 
 THE DESIGN FRAME (docs/HARNESS_FRAMEWORK.md)

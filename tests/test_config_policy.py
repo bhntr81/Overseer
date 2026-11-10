@@ -1,4 +1,4 @@
-"""Regression guard for the P0-B efficiency policy baked into config.json.
+"""Regression guard for the P0-B efficiency policy baked into config.example.json (the live config.json is local).
 
 These assert the operator's standing policy (audit DEVELOPMENT_ENVIRONMENT_AUDIT.md,
 P0-B, 2026-10-30), not library behavior: Sonnet is the default implementation
@@ -11,7 +11,7 @@ from pathlib import Path
 from overseer.__main__ import settings
 from overseer.modelchoice import providers, next_hop
 
-CONFIG = Path(__file__).resolve().parent.parent / "config.json"
+CONFIG = Path(__file__).resolve().parent.parent / "config.example.json"
 
 
 def _config():

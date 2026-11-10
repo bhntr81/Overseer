@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -278,7 +279,8 @@ class EscalationMonitorTests(unittest.TestCase):
             self.assertEqual(saved["%1:456"]["escalation"]["strikes"], 3)
             before = path.read_text()
             result = subprocess.run([sys.executable, "-m", "overseer", "unfreeze", "%0",
-                                      "--state", str(path)], capture_output=True, text=True)
+                                      "--state", str(path)], capture_output=True, text=True,
+                                     env=dict(os.environ, OVERSEER_CONFIG=str(Path(__file__).resolve().parent.parent / "config.example.json")))
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("unfreeze: %0", result.stdout)
             self.assertTrue((Path(directory) / "escalation-releases.json").exists())

@@ -6,3 +6,6 @@ artifacts/
 .env.*
 *.sqlite3
 *.sqlite3-*
+# Local, machine-specific configuration: copy config.example.json to config.json.
+config.json
+config.json.bak*

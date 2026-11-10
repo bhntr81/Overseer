@@ -10,6 +10,16 @@ and verify it within the authorized scope. Preserve this project's specific
 constraints and model requirements. This standing workflow supersedes older
 wording that made optimizer guidance optional; it adds no runtime dependency.
 
+## Getting started (any agent: Codex desktop, Claude Code, others)
+
+Read `docs/DEVELOPMENT.md` first: setup, `config.example.json` to local `config.json`
+(git-ignored, never overwrite it), how to run tests, and platform status. Short form:
+`python3 scripts/check` then `python3 scripts/check-doc-references` (PowerShell:
+`.\scripts\check.ps1`, `.\scripts\check-doc-references.ps1`), then one commit. Never run bare
+`unittest` with live tmux sessions; never grant an approval, edit a ledger by hand, or force-push.
+The shared-workflow paragraph above names the author's machine-local playbook; if it is absent, say
+so and continue from this file.
+
 ## Harness framework
 
 `docs/HARNESS_FRAMEWORK.md` maps the six harness pillars onto the code that

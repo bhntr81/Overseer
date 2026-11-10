@@ -1,0 +1,106 @@
+{
+  "dry_run": true,
+  "continue_on_completion": true,
+  "exclude": [],
+  "poll_seconds": 30,
+  "idle_seconds": 180,
+  "cooldown_seconds": 900,
+  "max_per_day": 4,
+  "reply": "Automatic continuation: read SESSION_HANDOFF.md if present (objective, last verified result, next step); else read AGENTS.md and the project instructions. Open the blueprint or roadmap only for the section the next step needs, not whole. Do the next authorized step only; do not invent work. Preserve scope, pauses, consent, and draft-only limits. Hand results to the prompt-writing agent, which writes the next bounded prompt you execute; a prompt's stopping condition ends that prompt, not the objective. Before stopping, update SESSION_HANDOFF.md. Print one line starting OVERSEER_REPORT then a JSON object with keys status, objective, remaining, done, evidence. status is continue, step_done, done, or needs_input. Use step_done with the next step in remaining and end with \"OVERSEER_STEP_DONE\"; use done only when the objective has no actionable next step, ending \"OVERSEER_DONE\", or needs_input ending \"OVERSEER_NEEDS_INPUT\".",
+  "serial_queue": true,
+  "capacity_retry_seconds": 120,
+  "capacity_max_retries": 3,
+  "model_providers": {
+    "claude": {
+      "client": "claude",
+      "label": "Claude Code",
+      "models": [
+        {
+          "id": "sonnet",
+          "label": "sonnet"
+        },
+        {
+          "id": "opus",
+          "label": "opus"
+        }
+      ]
+    },
+    "openai": {
+      "client": "codex",
+      "label": "OpenAI Codex",
+      "models": [
+        {
+          "id": "gpt-5.6-terra",
+          "label": "GPT-5.6-Terra"
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "label": "GPT-5.6-Luna"
+        }
+      ]
+    },
+    "opencode": {
+      "client": "opencode",
+      "label": "OpenCode",
+      "models": [
+        {
+          "id": "opencode/big-pickle",
+          "label": "opencode/big-pickle"
+        },
+        {
+          "id": "opencode/beam-free",
+          "label": "opencode/beam-free"
+        }
+      ]
+    },
+    "grok": {
+      "client": "grok",
+      "label": "Grok Build",
+      "models": [
+        {
+          "id": "grok-4.7",
+          "label": "grok-4.7"
+        },
+        {
+          "id": "grok-4.7-build-fast",
+          "label": "grok-4.7-build-fast"
+        },
+        {
+          "id": "grok-4.6",
+          "label": "grok-4.6"
+        },
+        {
+          "id": "grok-4.5",
+          "label": "grok-4.5"
+        }
+      ]
+    }
+  },
+  "allowed_providers": [
+    "claude",
+    "openai",
+    "opencode",
+    "grok"
+  ],
+  "fallback_policy": {
+    "primary": [
+      "claude",
+      "openai"
+    ],
+    "zero_credit": [
+      "opencode"
+    ],
+    "excluded_models": [
+      "gpt-6-luna"
+    ],
+    "exhausted_status": "CREDITS_EXHAUSTED_WAITING"
+  },
+  "targets": [],
+  "target_paths": [],
+  "usage_winddown_percent": 5,
+  "stop_agent": {
+    "enabled": false,
+    "timeout_seconds": 300,
+    "max_overrides_per_day": 4
+  }
+}

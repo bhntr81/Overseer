@@ -283,7 +283,7 @@ class WriterHandoffTests(unittest.TestCase):
         import tempfile
         from overseer.__main__ import settings
         from overseer.policy import BLOCKED, _REPORT_TAIL
-        source = Path(__file__).resolve().parent.parent / "config.json"
+        source = Path(__file__).resolve().parent.parent / "config.example.json"
         with tempfile.TemporaryDirectory() as directory:
             copy = Path(directory) / "config.json"
             copy.write_text(source.read_text())
@@ -327,7 +327,7 @@ class WriterHandoffReviewTests(unittest.TestCase):
         import textwrap
         from pathlib import Path
         from overseer.policy import DONE_MARK, NEEDS_INPUT_MARK, STEP_DONE_MARK
-        reply = json.loads((Path(__file__).resolve().parent.parent / "config.json").read_text())["reply"]
+        reply = json.loads((Path(__file__).resolve().parent.parent / "config.example.json").read_text())["reply"]
         prompts = [reply, next_prompt(step_screen(), "Continue.")[0],
                    next_prompt(report(CONTINUE_REPORT), "Continue.")[0]]
         for prompt in prompts:

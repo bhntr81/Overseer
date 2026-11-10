@@ -350,7 +350,22 @@ decision, and it honours `--dry-run` and the daily cap.
 Run `python3 scripts/check` for isolated local verification. The terminal
 monitor continues to operate independently.
 
+## Getting started and configuration
+
+Python 3.9+ and tmux; no other dependencies. Configuration is split in two:
+`config.example.json` is the public, tracked template (`dry_run: true`, nothing watched, stop agent
+off) and `config.json` is your local, git-ignored file. Create it once with
+`cp config.example.json config.json` (PowerShell: `Copy-Item config.example.json config.json`) and
+edit it. Overseer reads `config.json` (or the file named by `OVERSEER_CONFIG`) but never creates or overwrites it; without it, commands that
+need it exit 1 and say to copy the example. Setup, running tests (`python3 scripts/check`,
+PowerShell `.\scripts\check.ps1`), the Codex desktop and Claude Code workflows, and honest
+Windows status are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). Native Windows is not supported:
+the package imports POSIX-only `fcntl` and depends on tmux.
+
 ## Installed configuration
+
+This section describes the author's own installation; a new install starts from
+`config.example.json` as above.
 
 The user service is enabled and running with automatic replies. User lingering
 is enabled, allowing it to run after logout. It checks every 30 seconds, waits
