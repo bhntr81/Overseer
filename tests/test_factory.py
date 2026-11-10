@@ -4547,6 +4547,8 @@ class RequiredContractTests(unittest.TestCase):
 
     def test_the_repository_example_task_carries_a_valid_contract(self):
         spec = json.loads((ROOT / 'factory' / 'tasks' / 'overseer-checks.json').read_text())
+        # The checked-in task names the author's checkout; validate it against this one.
+        spec['workspace'] = str(ROOT)
         self.assertEqual(set(spec['contract']), set(CONTRACT_FIELDS))
         validate(spec)
         self.assertTrue(self.f.submit(spec))

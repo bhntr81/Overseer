@@ -63,6 +63,9 @@ python3 -m overseer.factory status
 python3 -m overseer.factory inspect overseer-foundation-checks-002
 ```
 
+The example task's `workspace` is the author's checkout path; edit it to the absolute path of your own
+checkout before submitting (the factory requires an existing absolute directory).
+
 The example already ran successfully. Submitting it again is idempotent and will
 not rerun a passed job. The example carries a new ID because the workspace
 moved; the earlier `overseer-foundation-checks-001` record keeps its original

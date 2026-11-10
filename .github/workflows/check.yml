@@ -15,8 +15,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-      - run: sudo apt-get update && sudo apt-get install -y tmux
-      - run: python scripts/check
+      # The isolation probe requires the system Python under /usr, so no setup-python here.
+      - run: sudo apt-get update && sudo apt-get install -y tmux bubblewrap
+      # Ubuntu 24.04 runners block unprivileged user namespaces, which bubblewrap needs.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - run: python3 scripts/check
