@@ -180,7 +180,15 @@ class ModelChoiceTests(unittest.TestCase):
         self.change('%0', MODEL_ERROR)
         self.run_tick(0)
         args = Namespace(pane='%0', provider='openai', model='gpt-imaginary', state=self.path)
-        self.assertEqual(model_select(args), 1)
+        # Hermetic: the pane is a codex client, so the model check is reached; no live
+        # tmux server is contacted and nothing can be routed.
+        pane_backend = Mock()
+        pane_backend.inspect.return_value = self.screens['%0']
+        with patch('overseer.__main__.Tmux', return_value=pane_backend), \
+                patch('overseer.__main__.resolve_route') as route:
+            self.assertEqual(model_select(args), 1)
+        route.assert_not_called()
+        self.assertIsNone(self.state['_model_decisions']['%0'].get('resolved'))
 
     def test_interactive_choice_can_be_cancelled(self):
         self.change('%0', MODEL_ERROR)
