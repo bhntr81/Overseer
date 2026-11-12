@@ -48,27 +48,30 @@ routing-policy JSON is a proposal, not an active authority mechanism.
   work is not automatically rerun. A recorded live child group prevents resolution.
 - `scripts/check` isolates tests from the live tmux server.
 - `.github/workflows/check.yml` defines a read-only CI check, using pinned checkout
-  and setup-python action commits. It is not yet running on a remote repository.
+  action commits. It runs on GitHub for every push to `main` and every pull request, on
+  ubuntu-latest and windows-latest.
 - Private runtime state under `~/.local/state/overseer/factory`; profiles, downloads,
   and runtime artifacts are excluded from the source repository.
 
 ## Using the first slice
 
 ```sh
-cd /home/kali/Programming/Projects/Overseer
+cd /path/to/Overseer
 python3 scripts/check
 python3 -m overseer.factory submit factory/tasks/overseer-checks.json
 python3 -m overseer.factory run-one
 python3 -m overseer.factory status
-python3 -m overseer.factory inspect overseer-foundation-checks-002
+python3 -m overseer.factory inspect overseer-foundation-checks-003
 ```
 
 The example task's `workspace` is the author's checkout path; edit it to the absolute path of your own
 checkout before submitting (the factory requires an existing absolute directory).
 
-The example already ran successfully. Submitting it again is idempotent and will
-not rerun a passed job. The example carries a new ID because the workspace
-moved; the earlier `overseer-foundation-checks-001` record keeps its original
+Submitting the example again is idempotent and will not rerun a passed job. Its
+ID changes whenever its specification does (`-003` replaced the single check
+that ran the whole suite with two small checks: the suite had outgrown the
+120-second limit, and it does not pass when run inside a factory job, see the
+known limitations in [DEVELOPMENT.md](DEVELOPMENT.md)); earlier records in the author's ledger keep their original
 specification and acceptance. For a new run, create an explicitly reviewed task
 with a
 new ID. Each task specifies an existing absolute workspace, an objective, one

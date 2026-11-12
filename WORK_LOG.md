@@ -4504,3 +4504,36 @@ checkout on `release-1.0`.
 - A representative Task prompt was written with the method by the same agent (52 lines; outcome,
   limits, done checks, report shape). It was not executed and no second reader was used, so it
   shows the method is usable by its author, not by a stranger.
+
+## 2026-11-12 — Release 1.0.0: public documentation and the end of this development cycle
+
+Conclusion: the repository is prepared as a stopping point. No functionality was added. Prompt:
+"FINAL MILESTONE", supplied by John, executed by the primary agent (Claude Fable 5.2).
+
+- `README.md` is new and written for someone who has never seen the project: what it does, the
+  four parts, requirements, install, configuration, operating the monitor and the factory,
+  clients, Windows, troubleshooting, limits. The former README is `docs/REFERENCE.md`, with its
+  stale statements corrected (it still said native Windows was unsupported) and the author's
+  paths removed.
+- Internal records moved out of the root into `docs/internal/` (22 `*_NEXT_PROMPT.md` files into
+  `docs/internal/prompts/`, `DESCRIPTION.txt`, `DEVTOOLS_INSTALL_RESULT.md`, the ideas files).
+  `WORK_LOG.md`, `HARDENING_BLUEPRINT.md`, and `research/` stay where they were.
+- `overseer.__version__ = '1.0.0'`. There was no version, tag, or release before.
+- Release blocker found by the clean-environment test and fixed: the documented example task
+  `factory/tasks/overseer-checks.json` could not pass for a new user. Its one check ran the whole
+  suite under a 120-second limit (timed out), and the suite does not pass inside a factory job
+  (7 context tests fail because the job's `OVERSEER_*` variables are inherited). The example now
+  runs two small checks (`-003`); the nested-suite limit is in `docs/DEVELOPMENT.md`.
+- Audit, executed: pattern search of tracked files and of history for keys, tokens and private
+  keys (none); personal data (the author's first name, GitHub name, machine paths and tmux
+  session names appear in internal records and history, as before; the commit email is in git
+  metadata); ignored files are only local configuration, caches, and the private prompt archive.
+- Clean-environment test, executed on Kali with a fresh clone and an empty HOME: copy the
+  example configuration, `python3 -m overseer run --once` (dry run), `status`, `assess`, the
+  example factory task (`passed`), `python3 scripts/check` (681 run, 3 skipped, OK), document
+  references (283).
+- CI run 43255662085 on the release branch: ubuntu 681 run / 678 passed / 3 skipped;
+  windows-latest 673 run / 657 passed / 16 skipped.
+- Not executed: any real client through the factory or loop; `overseer start` with a real client
+  in the clean environment; WSL2; macOS; the ChatGPT Codex app and the Claude desktop app.
+- No licence file exists and none was added: choosing one is the owner's decision.

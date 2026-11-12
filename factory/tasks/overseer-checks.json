@@ -1,19 +1,19 @@
 {
-  "id": "overseer-foundation-checks-002",
+  "id": "overseer-foundation-checks-003",
   "objective": "Record independent Overseer validation; no AI implementation or product acceptance claimed",
   "workspace": "/home/kali/Programming/Projects/Overseer",
   "timeout_seconds": 120,
   "implementation": ["python3", "-c", "from pathlib import Path; assert Path('overseer/factory.py').is_file(); print('Factory source is present')"],
-  "checks": [["python3", "scripts/check"]],
+  "checks": [["python3", "scripts/check-doc-references"], ["python3", "-B", "-m", "unittest", "tests.test_sizing", "tests.test_statusblock"]],
   "contract": {
     "role": "verification",
     "risk_tier": "low",
     "external_effects": [],
     "protected_paths": ["overseer", "tests", "scripts"],
     "approval_requirements": [],
-    "acceptance_ids": ["A1"],
+    "acceptance_ids": ["A1", "A2"],
     "required_capabilities": ["local test execution"],
-    "project_constraints": ["run the repository's own checks only"],
+    "project_constraints": ["run the repository's own checks only", "do not run the whole suite inside a factory job"],
     "measured_evidence": null,
     "provider_availability": null,
     "budget": {

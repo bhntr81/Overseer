@@ -12,7 +12,7 @@ no LLM calls. The monitor additionally needs tmux.
 | Environment | Status | Evidence |
 |---|---|---|
 | Linux (tmux installed) | Supported: the full suite, the factory, and the monitor | Suite run on Kali; CI job `tests` on ubuntu-latest |
-| Windows, native (PowerShell) | Supported: the package, the factory, the loop, and the suite. **Not supported: the tmux monitor and `overseer here`** | CI job `windows` on windows-latest runs `.\scripts\check.ps1` and `.\scripts\check-doc-references.ps1`: 667 tests run, 651 passed, 16 skipped, and 279 document references checked, in [run 43175199795](https://github.com/bhntr81/Overseer/actions/runs/43175199795) (2026-11-12, Python 3.15); the ubuntu job of the same run: 675 run, 672 passed, 3 skipped |
+| Windows, native (PowerShell) | Supported: the package, the factory, the loop, and the suite. **Not supported: the tmux monitor and `overseer here`** | CI job `windows` on windows-latest runs `.\scripts\check.ps1` and `.\scripts\check-doc-references.ps1`: 673 tests run, 657 passed, 16 skipped, and 283 document references checked, in [run 43255662085](https://github.com/bhntr81/Overseer/actions/runs/43255662085) (2026-11-12, the 1.0.0 release branch, Python 3.15); the ubuntu job of the same run: 681 run, 678 passed, 3 skipped. Current results: the [checks workflow](https://github.com/bhntr81/Overseer/actions/workflows/check.yml) |
 | Windows via WSL2 | Expected to work as Linux, monitor included; **not tested** | Not executed |
 | ChatGPT Codex app on Windows | Works through `AGENTS.md` plus the PowerShell commands below | Instruction files checked by inspection; the commands it is told to run are the ones the `windows` CI job runs. **Not executed inside the app** |
 | Claude desktop app on Windows (Code tab) | Works through `CLAUDE.md` (imports `AGENTS.md`) plus the same commands | Same as above. **Not executed inside the app** |
@@ -179,6 +179,11 @@ private projects.
 - The Codex app and the Claude desktop app: not executed; their instruction files and the commands
   they are told to run were checked by inspection and, for the commands, by the `windows` CI job.
 - The factory's argument-vector runner is not itself sandboxed; the bubblewrap profile only probes.
+- Do not run the whole test suite as a factory task. A factory job's children inherit the
+  job's `OVERSEER_*` context variables, and seven context tests in `tests/test_factory.py`
+  (which start a factory of their own) fail when those variables are already set. Run the suite
+  with `scripts/check` directly. Measured 2026-11-12 in a fresh clone: 674 of 681 passed nested,
+  all passed directly.
 - `AGENTS.md` refers to the author's private playbook path outside this repository; on another
   machine that file is absent, and the instructions say to report that rather than invent it. The
   prompt-writing method is the exception: it lives in `promptwriting/`, without the design

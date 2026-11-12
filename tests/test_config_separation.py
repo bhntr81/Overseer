@@ -169,6 +169,10 @@ class AgentDocumentationTests(unittest.TestCase):
                      "Red-Green", "ledger", "approval", "epoch", "reconcile-handoff"):
             self.assertIn(text, guide, text)
 
+    def test_the_user_documentation_names_no_author_machine_path(self):
+        for name in ("README.md", "docs/REFERENCE.md", "docs/DEVELOPMENT.md", "docs/FACTORY_EXECUTION.md"):
+            self.assertNotIn("/home/kali", self.read(name), name)
+
     def test_the_readme_explains_configuration_and_the_development_guide(self):
         readme = self.read("README.md")
         self.assertIn("config.example.json", readme)
