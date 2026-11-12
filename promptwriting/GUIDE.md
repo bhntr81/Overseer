@@ -6,18 +6,21 @@ mistakes. Write for a skilled colleague who starts today.
 
 ## Where this guide fits
 
-This is the method the prompt-writing role follows. It does not replace the
-workflow that role works in:
+This is the method a prompt writer follows. It stands on its own: nothing outside
+this directory is needed to use it. It covers the prompt itself: whether to write
+one, how big, what goes in, and how it is judged afterwards.
 
-- `~/Programming/Projects/AGENTS.md` says who writes the prompt, when, and where it
-  goes (the project's own next-prompt file). It also says to decide by established
-  convention before asking the owner.
-- `~/Programming/Projects/coder_optimization/docs/PLAYBOOK.md` covers the whole
-  coding loop; its `templates/` hold the task, debug, handoff and review forms.
+It does not decide who writes the prompt, when, or where it goes. If your setup
+has a workflow file that says so, that file stays in charge. (On the author's
+machine there are two, outside this repository: a shared `Projects/AGENTS.md` and
+a coding playbook.) If you have none, use these defaults: the prompt goes into the
+target project's next-prompt file (`NEXT_PROMPT.md` if it has no other), and a
+question that established convention settles is decided, not put to the owner.
 
-Order of authority, highest first: the owner's current instruction, the shared
-`Projects/AGENTS.md`, the target project's own instruction file, this guide. If
-this guide seems to conflict with one of those, follow the higher one and say so.
+Order of authority, highest first: the owner's current instruction, a shared
+workflow file if there is one, the target project's own instruction file, this
+guide. If this guide seems to conflict with one of those, follow the higher one
+and say so. "The owner" is whoever the work is for.
 
 ## The five rules
 
@@ -29,8 +32,10 @@ this guide seems to conflict with one of those, follow the higher one and say so
 | 4 | Evidence outranks belief; label only material premises. | Supported (F3, F4, F5) |
 | 5 | Nothing is included by default except the outcome, the done test and the report shape. Every other block must change what the reader does. | Provisional (F8, F11) |
 
-The F numbers are findings in `DESIGN.md`, Appendix A. Provisional rules are
-reviewed once `LESSONS.md` has ten rows.
+The F numbers are findings from the prompt history this method was drawn from,
+summarised in "Evidence behind the rules" at the end. Provisional rules are
+reviewed once `LESSONS.md` has ten rows with outcomes; `LESSONS.md` says where
+that count stands. Until then they stay provisional and are not changed.
 
 ## Before writing: qualify
 
@@ -38,9 +43,9 @@ Every task passes through qualification. For a trivial request or a Brief that
 means one glance: check 2 gives DO at once, with nothing announced and nothing
 written. For anything that would become a Task or Run prompt, and for every
 investigation, work through the checks; that takes a few minutes and uses the
-project's handoff file plus cheap checks. Take the first outcome that fits. The
-short form of this section is in `~/AGENTS.md`, which agents load at startup; this
-guide is the authority.
+project's handoff file plus cheap checks. Take the first outcome that fits. A
+short form of this section, for an instruction file agents load at startup, is in
+`README.md`; this guide is the authority.
 
 1. **Outcome.** Can you say in one sentence what will exist or be decided when the
    work is done, and how the owner would recognise it? If not, and neither the
@@ -79,7 +84,7 @@ research is the task: write it as an investigation, or do it.
 | Class | When | Typical length | Process |
 |---|---|---|---|
 | Brief | Subagent task, chat question, under about 15 minutes of work | Up to about 15 lines | Outcome, done test, what to return. Not archived. |
-| Task | One session of work in a project; by default one independently verifiable behavior, as the playbook says | About 30 to 80 lines | Qualify, write, deliver, record. |
+| Task | One session of work in a project; by default one independently verifiable behavior | About 30 to 80 lines | Qualify, write, deliver, record. |
 | Run | Many hours, real money, hard to undo, or unattended | Up to about 150 lines | As Task, plus a budget, stop conditions, what to do when blocked, and a cold read. |
 
 The lengths are provisional guides. They assume lines of about 80 columns: a prompt
@@ -119,14 +124,15 @@ lists steps where only the result matters.
 6. **Limits, with reasons.** What must not be touched, what needs the owner's yes,
    what counts as too expensive. A limit with a reason is applied with judgment; a
    bare limit is applied either too widely or too narrowly.
-7. **What done means.** Checks the reader can run. Without this the reader stops
-   early or never stops.
+7. **What done means.** Checks the reader can run, including the one that shows
+   what worked before still works. Without this the reader stops early or never
+   stops.
 8. **What to send back.** The shape of the report: conclusion first, measured facts
    apart from guesses, what was skipped and why, open decisions as yes/no questions.
 
-Items 1, 7 and 8 are in every prompt. A prompt for project work under the shared
-workflow also always has the relevant paths, the required behavior, the
-constraints and a stopping condition. Items 2, 3 and 4 go in when they exist and
+Items 1, 7 and 8 are in every prompt. A prompt for project work also always has
+the relevant paths, the required behavior, the constraints and a stopping
+condition. Items 2, 3 and 4 go in when they exist and
 would change what the reader does (rule 5).
 
 ## Investigations
@@ -153,7 +159,7 @@ whose result is the list of explanations and what would separate them.
 
 - **Label only what is material**: a premise that would change the scope, method
   or conclusion if false. Tag it in the sentence that uses it: "(measured:
-  command)", "(reported in X, not rechecked)", "(John says)", "(assumed)". Five at
+  command)", "(reported in X, not rechecked)", "(the owner says)", "(assumed)". Five at
   most, no separate block. Unlabelled statements are ones you checked.
 - **A measured result stays on the record until another measurement replaces it.**
   When someone, including the owner, believes otherwise about an empirical result,
@@ -217,8 +223,8 @@ particular model being available.
 - Your own doubts as vague hedges. State the doubt once, where it applies, with what
   would settle it.
 - Hashes, authorship lines and traceability blocks that nobody will act on.
-  Who wrote the prompt is recorded in the project's handoff record, as the shared
-  workflow requires, and in the `LESSONS.md` row.
+  Who wrote the prompt is recorded in the project's handoff record, if it keeps
+  one, and in the `LESSONS.md` row.
 
 ## Delivery and after
 
@@ -232,12 +238,21 @@ particular model being available.
    same model shares your blind spots, so it will miss wrong premises.
 3. **Deliver** into the project's existing next-prompt file. Save a copy in
    `prompts/` as `YYYY-MM-DD_project_topic.md` and open a row in `LESSONS.md` with
-   the outcome fields empty.
+   the outcome fields empty. In this repository `prompts/` is git-ignored, so the
+   archive stays on your machine; `LESSONS.md` is published, so a row about a
+   private project names it only in general terms.
 4. **Corrections.** One may be appended. At the second, reissue the whole prompt
    as a new file and note in the old row what superseded it.
 5. **Outcome.** The next session that writes a prompt for the same project fills
    the row (step 1). Write "not seen", "unknown" or "unavailable" for anything
    that cannot be found. Never estimate.
+6. **The next prompt.** Write it from what the last one produced, not from what it
+   asked for. Read the report and the handoff file, fill the row, then recheck
+   the cheap facts the new prompt rests on: the commit it starts from, the
+   baseline check and its counts. A result you did not rerun goes in as
+   "(reported in X, not rechecked)". What the report shows done goes under
+   settled work. What it skipped or left open becomes the new work, or a question
+   for the owner. One bounded step per prompt.
 
 ## Checklist before handing over
 
@@ -258,3 +273,23 @@ particular model being available.
 - [ ] Read it as the reader: which sentence could be taken two ways? Fix that one.
 - [ ] Delete each sentence in turn in your head: would the reader act differently
       without it? If not, cut it.
+
+## Evidence behind the rules
+
+The rules were drawn from the prompts and reports of one private project, read
+in November 2026. The full record stays with the author because it quotes that
+project. These are the findings the rules table cites, without the private detail.
+
+| ID | Finding | How strong |
+|---|---|---|
+| F1 | Two task prompts ran to 644 and 500 lines. The first led to a commit that changed 62 lines of code; the second dictated exact old and new text. | The sizes are exact. Nothing shows the length caused harm. |
+| F2 | Eight reports in four days worked on one question and its cause was still unknown. The one prompt in that chain with a stop criterion returned a verdict. | The count is exact. Why the work repeated is known for two prompts only. |
+| F3 | One prompt carried four addenda, because an outside input it rested on changed three times. | Conclusive. |
+| F4 | A prompt withdrew a measured finding because the owner believed otherwise. The measurement was later reconfirmed; the owner's belief is still unresolved and may be right. | Conclusive that the measurement held. |
+| F5 | A figure produced by a tool with a display bug was repeated in the next prompt and a later report before it was withdrawn. | Conclusive. |
+| F8 | A process required a model that was not available, and sessions wrote disclaimers instead of doing the step. | Conclusive, one case. |
+| F10 | Three prompts of 36 to 55 lines each stated one outcome, steps and checks, and each has a matching report. | The structure is exact; "one session each" is inferred. |
+| F11 | Long prompts were written while advice against them was already in force. One named an earlier long prompt as its template. | The dates and the quote were read. That copying caused the length is inference. |
+
+Not seen in what was read: removed functionality, half-finished code, false
+claims of completion. Token cost was never recorded.

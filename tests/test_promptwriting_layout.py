@@ -26,9 +26,14 @@ class PromptwritingLayoutTest(unittest.TestCase):
                                 text=True, check=True).stdout.split()
         self.assertEqual(sorted(listed), ['promptwriting/' + name for name in PUBLISHED])
 
-    def test_the_published_lessons_table_has_no_rows(self):
-        lessons = (FOLDER / 'LESSONS.md').read_text(encoding='utf-8').rstrip('\n')
-        self.assertRegex(lessons.splitlines()[-1], r'^\|\s*-{3}')
+    def test_the_published_lessons_rows_are_whole_and_do_not_need_the_archive(self):
+        lines = (FOLDER / 'LESSONS.md').read_text(encoding='utf-8').splitlines()
+        table = [line for line in lines if line.startswith('|')]
+        self.assertGreaterEqual(len(table), 3)
+        for line in table:
+            self.assertEqual(line.count('|'), 14, line[:60])
+        for row in table[2:]:
+            self.assertNotIn('prompts/', row, row[:60])
 
     def test_the_readme_says_what_is_withheld_and_why(self):
         text = (FOLDER / 'README.md').read_text(encoding='utf-8')

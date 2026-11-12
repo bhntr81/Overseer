@@ -4470,3 +4470,37 @@ merge, the documentation that points at it, and the service restart. Filed again
 - The monitor reads `overseer/policy.py` at start, so the running service needed a restart to send
   the new handoff wording.
 
+
+## 2026-11-12 — The prompt-writing project is complete, self-contained and frozen
+
+Conclusion: `promptwriting/` can now be used from a clone alone. Its files no longer send the reader
+to paths on the author's machine or to the unpublished design record, the outcome table is
+published with its rows, and the method is frozen. No rule was added or changed. Filed against the
+CONTEXT pillar (rules given to the model). The prompt was supplied by John and executed by the
+primary agent (Claude Fable 5.2) in a separate worktree, because a release session held the main
+checkout on `release-1.0`.
+
+- `promptwriting/GUIDE.md`: the workflow files outside the repository are described as optional,
+  with defaults for a setup that has none; the findings its rules cite are summarised at its
+  end without private detail; a step "The next prompt" states, from rules already in the guide, how
+  the next prompt is written from the last report; "done" names the check that existing behavior
+  still works. `TEMPLATE.md` gains that check as one line.
+- `promptwriting/README.md` has a start for a new user and a short qualification stanza to paste
+  into an instruction file; `promptwriting/AGENTS.md` says when to use the method.
+- `promptwriting/LESSONS.md` now holds the three outcome rows. The private project of the first row
+  is not named. The Windows client launch row is filled from this log, commit `e07a224` and CI run
+  43176353770: achieved, except that its check "one commit since `3c21beb`" could not hold because
+  `main` had already moved to `da72c72`. That is recorded as the row's lesson.
+- Rule review: not done. The table has three rows with outcomes and the review needs ten. The
+  provisional rules stand as written.
+- Test change, for a changed requirement: `tests/test_promptwriting_layout.py` no longer requires
+  an empty published table; it requires whole rows that give no path into the unpublished archive.
+- Still unpublished: `promptwriting/DESIGN.md` and `promptwriting/prompts/`. The ignore rules are
+  unchanged. The earlier open question about publishing `DESIGN.md` is closed: it stays internal.
+- Integration, checked and not changed: on the deployed checkout the handoff for the test report
+  is 994 of 1000 characters, one line, names `promptwriting/GUIDE.md` by an absolute path that
+  exists, and the service was restarted after the merge. Overseer still cannot see whether the
+  writer read the guide.
+- A representative Task prompt was written with the method by the same agent (52 lines; outcome,
+  limits, done checks, report shape). It was not executed and no second reader was used, so it
+  shows the method is usable by its author, not by a stranger.
