@@ -35,8 +35,10 @@ _POSIX_LAUNCH = ('import os,sys; ' + _GATE +
 # launcher stays as the parent and passes the command's exit status through.
 # It also opens the group's job by name: a job loses its name when its last
 # handle closes, so this handle keeps the group findable after the controller dies.
+# A launcher that cannot open it (the controller died first) refuses to run the task.
 _WINDOWS_LAUNCH = ('import ctypes,os,subprocess,sys; ' + _GATE +
                    'held=ctypes.WinDLL("kernel32").OpenJobObjectW(4,0,"overseer-group-%d"%os.getpid()); '
+                   'sys.exit(125) if not held else None; '
                    'sys.exit(subprocess.call(sys.argv[1:], stdin=subprocess.DEVNULL))')
 LAUNCH = _WINDOWS_LAUNCH if WINDOWS else _POSIX_LAUNCH
 

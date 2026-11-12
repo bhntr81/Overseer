@@ -221,7 +221,8 @@ class FactoryTests(unittest.TestCase):
 
     def test_hard_worker_crash_requires_reconciliation(self):
         spec = self.spec()
-        spec['implementation'] = [sys.executable, '-c', 'import time; time.sleep(30)']
+        spec['implementation'] = [sys.executable, '-c', "import time; from pathlib import Path; "
+                                  "Path('started').write_text('x'); time.sleep(30)"]
         self.f.submit(spec)
         worker = subprocess.Popen([sys.executable, '-m', 'overseer.factory', '--db', str(self.db), 'run-one'],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -230,10 +231,13 @@ class FactoryTests(unittest.TestCase):
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 group = self.f.inspect('one')['child_group']
-                if group:
+                # The crash under test is one that happens while the task runs, so wait
+                # for the task itself, not only for its recorded group.
+                if group and (self.root/'started').exists():
                     break
                 time.sleep(.02)
             self.assertIsNotNone(group)
+            self.assertTrue((self.root/'started').exists())
             worker.kill()
             worker.wait()
             self.assertEqual(self.f.reconcile(), 1)

@@ -233,16 +233,16 @@ class OutputTest(unittest.TestCase):
             child.stdout.close()
 
     def test_the_gated_launcher_runs_the_command_and_returns_its_exit_code(self):
-        child = subprocess.Popen([sys.executable, '-c', hostos.LAUNCH, sys.executable, '-c',
-                                  'import sys; print("ran"); sys.exit(7)'],
-                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        child = hostos.popen_group([sys.executable, '-c', hostos.LAUNCH, sys.executable, '-c',
+                                    'import sys; print("ran"); sys.exit(7)'],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         output, _ = child.communicate(b'G', timeout=60)
         self.assertEqual(output.strip(), b'ran')
         self.assertEqual(child.returncode, 7)
 
     def test_the_gated_launcher_refuses_without_the_release_byte(self):
-        child = subprocess.Popen([sys.executable, '-c', hostos.LAUNCH, sys.executable, '-c',
-                                  'print("ran")'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        child = hostos.popen_group([sys.executable, '-c', hostos.LAUNCH, sys.executable, '-c',
+                                    'print("ran")'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         output, _ = child.communicate(b'', timeout=60)
         self.assertEqual(output, b'')
         self.assertEqual(child.returncode, 125)
