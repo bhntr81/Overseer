@@ -3409,7 +3409,7 @@ class WorkspaceDiffTests(unittest.TestCase):
 
     def git(self, *arguments, cwd=None):
         result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
-                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                 '-c', 'core.autocrlf=false', *arguments], cwd=cwd or self.repo, capture_output=True,
                                 timeout=60)
         return result
 
@@ -3708,7 +3708,7 @@ class HandoffRecordTests(unittest.TestCase):
 
     def git(self, *arguments, cwd=None):
         result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
-                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                 '-c', 'core.autocrlf=false', *arguments], cwd=cwd or self.repo, capture_output=True,
                                 timeout=60)
         return result
 
@@ -3977,7 +3977,7 @@ class HandoffReconciliationTests(unittest.TestCase):
 
     def git(self, *arguments, cwd=None):
         result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
-                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                 '-c', 'core.autocrlf=false', *arguments], cwd=cwd or self.repo, capture_output=True,
                                 timeout=60)
         return result
 

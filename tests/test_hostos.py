@@ -52,6 +52,21 @@ if sys.argv[1] == 'stay':
 '''
 
 
+# A controller starts a gated task in its own group, releases it, reports, and waits to be killed.
+CONTROLLER = '''
+import subprocess, sys, time
+from overseer import hostos
+child = hostos.popen_group([sys.executable, '-c', hostos.LAUNCH, sys.executable, '-c',
+                            'import time; print("task", flush=True); time.sleep(120)'],
+                           stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+child.stdin.write(b'G')
+child.stdin.flush()
+child.stdout.readline()
+print(child.pid, flush=True)
+time.sleep(120)
+'''
+
+
 def python(code, *args, **kwargs):
     return subprocess.run([sys.executable, '-c', code, *args], cwd=ROOT, env=ENV,
                           capture_output=True, text=True, timeout=60, **kwargs)
@@ -150,6 +165,28 @@ class GroupTest(unittest.TestCase):
         hostos.kill_group(child.pid)
         self.assertTrue(closes_within(child.stdout, 10), 'a grandchild still holds the pipe')
         self.assertTrue(self.wait_until_gone(child.pid))
+
+    def test_a_group_is_found_and_killed_after_its_controller_died(self):
+        controller = subprocess.Popen([sys.executable, '-c', CONTROLLER], cwd=ROOT, env=ENV,
+                                      stdout=subprocess.PIPE, text=True)
+        try:
+            group = int(controller.stdout.readline())
+        finally:
+            controller.kill()
+            controller.wait()
+            controller.stdout.close()
+        self.addCleanup(self.quiet_kill, group)
+        self.assertTrue(hostos.group_alive(group), self.diagnosis(group))
+        hostos.kill_group(group)
+        self.assertTrue(self.wait_until_gone(group))
+
+    @staticmethod
+    def diagnosis(group):
+        if not hostos.WINDOWS:
+            return 'group %d' % group
+        import ctypes
+        handle = hostos._kernel().OpenJobObjectW(4, False, hostos._job_name(group))
+        return 'job %r open=%r error=%r' % (hostos._job_name(group), handle, ctypes.get_last_error())
 
     def test_a_finished_group_is_not_alive_and_killing_it_reports_that(self):
         child = hostos.popen_group([sys.executable, '-c', 'pass'])

@@ -140,6 +140,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(result['state'], 'needs_input')
         self.assertIn('plan halted', result['detail'])
 
+    @unittest.skipIf(os.name == 'nt', 'the fake worker is a Windows command file, which cannot carry a multi-line argument')
     def test_size_gives_the_worker_the_step_brief_and_keeps_the_instruction(self):
         self.drive([{'next': 'SECOND STEP: finish the work', 'markers': ['OVERSEER_STEP_DONE']},
                     {'next': '', 'markers': ['OVERSEER_DONE']}],
