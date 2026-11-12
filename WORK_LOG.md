@@ -4401,6 +4401,22 @@ Filed against the CONTEXT pillar (rules given to the model).
 - `AGENTS.md`, `docs/DEVELOPMENT.md` and `docs/HARNESS_FRAMEWORK.md` say the same.
 - Checked on Kali: `python3 scripts/check` 661 tests OK (1 skipped); doc references pass.
 
+## 2026-11-12 — The writer handoff names the prompt-writing guide
+
+Conclusion: the handoff line Overseer sends after a finished step now tells the prompt-writing agent
+to follow `promptwriting/GUIDE.md`, by absolute path. Filed against the CONTEXT pillar.
+
+- `overseer/policy.py`: `PROMPT_GUIDE` is the guide in this repository; `_compose_handoff` adds
+  "follow <path> and" to the handoff. The clause is left out when the file is absent or the path
+  cannot be sent in one line.
+- The line was already 961 of 1000 characters on the test report, so its fixed wording was
+  shortened to pay for the path. With the repository at its usual place the same report gives 994
+  characters with the step and evidence kept. About 33 fewer characters are left for the report's
+  own fields than before, so long fields are trimmed a little sooner.
+- Tests first, frozen: `tests/test_handoff_guide.py`, SHA-256
+  265964ae306b0b2b351a3cdc9aff67e0e54fbdd00cf60dfea95c9634f6435748.
+- Overseer still cannot see whether the writer read the guide; it reads only the next report.
+
 ## 2026-11-12 — Windows: an instruction reaches the client exactly, or the job is refused
 
 Conclusion: a `.cmd` or `.bat` client is **refused**, before any child process starts, whenever an
