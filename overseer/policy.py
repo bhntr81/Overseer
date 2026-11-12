@@ -6,6 +6,7 @@ its fields are copied into one bounded prompt. No model is asked to interpret it
 
 import hashlib
 import json
+from pathlib import Path
 import re
 
 
@@ -66,6 +67,9 @@ def fingerprint(text):
 
 REPORT_MARK = "OVERSEER_REPORT"
 MAX_PROMPT = 1000
+# The prompt-writing method this repository carries. The writer handoff names it
+# by absolute path, because the worker's directory is some other project.
+PROMPT_GUIDE = Path(__file__).resolve().parents[1] / 'promptwriting' / 'GUIDE.md'
 _REPORT_TAIL = (
     "When that step is finished, print one visible line starting OVERSEER_REPORT "
     "and a JSON object with status, objective, remaining, done, and evidence. "
@@ -243,6 +247,19 @@ def _compose(fields):
             return None
 
 
+def _guide_clause():
+    """Return the words that name the guide, or '' when it cannot be named.
+
+    It is left out when the file is absent (a copy of the package without the
+    repository) or when its path could not be sent as part of one line.
+    """
+    path = Path(PROMPT_GUIDE)
+    text = path.as_posix()
+    if len(text) > 200 or not _sendable(text) or not path.is_file():
+        return ""
+    return f"follow {text} and "
+
+
 def _compose_handoff(fields):
     """Return the writer-handoff prompt for a finished step, or None.
 
@@ -254,17 +271,18 @@ def _compose_handoff(fields):
     remaining = fields["remaining"][:220]
     done = fields["done"][:120]
     evidence = fields["evidence"][:120]
+    guide = _guide_clause()
     while True:
-        parts = ["Automatic continuation. The last step is finished; its stopping condition "
+        parts = ["Automatic continuation. The last step's stopping condition "
                  "ended that prompt, not the objective.", f"Objective: {objective}."]
         if done:
             parts.append(f"Step done: {done}.")
         if evidence:
             parts.append(f"Evidence: {evidence}.")
-        parts.append("Give these results to the dedicated prompt-writing agent and have it "
+        parts.append(f"Give this to the prompt-writing agent; it must {guide}"
                      f"write one bounded next prompt for: {remaining}.")
         parts.append("Then execute that prompt, verify it, and report. "
-                     "If no separate writer can be used, report needs_input.")
+                     "If no separate writer exists, report needs_input.")
         parts.append(_REPORT_TAIL)
         prompt = " ".join(parts)
         if _sendable(prompt):
