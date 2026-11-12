@@ -1,6 +1,7 @@
 """Model decisions: provider failures pause a pane until the operator chooses."""
 import io
 import json
+import os
 import shutil
 from argparse import Namespace
 from dataclasses import replace
@@ -205,6 +206,7 @@ class ModelChoiceTests(unittest.TestCase):
             self.assertEqual(model_select(args), 1)
         self.assertIsNone(self.state['_model_decisions']['%0'].get('resolved'))
 
+    @unittest.skipIf(os.name == 'nt', 'drives the tmux monitor command line, which native Windows refuses')
     def test_status_lists_the_pending_decision(self):
         self.change('%0', MODEL_ERROR)
         self.run_tick(0)

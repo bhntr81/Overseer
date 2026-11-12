@@ -1,4 +1,4 @@
-# Developing Overseer: Linux, Windows PowerShell, Codex desktop, Claude Code
+# Developing Overseer: Linux, Windows, the Codex app, Claude Code and the Claude desktop app
 
 One guide for every environment. The rules every agent must follow are in
 [AGENTS.md](../AGENTS.md); this file says how to set up, run, and verify.
@@ -11,21 +11,47 @@ no LLM calls. The monitor additionally needs tmux.
 
 | Environment | Status | Evidence |
 |---|---|---|
-| Linux (tmux installed) | Supported: the full suite and the monitor | Suite run on Kali; CI runs `python scripts/check` on ubuntu-latest |
-| Windows PowerShell, native | **Not supported for the suite or the monitor** | Inferred from inspection, **not executed on Windows** (see below) |
-| Windows via WSL2 | Expected to work as Linux; **not tested** | Not executed |
-| Codex desktop | Works through `AGENTS.md` plus the commands below | Instruction files only; **not executed in Codex desktop** |
-| Claude Code | Works through `CLAUDE.md` (points at `AGENTS.md`) | Used to develop this repository |
+| Linux (tmux installed) | Supported: the full suite, the factory, and the monitor | Suite run on Kali; CI job `tests` on ubuntu-latest |
+| Windows, native (PowerShell) | Supported: the package, the factory, the loop, and the suite. **Not supported: the tmux monitor and `overseer here`** | CI job `windows` on windows-latest runs `.\scripts\check.ps1` and `.\scripts\check-doc-references.ps1`: 647 tests run, 629 passed, 18 skipped, and 271 document references checked, in [run 43168733243](https://github.com/bhntr81/Overseer/actions/runs/43168733243) (2026-11-12, Python 3.15); the ubuntu job of the same run: 655 run, 654 passed, 1 skipped |
+| Windows via WSL2 | Expected to work as Linux, monitor included; **not tested** | Not executed |
+| ChatGPT Codex app on Windows | Works through `AGENTS.md` plus the PowerShell commands below | Instruction files checked by inspection; the commands it is told to run are the ones the `windows` CI job runs. **Not executed inside the app** |
+| Claude desktop app on Windows (Code tab) | Works through `CLAUDE.md` (imports `AGENTS.md`) plus the same commands | Same as above. **Not executed inside the app** |
+| Claude Code on Linux | Works through `CLAUDE.md` | Used to develop this repository |
 
-Why native Windows is not supported: `overseer/__main__.py`, `factory.py`, `local.py`, and
-`orchestrate.py` import `fcntl`, which exists only on POSIX, so those modules cannot be imported on
-Windows. They use `fcntl.flock` for the single-writer lock, `os.killpg` and `signal.SIGHUP`/`SIGWINCH`
-for process control, `termios` for terminals, `/proc` for working directories, and tmux for
-sessions. Swapping those out would weaken or change the single-writer lock and the monitor itself,
-so it is deliberately not attempted here. The PowerShell scripts below are provided so the
-workflow is the same on a PowerShell host that can import the package (pwsh on Linux or macOS, or
-a Windows shell running inside WSL); the scripts themselves are plain PowerShell and
-Python-interpreter discovery. They were run under `pwsh` on Linux only.
+What native Windows runs, and how. `overseer/hostos.py` is the one module that branches on the
+operating system (its Windows job-object calls are in `overseer/winjob.py`); no other module
+names `fcntl` or `killpg`.
+
+| Need | POSIX | Native Windows |
+|---|---|---|
+| Single-writer lock (factory database, loop ledger) | `fcntl.flock`, exclusive, non-blocking | `msvcrt.locking` on byte 0 of the lock file, exclusive, non-blocking. The same refusal for a second owner; released on close and on the owner's death |
+| A task's processes as one group | a new session; `killpg` | a job object named after the child's pid; every descendant joins it and one call ends them all |
+| Is an interrupted task's group still alive | `killpg(pid, 0)` | the job is opened by name and its live-process count is read |
+| Bounded read of a task's output | `select` on the pipe | a reader thread behind the same calls |
+| Gated launcher | `exec` of the command | the launcher stays as the parent and passes the exit status through |
+
+What native Windows does not run: `overseer run`, `status`, `watch`, `unwatch`, `start`, `here`, and
+`model-select`. They drive tmux panes or a pty (`termios`, `/proc`, `SIGWINCH`), which Windows does
+not have. Each exits 1 with one line that names WSL2; none raises an `ImportError`. The bubblewrap
+isolation probe is Linux-only. Use WSL2 for all of these.
+
+Tests skipped on Windows, each with its reason in the test: the monitor command line (`run`,
+`status`; 5 tests), the pty mode (`tests/test_local.py`, the whole module), `/proc` and POSIX pane
+scope (3), the bubblewrap probe (4), the live tmux transport (1), a file name that is not Unicode
+(1), and the loop's multi-line step brief through a `.cmd` fake worker (1 test in 3 classes).
+
+Limits of the Windows path, stated plainly:
+
+- A job object keeps its name only while a handle to it is open. The controller holds one and the
+  gated launcher holds another, so a task whose controller crashed is still found by `resolve`. A
+  launcher that starts after its controller has already died cannot open the job and exits 125
+  without running the task. If the controller dies **and** the task's own command has exited while
+  a grandchild lingers, that grandchild is no longer found; on Linux it is.
+- A task killed on timeout reports the exit status Windows gives a terminated process, not `-9`.
+- A task command must be something `CreateProcess` can start: an `.exe`, or a `.cmd`/`.bat` file.
+  A script with only a shebang line is not runnable; name the interpreter in the argument list.
+  A `.cmd` file cannot receive an argument that contains a line break, so a worker client that is
+  installed as a `.cmd` shim does not get the loop's multi-line step brief intact.
 
 ## Configuration: public example, local file
 
@@ -104,22 +130,33 @@ Choose an interpreter explicitly with `OVERSEER_PYTHON` or `check.ps1 -Python <p
 **Linux terminal.** Clone, `cp config.example.json config.json`, `python3 scripts/check`. To run
 the monitor see "Background service" in the README; start with `dry_run: true`.
 
-**Windows PowerShell.** Prefer WSL2 and follow the Linux workflow. In a PowerShell session that can
-import the package, use the `.ps1` equivalents in the table. Native Windows cannot import the package
-today (see above); `check.ps1` will run and the suite will fail at import, which is the honest result.
+**Windows PowerShell.** Install Python 3.9+ (the `py` launcher or `python` on `PATH`) and Git for
+Windows. Clone, `Copy-Item config.example.json config.json` if you have none, then
+`.\scripts\check.ps1` and `.\scripts\check-doc-references.ps1`. The factory runs natively:
+`py -3 -m overseer.factory --db <path> ...`. `.gitattributes` keeps every text file LF on checkout;
+do not convert line endings, because skills provenance and the document checks hash file bytes. For
+the monitor, use WSL2 and follow the Linux workflow.
 
-**Codex desktop.** Open the repository root: Codex reads `AGENTS.md` there, which links to this
-file. Inspect with `git status` and `git log --oneline -5`; run one module with the one-test command
-above, then the full sequence; review with `git diff`. Codex's Windows environment has the same
-native-Windows limits as above; use its WSL or a Linux workspace for runs. Use argument lists, not
-shell strings, for subprocesses. Commit only when the task says so.
+**ChatGPT Codex app on Windows.** Open the repository root as the workspace: Codex reads
+`AGENTS.md` there, which links to this file. With the agent running natively (PowerShell), use the
+PowerShell column of the table above; with the agent running in WSL, use the Linux column. Inspect
+with `git status` and `git log --oneline -5`; run one module with the one-test command, then the
+full sequence; review with `git diff`. Use argument lists, not shell strings, for subprocesses.
+Commit only when the task says so.
 
-**Claude Code.** `CLAUDE.md` imports `AGENTS.md`; the workflow is the same.
+**Claude desktop app on Windows (Code tab).** Open the repository folder. `CLAUDE.md` imports
+`AGENTS.md`, so the instructions are the same ones Codex reads. The app's shell on Windows is Git
+Bash or PowerShell: in Git Bash run `python scripts/check` and `python scripts/check-doc-references`
+(or `py -3` in place of `python`); in PowerShell run the `.ps1` scripts.
+
+**Claude Code (terminal).** `CLAUDE.md` imports `AGENTS.md`; the workflow is the same on each system.
 
 ## Known limitations
 
-- Native Windows: not supported (above). Not executed on any Windows host.
-- Codex desktop: not executed; the instruction files and commands were checked by inspection.
+- Native Windows: the monitor, `overseer here`, and the isolation probe are not supported (above).
+  The suite and the factory were executed on CI `windows-latest` only, not on a desktop machine.
+- The Codex app and the Claude desktop app: not executed; their instruction files and the commands
+  they are told to run were checked by inspection and, for the commands, by the `windows` CI job.
 - The factory's argument-vector runner is not itself sandboxed; the bubblewrap profile only probes.
 - `AGENTS.md` refers to the author's private playbook path outside this repository; on another
   machine that file is absent, and the instructions say to report that rather than invent it.

@@ -1,5 +1,4 @@
 import argparse
-import fcntl
 import json
 import logging
 import os
@@ -9,7 +8,7 @@ import signal
 import sys
 import time
 
-from . import blueprint, configfile
+from . import blueprint, configfile, hostos
 from . import provider
 from . import sizing
 from . import usageguard
@@ -298,7 +297,7 @@ def run(args):
     args.state.parent.mkdir(parents=True, exist_ok=True)
     with args.state.with_suffix(".lock").open("w") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            hostos.lock(lock)
         except BlockingIOError:
             raise RuntimeError("another monitor is already using this state file")
         # Fail closed on corrupt state instead of losing duplicate-send history.
@@ -386,6 +385,8 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     try:
+        if args.action in hostos.TMUX_ACTIONS:
+            hostos.require_posix("overseer " + args.action)
         if args.action == "run":
             return run(args)
         if args.action == "status":

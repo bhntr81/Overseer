@@ -63,6 +63,10 @@ class ProviderTests(unittest.TestCase):
                             'import json, sys\n'
                             'open(%r, "w").write(json.dumps(sys.argv[1:]))\n' % str(out))
             fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+            if os.name == 'nt':
+                # Windows runs no shebang script; a command file starts the same script.
+                script, fake = fake, tmp / 'opencode.cmd'
+                fake.write_text('@"%s" "%s" %%*\n' % (sys.executable, script))
             instruction = "write calc.py; it must handle 'edge' cases & -flags"
             subprocess.run(worker_argv(instruction, model='opencode/x-free',
                                        opencode=str(fake)), check=True, timeout=30)
@@ -144,9 +148,11 @@ class BuildTaskTests(unittest.TestCase):
             self.assertEqual(spec['implementation'], resolved['argv'])
             self.assertEqual(resolved['runner'], 'opencode')
             f = Factory(tmp / 'state' / 'jobs.sqlite3')
-            self.addCleanup(f.close)
-            self.assertTrue(f.submit(spec))
-            self.assertEqual(f.inspect('bt1')['state'], 'queued')
+            try:  # closed before the directory is removed: Windows keeps an open file in place
+                self.assertTrue(f.submit(spec))
+                self.assertEqual(f.inspect('bt1')['state'], 'queued')
+            finally:
+                f.close()
 
     def test_build_task_acceptance_ids_match_the_checks(self):
         spec, _ = build_task('bt2', 'o', '/tmp/x',

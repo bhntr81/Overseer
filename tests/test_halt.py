@@ -1,3 +1,4 @@
+import os
 import io
 import json
 from pathlib import Path
@@ -97,6 +98,7 @@ class HaltRecordTests(unittest.TestCase):
         self.assertNotIn("_queue", text)
         self.assertNotIn("_model_decisions", text)
 
+    @unittest.skipIf(os.name == 'nt', 'drives the tmux monitor command line, which native Windows refuses')
     def test_the_status_command_shows_the_halted_section(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "state.json"

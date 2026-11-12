@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from overseer.factory import Factory
 from overseer.isolation import MEMORY_LIMIT_BYTES, PROTECTED, restrictions_held, run_isolation_probe
 
 
+@unittest.skipIf(os.name == 'nt', 'the isolation probe is a bubblewrap profile')
 class IsolationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -21,13 +21,13 @@ never silently inherits a paid session: the runner defaults to ``opencode``
 unless the loop spec names one.
 """
 import argparse
-import fcntl
 import json
 import os
 import time
 from pathlib import Path
 
 from overseer import blueprint
+from overseer import hostos
 from overseer import route
 from overseer import sizing
 from overseer.factory import Factory
@@ -128,7 +128,7 @@ def run_loop(db_path, loop_spec, target, once=False, dry_run=False, env=None,
     lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with lock_path.open('a') as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            hostos.lock(lock)
         except BlockingIOError:
             return _result('error', 0, None, 'another loop owns this ledger')
         factory = Factory(db_path)

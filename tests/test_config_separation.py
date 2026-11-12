@@ -6,6 +6,7 @@ config.example.json is the public configuration.
 """
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -95,6 +96,7 @@ class LoaderTests(unittest.TestCase):
         settings(path)
         self.assertEqual(path.read_bytes(), before)
 
+    @unittest.skipIf(os.name == 'nt', 'drives the tmux monitor command line, which native Windows refuses')
     def test_the_cli_exits_one_and_explains_when_config_json_is_missing(self):
         errors = io.StringIO()
         argv = ["overseer", "status", "--state", str(self.dir / "state.json")]

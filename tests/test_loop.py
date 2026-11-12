@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -46,6 +47,11 @@ class LoopTests(unittest.TestCase):
             'sys.exit(step.get("exit", 0))\n'
             % (str(self.plan_path), str(self.counter), str(self.counter), str(self.argvlog)))
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        if os.name == 'nt':
+            # Windows runs no shebang script; a command file starts the same script.
+            wrapper = self.base / 'opencode.cmd'
+            wrapper.write_text('@"%s" "%s" %%*\n' % (sys.executable, fake))
+            return str(wrapper)
         return str(fake)
 
     def spec(self, **over):
@@ -134,6 +140,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(result['state'], 'needs_input')
         self.assertIn('plan halted', result['detail'])
 
+    @unittest.skipIf(os.name == 'nt', 'the fake worker is a Windows command file, which cannot carry a multi-line argument')
     def test_size_gives_the_worker_the_step_brief_and_keeps_the_instruction(self):
         self.drive([{'next': 'SECOND STEP: finish the work', 'markers': ['OVERSEER_STEP_DONE']},
                     {'next': '', 'markers': ['OVERSEER_DONE']}],

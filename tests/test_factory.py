@@ -18,6 +18,7 @@ from overseer.codemap import (
     MAX_MEMORY_RECORDS_PER_SYMBOL, MAX_SUMMARY_MEMORY_LINES, MAX_UNATTACHED_MEMORY_RECORDS,
     assemble as assemble_codebase, attach_memory, summary as codebase_summary,
 )
+from overseer import hostos
 from overseer.factory import (
     CONTRACT_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID,
     MEMORY_KINDS, PROVIDER_NAMES, REQUEST_INPUT_FIELDS, Factory, canonical,
@@ -185,7 +186,7 @@ class FactoryTests(unittest.TestCase):
             children.append(child)
             return child
         with patch('overseer.factory.subprocess.Popen', side_effect=launch), \
-             patch('selectors.DefaultSelector', side_effect=RuntimeError('injected selector failure')):
+             patch('overseer.hostos.output_selector', side_effect=RuntimeError('injected selector failure')):
             with self.assertRaisesRegex(RuntimeError, 'selector failure'):
                 self.f.run_one()
         self.assertIsNotNone(children[0].poll())
@@ -220,7 +221,8 @@ class FactoryTests(unittest.TestCase):
 
     def test_hard_worker_crash_requires_reconciliation(self):
         spec = self.spec()
-        spec['implementation'] = [sys.executable, '-c', 'import time; time.sleep(30)']
+        spec['implementation'] = [sys.executable, '-c', "import time; from pathlib import Path; "
+                                  "Path('started').write_text('x'); time.sleep(30)"]
         self.f.submit(spec)
         worker = subprocess.Popen([sys.executable, '-m', 'overseer.factory', '--db', str(self.db), 'run-one'],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -229,10 +231,13 @@ class FactoryTests(unittest.TestCase):
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 group = self.f.inspect('one')['child_group']
-                if group:
+                # The crash under test is one that happens while the task runs, so wait
+                # for the task itself, not only for its recorded group.
+                if group and (self.root/'started').exists():
                     break
                 time.sleep(.02)
             self.assertIsNotNone(group)
+            self.assertTrue((self.root/'started').exists())
             worker.kill()
             worker.wait()
             self.assertEqual(self.f.reconcile(), 1)
@@ -246,7 +251,7 @@ class FactoryTests(unittest.TestCase):
                 worker.wait()
             if group:
                 try:
-                    os.killpg(group, signal.SIGKILL)
+                    hostos.kill_group(group)
                 except ProcessLookupError:
                     pass
 
@@ -3076,7 +3081,7 @@ class ContextTests(unittest.TestCase):
     def test_a_mismatched_installed_file_is_not_verified(self):
         from overseer.skills import provenance
         entry = self.install_skill('alpha')
-        (Path(entry['installed_path']) / 'SKILL.md').write_text('changed\n')
+        (Path(entry['installed_path']) / 'SKILL.md').write_bytes(b'changed\n')
         record = provenance(self.provenance_file([entry, self.install_skill('beta')]))
         alpha = record['skills'][0]
         self.assertEqual(alpha['files'][0]['outcome'], 'mismatch')
@@ -3408,7 +3413,7 @@ class WorkspaceDiffTests(unittest.TestCase):
 
     def git(self, *arguments, cwd=None):
         result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
-                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                 '-c', 'core.autocrlf=false', *arguments], cwd=cwd or self.repo, capture_output=True,
                                 timeout=60)
         return result
 
@@ -3467,8 +3472,8 @@ class WorkspaceDiffTests(unittest.TestCase):
                 self.assertEqual(mine.read_bytes(), theirs.read_bytes(), name)
 
     def test_a_modified_added_and_deleted_file_are_in_an_exact_patch(self):
-        code = ("from pathlib import Path; Path('keep.txt').write_text('a\\nB\\nc\\n'); "
-                "Path('new.txt').write_text('hello\\n'); Path('gone.txt').unlink()")
+        code = ("from pathlib import Path; Path('keep.txt').write_bytes(b'a\\nB\\nc\\n'); "
+                "Path('new.txt').write_bytes(b'hello\\n'); Path('gone.txt').unlink()")
         result, receipt, patch = self.run_spec(self.spec('three', code))
         self.assertEqual(result['state'], 'passed')
         files = self.check_counts(receipt)
@@ -3677,6 +3682,7 @@ class WorkspaceDiffTests(unittest.TestCase):
         self.assertIsNone(diff)
         self.assertIsNone(self.f.run_one())
 
+    @unittest.skipIf(os.name == 'nt', 'a Windows file name cannot hold bytes that are not Unicode')
     def test_a_path_that_is_not_utf8_is_listed_and_withheld(self):
         code = "open(b'caf\\xe9.txt', 'wb').write(b'x\\n')"
         result, receipt, patch = self.run_spec(self.spec('latin', code))
@@ -3706,7 +3712,7 @@ class HandoffRecordTests(unittest.TestCase):
 
     def git(self, *arguments, cwd=None):
         result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
-                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                 '-c', 'core.autocrlf=false', *arguments], cwd=cwd or self.repo, capture_output=True,
                                 timeout=60)
         return result
 
@@ -3975,7 +3981,7 @@ class HandoffReconciliationTests(unittest.TestCase):
 
     def git(self, *arguments, cwd=None):
         result = subprocess.run(['git', '-c', 'user.email=t@example.invalid', '-c', 'user.name=t',
-                                 *arguments], cwd=cwd or self.repo, capture_output=True,
+                                 '-c', 'core.autocrlf=false', *arguments], cwd=cwd or self.repo, capture_output=True,
                                 timeout=60)
         return result
 

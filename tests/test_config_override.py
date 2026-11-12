@@ -38,6 +38,7 @@ class ConfigOverrideTests(unittest.TestCase):
         with patch.dict(os.environ, {"OVERSEER_CONFIG": ""}):
             self.assertEqual(configfile.default_path(self.dir), self.dir / "config.json")
 
+    @unittest.skipIf(os.name == 'nt', 'drives the tmux monitor command line, which native Windows refuses')
     def test_the_cli_reads_the_chosen_file_and_never_writes_it(self):
         chosen = self.dir / "mine.json"
         shutil.copyfile(ROOT / "config.example.json", chosen)
@@ -50,6 +51,7 @@ class ConfigOverrideTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(chosen.read_bytes(), before)
 
+    @unittest.skipIf(os.name == 'nt', 'drives the tmux monitor command line, which native Windows refuses')
     def test_a_missing_chosen_file_is_named_in_the_error(self):
         missing = self.dir / "nope.json"
         env = dict(os.environ, OVERSEER_CONFIG=str(missing), TMUX_TMPDIR=str(self.dir))
