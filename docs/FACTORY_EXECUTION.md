@@ -68,9 +68,10 @@ The example task's `workspace` is the author's checkout path; edit it to the abs
 checkout before submitting (the factory requires an existing absolute directory).
 
 Submitting the example again is idempotent and will not rerun a passed job. Its
-ID changes whenever its specification does (`-003` raised the per-command
-timeout from 120 to 900 seconds, because the suite it runs had outgrown the
-old limit); earlier records in the author's ledger keep their original
+ID changes whenever its specification does (`-003` replaced the single check
+that ran the whole suite with two small checks: the suite had outgrown the
+120-second limit, and it does not pass when run inside a factory job, see the
+known limitations in [DEVELOPMENT.md](DEVELOPMENT.md)); earlier records in the author's ledger keep their original
 specification and acceptance. For a new run, create an explicitly reviewed task
 with a
 new ID. Each task specifies an existing absolute workspace, an objective, one

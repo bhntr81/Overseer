@@ -179,6 +179,11 @@ private projects.
 - The Codex app and the Claude desktop app: not executed; their instruction files and the commands
   they are told to run were checked by inspection and, for the commands, by the `windows` CI job.
 - The factory's argument-vector runner is not itself sandboxed; the bubblewrap profile only probes.
+- Do not run the whole test suite as a factory task. A factory job's children inherit the
+  job's `OVERSEER_*` context variables, and seven context tests in `tests/test_factory.py`
+  (which start a factory of their own) fail when those variables are already set. Run the suite
+  with `scripts/check` directly. Measured 2026-11-12 in a fresh clone: 674 of 681 passed nested,
+  all passed directly.
 - `AGENTS.md` refers to the author's private playbook path outside this repository; on another
   machine that file is absent, and the instructions say to report that rather than invent it. The
   prompt-writing method is the exception: it lives in `promptwriting/`, without the design
