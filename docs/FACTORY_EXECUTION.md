@@ -61,15 +61,16 @@ python3 scripts/check
 python3 -m overseer.factory submit factory/tasks/overseer-checks.json
 python3 -m overseer.factory run-one
 python3 -m overseer.factory status
-python3 -m overseer.factory inspect overseer-foundation-checks-002
+python3 -m overseer.factory inspect overseer-foundation-checks-003
 ```
 
 The example task's `workspace` is the author's checkout path; edit it to the absolute path of your own
 checkout before submitting (the factory requires an existing absolute directory).
 
-The example already ran successfully. Submitting it again is idempotent and will
-not rerun a passed job. The example carries a new ID because the workspace
-moved; the earlier `overseer-foundation-checks-001` record keeps its original
+Submitting the example again is idempotent and will not rerun a passed job. Its
+ID changes whenever its specification does (`-003` raised the per-command
+timeout from 120 to 900 seconds, because the suite it runs had outgrown the
+old limit); earlier records in the author's ledger keep their original
 specification and acceptance. For a new run, create an explicitly reviewed task
 with a
 new ID. Each task specifies an existing absolute workspace, an objective, one

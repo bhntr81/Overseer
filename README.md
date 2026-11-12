@@ -150,12 +150,13 @@ held after an escalation), `model-select PANE` (answer a pending model decision)
 A task is a JSON file naming an absolute workspace directory, an implementation command, and
 check commands, each an argument list (no shell). `factory/tasks/overseer-checks.json` is an
 example; change its `workspace` to the absolute path of your clone before submitting it.
+Its one check runs this repository's test suite, so `run-one` takes a few minutes.
 
 ```sh
 python3 -m overseer.factory submit factory/tasks/overseer-checks.json
 python3 -m overseer.factory run-one
 python3 -m overseer.factory status
-python3 -m overseer.factory inspect overseer-foundation-checks-002
+python3 -m overseer.factory inspect overseer-foundation-checks-003
 ```
 
 `passed` means every command exited 0; it is not a product review. The ledger and the run
