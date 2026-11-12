@@ -1595,6 +1595,14 @@ class Factory:
         env = dict(env if env is not None else os.environ)
         env['PWD'] = str(cwd)
         started = time.monotonic()
+        # On Windows the program is resolved as the shell would, and a command that
+        # cannot be handed over unaltered is refused here, before any child exists.
+        argv, refusal = hostos.prepare(argv, env, cwd)
+        if refusal:
+            log.write_text(refusal + '\n', encoding='utf-8')
+            return {'argv': argv, 'exit_code': hostos.refusal_status(refusal), 'timed_out': False,
+                    'elapsed_seconds': time.monotonic() - started, 'log': str(log),
+                    'output_truncated': False}
         # Bounded captured output; drain the remainder so a noisy child cannot
         # deadlock or fill the evidence filesystem. stderr is merged with stdout.
         # The child cannot execute the task until its identity is durably saved.

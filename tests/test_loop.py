@@ -10,6 +10,11 @@ from pathlib import Path
 from overseer.factory import Factory
 from overseer.orchestrate import run_loop
 
+try:
+    from tests.fakeclient import make_client
+except ImportError:
+    from fakeclient import make_client
+
 
 class LoopTests(unittest.TestCase):
     def setUp(self):
@@ -25,9 +30,7 @@ class LoopTests(unittest.TestCase):
 
     def make_fake(self, plan):
         self.plan_path.write_text(json.dumps(plan))
-        fake = self.base / 'opencode'
-        fake.write_text(
-            '#!/usr/bin/env python3\n'
+        body = (
             'import json, sys\n'
             'plan = json.load(open(%r))\n'
             'try: n = int(open(%r).read())\n'
@@ -46,13 +49,8 @@ class LoopTests(unittest.TestCase):
             '    print(step["raw"])\n'
             'sys.exit(step.get("exit", 0))\n'
             % (str(self.plan_path), str(self.counter), str(self.counter), str(self.argvlog)))
-        fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-        if os.name == 'nt':
-            # Windows runs no shebang script; a command file starts the same script.
-            wrapper = self.base / 'opencode.cmd'
-            wrapper.write_text('@"%s" "%s" %%*\n' % (sys.executable, fake))
-            return str(wrapper)
-        return str(fake)
+        # A shebang script on POSIX, a native .exe on Windows: neither goes through cmd.exe.
+        return make_client(self.base, 'opencode', body)
 
     def spec(self, **over):
         s = {'id_prefix': 'loop', 'objective': 'FIRST STEP: begin the work',
@@ -140,7 +138,6 @@ class LoopTests(unittest.TestCase):
         self.assertEqual(result['state'], 'needs_input')
         self.assertIn('plan halted', result['detail'])
 
-    @unittest.skipIf(os.name == 'nt', 'the fake worker is a Windows command file, which cannot carry a multi-line argument')
     def test_size_gives_the_worker_the_step_brief_and_keeps_the_instruction(self):
         self.drive([{'next': 'SECOND STEP: finish the work', 'markers': ['OVERSEER_STEP_DONE']},
                     {'next': '', 'markers': ['OVERSEER_DONE']}],

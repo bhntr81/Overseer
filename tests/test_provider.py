@@ -7,6 +7,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+try:
+    from tests.fakeclient import make_client
+except ImportError:
+    from fakeclient import make_client
+
 from overseer.factory import Factory
 from overseer.provider import (
     DEFAULT_MODEL, DEFAULT_RUNNER, FREE_MODELS, MAX_INSTRUCTION_CHARS,
@@ -58,16 +63,10 @@ class ProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             out = tmp / 'argv.json'
-            fake = tmp / 'opencode'
-            fake.write_text('#!/usr/bin/env python3\n'
-                            'import json, sys\n'
-                            'open(%r, "w").write(json.dumps(sys.argv[1:]))\n' % str(out))
-            fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-            if os.name == 'nt':
-                # Windows runs no shebang script; a command file starts the same script.
-                script, fake = fake, tmp / 'opencode.cmd'
-                fake.write_text('@"%s" "%s" %%*\n' % (sys.executable, script))
-            instruction = "write calc.py; it must handle 'edge' cases & -flags"
+            # A shebang script on POSIX, a native .exe on Windows: neither goes through cmd.exe.
+            fake = make_client(tmp, 'opencode', 'import json, sys\n'
+                               'open(%r, "w").write(json.dumps(sys.argv[1:]))\n' % str(out))
+            instruction = "write calc.py; it must handle 'edge' cases & -flags; \"quoted\" %PATH%\nsecond line"
             subprocess.run(worker_argv(instruction, model='opencode/x-free',
                                        opencode=str(fake)), check=True, timeout=30)
             received = json.loads(out.read_text())

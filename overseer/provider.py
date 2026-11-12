@@ -53,8 +53,12 @@ def worker_argv(instruction, model=DEFAULT_MODEL, opencode=DEFAULT_OPENCODE,
                 json_output=False):
     """Return the OpenCode worker argv for one instruction.
 
-    The instruction is validated and placed as the single trailing element. A
-    shell is never used, so the instruction cannot be split or interpreted. With
+    The instruction is validated and placed as the single trailing element. No
+    shell is asked for. On POSIX, and for a native program on Windows, the
+    instruction therefore cannot be split or interpreted. Windows runs a .cmd or
+    .bat client through cmd.exe all the same, so the factory refuses to start
+    such a client with an instruction cmd.exe would interpret
+    (`overseer.hostos.prepare`); it never arrives altered. With
     ``json_output`` the stream is machine-readable; by default the model's text
     output is produced, so a downstream reader can find an AGENTS.md status
     block the model prints.

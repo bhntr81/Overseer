@@ -14,6 +14,7 @@ with one line that names WSL2.
 """
 import os
 import queue
+import re
 import selectors
 import signal
 import subprocess
@@ -50,6 +51,71 @@ def require_posix(feature):
     if WINDOWS:
         raise RuntimeError('%s is not supported on native Windows (it needs tmux and a POSIX '
                            'terminal); run Overseer inside WSL2 for it' % feature)
+
+
+# --- starting a command -----------------------------------------------------
+
+# Windows starts a .cmd or .bat file through cmd.exe, which reads the command
+# line by its own rules: a quote ends quoting, %NAME% is expanded even inside
+# quotes, & | < > ^ ( ) ! are syntax, and a line break ends the line. No
+# escaping makes arbitrary text safe there, so only arguments made of
+# characters cmd.exe leaves alone are passed to such a file.
+_BATCH = ('.cmd', '.bat')
+_INERT = re.compile(r'[A-Za-z0-9 _./:\\=+@,~-]*')
+_REFUSED, _MISSING = 126, 127
+
+
+def prepare(argv, env, cwd):
+    """Return (argv, refusal) for a command about to be started in `cwd` with `env`.
+
+    POSIX: the command is returned as given. Windows: a program named without a
+    directory is looked up on PATH with the PATHEXT extensions, as the shell
+    does, and its full path replaces the name. `refusal` is None, or one line
+    saying why nothing may be started: the program does not exist, or it is a
+    .cmd or .bat file and an argument holds text cmd.exe would interpret.
+    """
+    if not WINDOWS:
+        return argv, None
+    program = _find(argv[0], env, cwd)
+    if program is None:
+        return argv, ('overseer: cannot start %r: no such program (looked on PATH with %s); '
+                      'install it or give its full path' % (argv[0], _extensions(env)))
+    argv = [program, *argv[1:]]
+    if program.lower().endswith(_BATCH):
+        for index, argument in enumerate(argv[1:], 1):
+            if not _INERT.fullmatch(argument):
+                return argv, ('overseer: refused to start %s: argument %d holds text that cmd.exe, '
+                              'which runs a .cmd or .bat file, would interpret or cannot carry (a '
+                              'quote, %%, &, a line break, or another character outside letters, '
+                              'digits, spaces and _./:\\=+@,~-). Nothing was run. Install a native '
+                              '.exe of this program, run it under WSL2, or name its interpreter and '
+                              'script in the argument list.' % (program, index))
+    return argv, None
+
+
+def refusal_status(refusal):
+    """The exit status recorded for a refusal: 127 not found, 126 not startable."""
+    return _MISSING if 'no such program' in refusal else _REFUSED
+
+
+def _extensions(env):
+    return env.get('PATHEXT') or os.environ.get('PATHEXT') or '.COM;.EXE;.BAT;.CMD'
+
+
+def _find(name, env, cwd):
+    """Find a program as cmd.exe does: the directory given, else `cwd`, then PATH."""
+    extensions = [item.lower() for item in _extensions(env).split(';') if item]
+    if os.path.dirname(name):
+        folders = [None]
+    else:
+        folders = [str(cwd)] + [item for item in (env.get('PATH') or '').split(os.pathsep) if item]
+    for folder in folders:
+        base = os.path.join(str(cwd), name) if folder is None else os.path.join(folder, name)
+        exact = [base] if os.path.splitext(base)[1].lower() in extensions else []
+        for candidate in exact + [base + extension for extension in extensions]:
+            if os.path.isfile(candidate):
+                return candidate
+    return None
 
 
 # --- the exclusive non-blocking lock ---------------------------------------

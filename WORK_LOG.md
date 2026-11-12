@@ -4401,3 +4401,44 @@ Filed against the CONTEXT pillar (rules given to the model).
 - `AGENTS.md`, `docs/DEVELOPMENT.md` and `docs/HARNESS_FRAMEWORK.md` say the same.
 - Checked on Kali: `python3 scripts/check` 661 tests OK (1 skipped); doc references pass.
 
+## 2026-11-12 — Windows: an instruction reaches the client exactly, or the job is refused
+
+Conclusion: a `.cmd` or `.bat` client is **refused**, before any child process starts, whenever an
+argument holds anything `cmd.exe` would interpret or cannot carry; it is started only when every
+argument is made of letters, digits, spaces and `_./:\=+@,~-`. Reason: no escaping makes arbitrary
+text safe on a `cmd.exe` command line, a line break cannot be carried at all, and no client's
+stdin or file route was verified. A native `.exe` client receives every text exactly. Filed against
+the TOOLS pillar (safe execution).
+
+Prompt: `WINDOWS_CLIENT_LAUNCH_NEXT_PROMPT.md`, supplied by John, executed by the primary agent
+(Claude Fable 5.2). It names `3c21beb` as the start; `main` was at `da72c72` (the prompt-writing
+project had moved into `promptwriting/`), so the work started there.
+
+- `hostos.prepare(argv, env, cwd)`: on POSIX returns the command unchanged; on Windows resolves the
+  program in the workspace and on `PATH` with `PATHEXT`, and returns one refusal line for a missing
+  program (status 127) or an unsafe `.cmd`/`.bat` command (status 126). `Factory.execute` calls it
+  first and, on a refusal, writes the line to the command's log and returns without a child
+  (`factory.py` +9 lines). It covers the implementation and every check. `provider.py` docstring
+  corrected.
+- The three premises, measured on windows-latest with the new tests red (run 43174757467):
+  1. Not found: confirmed. A client present only as `.cmd` on `PATH`, named bare, failed with
+     `FileNotFoundError: [WinError 2]`.
+  2. Line breaks: confirmed. The client received only `FIRST: read the brief`; the job `passed`.
+  3. Interpretation: confirmed. `finish it" & echo pwned> marker.txt & rem "` arrived as
+     `finish it"` and `marker.txt` was created; `%PATH%` arrived expanded; both jobs `passed`.
+- Executed: Linux locally (both checks) and CI run 43175199795 on the branch: ubuntu 675 run / 672
+  passed / 3 skipped; windows-latest 667 run / 651 passed / 16 skipped; all 14 tests of
+  `tests/test_client_launch.py` ran on Windows except the one that is the POSIX branch. Two CI
+  rounds: one red by design, one green.
+- Not executed: any real client; `_claude_argv` and `_codex_argv` flags stay unverified; how
+  `opencode`, `claude` or `codex` are actually installed on Windows was not checked.
+- Test freezes: (1) `tests/fakeclient.py` and `tests/test_client_launch.py` new;
+  `tests/test_loop.py` and `tests/test_provider.py` changed their Windows fake worker from a `.cmd`
+  starter to a native `.exe` (pip's console-script launcher with a zipped `__main__.py`), because
+  `.cmd` clients are now refused for such text; the skip of the multi-line step-brief test was
+  removed and the provider test's instruction gained a quote, `%PATH%` and a line break. Hashes
+  recorded before `hostos.prepare` existed. No re-freeze was needed. A temporary
+  `tests/test_probe_premises.py` printed the round-1 measurements and was removed.
+- Open, for John: should a `.cmd` client be given the instruction through standard input or a file
+  once a client's own help confirms it reads one? (yes/no; needs a real client to check)
+
