@@ -1,5 +1,10 @@
 """Single-program mode (`overseer here`): one client in this terminal, no tmux."""
 import os
+import unittest
+
+if os.name == 'nt':
+    raise unittest.SkipTest('single-program mode needs a pty')
+
 from pathlib import Path
 import pty
 import tempfile

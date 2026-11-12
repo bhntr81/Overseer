@@ -58,6 +58,7 @@ class ScopeTests(unittest.TestCase):
         with patch('overseer.tmux.command', side_effect=inventory(rows)):
             self.assertEqual(backend.panes(), ['%0'])
 
+    @unittest.skipIf(os.name == 'nt', 'reads a client directory from /proc')
     def test_path_scope_uses_the_client_directory(self):
         backend = Tmux(target_paths=[os.getcwd()])
         rows = [row('%0', '0', 'other', 'Other', BINDING, '/tmp/elsewhere')]
@@ -110,11 +111,13 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(snapshot.pane, '%0')
         self.assertTrue(snapshot.ready)
 
+    @unittest.skipIf(os.name == 'nt', 'tmux pane scope compares POSIX paths')
     def test_under_rejects_a_sibling_directory(self):
         self.assertTrue(under('/home/kali/Projects/Overseer', '/home/kali/Projects'))
         self.assertFalse(under('/home/kali/Projects/Overseer2', '/home/kali/Projects/Overseer'))
         self.assertFalse(under('', '/home/kali/Projects'))
 
+    @unittest.skipIf(os.name == 'nt', 'reads a client directory from /proc')
     def test_client_directory_prefers_the_bridged_client(self):
         self.assertEqual(client_directory('%0', BINDING, '/tmp/elsewhere'), os.getcwd())
         self.assertEqual(client_directory('%0', '', '/tmp/elsewhere'), '/tmp/elsewhere')

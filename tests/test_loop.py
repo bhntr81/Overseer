@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 import sys
 import tempfile
@@ -46,6 +47,11 @@ class LoopTests(unittest.TestCase):
             'sys.exit(step.get("exit", 0))\n'
             % (str(self.plan_path), str(self.counter), str(self.counter), str(self.argvlog)))
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+        if os.name == 'nt':
+            # Windows runs no shebang script; a command file starts the same script.
+            wrapper = self.base / 'opencode.cmd'
+            wrapper.write_text('@"%s" "%s" %%*\n' % (sys.executable, fake))
+            return str(wrapper)
         return str(fake)
 
     def spec(self, **over):

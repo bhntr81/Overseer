@@ -73,7 +73,8 @@ def _text(value, absolute=False):
         value.encode('utf-8')
     except UnicodeEncodeError:
         return False
-    return not absolute or os.path.isabs(value)
+    # A path recorded on a POSIX machine is still absolute when read on Windows.
+    return not absolute or os.path.isabs(value) or value.startswith('/')
 
 
 def _entry_problem(entry, seen):

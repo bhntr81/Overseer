@@ -31,6 +31,7 @@ import signal
 import subprocess
 import tempfile
 
+from . import hostos
 from .policy import (MAX_PROMPT, REPORT_MARK, STOP_REASON, _REPORT_TAIL, _decode_report,
                      _sendable, current_turn, fingerprint, tail_text)
 
@@ -309,6 +310,6 @@ def _finished(record, jobs):
 
 def _kill(record):
     try:
-        os.killpg(record["pid"], signal.SIGTERM)
+        hostos.terminate_group(record["pid"])
     except OSError:
         pass

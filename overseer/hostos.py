@@ -33,7 +33,10 @@ _POSIX_LAUNCH = ('import os,sys; ' + _GATE +
                  'os.execvpe(sys.argv[1],sys.argv[1:],os.environ)')
 # Windows has no exec that keeps the process identity and exit status, so the
 # launcher stays as the parent and passes the command's exit status through.
-_WINDOWS_LAUNCH = ('import subprocess,sys; ' + _GATE +
+# It also opens the group's job by name: a job loses its name when its last
+# handle closes, so this handle keeps the group findable after the controller dies.
+_WINDOWS_LAUNCH = ('import ctypes,os,subprocess,sys; ' + _GATE +
+                   'held=ctypes.WinDLL("kernel32").OpenJobObjectW(4,0,"overseer-group-%d"%os.getpid()); '
                    'sys.exit(subprocess.call(sys.argv[1:], stdin=subprocess.DEVNULL))')
 LAUNCH = _WINDOWS_LAUNCH if WINDOWS else _POSIX_LAUNCH
 
@@ -140,8 +143,21 @@ def kill_group(pid):
         raise ProcessLookupError('no process group %d' % pid)
 
 
-# Windows job objects. A job lives while it has a process or an open handle, so
-# a group outlives the controller that started it and is found again by name.
+def terminate_group(pid):
+    """Ask the group started as `pid` to stop: SIGTERM on POSIX, a kill on Windows."""
+    if not WINDOWS:
+        os.killpg(pid, signal.SIGTERM)
+    elif pid in _JOBS or group_alive(pid):
+        kill_group(pid)
+    else:
+        # A child that was not started through popen_group has no job; end it alone.
+        os.kill(pid, signal.SIGTERM)
+
+
+# Windows job objects. A job lives while it has a process or an open handle, and
+# it keeps its name only while a handle is open. The controller holds one and the
+# gated launcher holds another, so a group whose controller died is found again
+# by name for as long as its launcher runs.
 _JOBS = {}
 _JOB_TERMINATE = 0x0008
 _JOB_QUERY = 0x0004
