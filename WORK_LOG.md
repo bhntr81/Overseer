@@ -4458,3 +4458,15 @@ project had moved into `promptwriting/`), so the work started there.
 - Open, for John: should a `.cmd` client be given the instruction through standard input or a file
   once a client's own help confirms it reads one? (yes/no; needs a real client to check)
 
+## 2026-11-12 — Writer handoff guide merged into main and activated
+
+Conclusion: `handoff-names-guide` (`ca35783`) is merged into `main` with its history kept. The
+feature was already wired into the live writer path (`policy._compose_handoff`); this entry is the
+merge, the documentation that points at it, and the service restart. Filed against CONTEXT.
+
+- Merge conflict: only this file (two entries appended at the same place); both kept, in time order.
+- `README.md` (output-report section) and the CONTEXT row of `docs/HARNESS_FRAMEWORK.md` now say
+  the handoff names `promptwriting/GUIDE.md`; shifted `overseer/policy.py` line references re-pointed.
+- The monitor reads `overseer/policy.py` at start, so the running service needed a restart to send
+  the new handoff wording.
+

@@ -470,9 +470,12 @@ Overseer reads the latest report on the visible screen, copies those fields
 into the next one-line prompt, and submits that prompt. It does not ask another
 model to invent the prompt, and it does not execute terminal text. A
 `step_done` report gets a writer-handoff prompt: give this step's results to
-the dedicated prompt-writing agent, have it write one bounded next prompt for
-the named step, then execute and verify that prompt, or report `needs_input`
-if no separate writer can be used. Overseer instructs that handoff; it cannot
+the dedicated prompt-writing agent, have it follow the prompt-writing guide
+and write one bounded next prompt for the named step, then execute and verify
+that prompt, or report `needs_input` if no separate writer exists. The guide is
+`promptwriting/GUIDE.md` in this repository, named in the prompt by absolute
+path because the worker's directory is some other project; the clause is left
+out when that file is absent. Overseer instructs that handoff; it cannot
 see or verify that a separate writer ran or that its prompt was executed, and
 it reads only the next report. A `done` report means the objective is
 finished and stops further automatic prompts for that screen, even when its
