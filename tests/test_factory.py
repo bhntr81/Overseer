@@ -18,6 +18,7 @@ from overseer.codemap import (
     MAX_MEMORY_RECORDS_PER_SYMBOL, MAX_SUMMARY_MEMORY_LINES, MAX_UNATTACHED_MEMORY_RECORDS,
     assemble as assemble_codebase, attach_memory, summary as codebase_summary,
 )
+from overseer import hostos
 from overseer.factory import (
     CONTRACT_FIELDS, FAKE_PROVIDER_VERIFIER_ID, FIXTURE_VERIFIER_ID,
     MEMORY_KINDS, PROVIDER_NAMES, REQUEST_INPUT_FIELDS, Factory, canonical,
@@ -246,7 +247,7 @@ class FactoryTests(unittest.TestCase):
                 worker.wait()
             if group:
                 try:
-                    os.killpg(group, signal.SIGKILL)
+                    hostos.kill_group(group)
                 except ProcessLookupError:
                     pass
 

@@ -1,0 +1,7 @@
+# Every text file is LF in the work tree on every platform. Skills provenance and the
+# document checks hash file bytes, so a CRLF checkout on Windows would change them.
+* text=auto eol=lf
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.zip binary

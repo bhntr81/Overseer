@@ -6,8 +6,8 @@
   with it from the repository root, and exits with that process's exit code.
   Select a specific interpreter with -Python or the OVERSEER_PYTHON environment variable.
   -ResolveOnly prints the interpreter that would be used and exits 0 without running tests.
-  The suite imports the POSIX-only fcntl module; see docs/DEVELOPMENT.md for what that means
-  on Windows.
+  The suite runs on native Windows; tests that need tmux, a pty, /proc, or bubblewrap are
+  skipped there with a stated reason. See docs/DEVELOPMENT.md.
 #>
 param(
     [string]$Python = $env:OVERSEER_PYTHON,

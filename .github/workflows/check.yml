@@ -20,3 +20,12 @@ jobs:
       # Ubuntu 24.04 runners block unprivileged user namespaces, which bubblewrap needs.
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - run: python3 scripts/check
+  windows:
+    # Native Windows: the package, the factory, and the suite. The tmux monitor and the
+    # pty mode are POSIX-only and their tests are skipped here with a stated reason.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: .\scripts\check.ps1
+      - run: .\scripts\check-doc-references.ps1

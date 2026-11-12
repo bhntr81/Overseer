@@ -1,10 +1,10 @@
 """Explicit, single-worker local jobs. Trusted commands only; not a sandbox."""
 import argparse
 from contextlib import contextmanager
-import fcntl
 from overseer.codemap import assemble as assemble_codebase
 from overseer.codemap import summary as codebase_summary
 from overseer import handoff
+from overseer import hostos
 from overseer import readback
 from overseer import reconcile
 from overseer.isolation import run_isolation_probe
@@ -734,7 +734,7 @@ class Factory:
             return
         with self.path.with_suffix('.lock').open('a') as lock:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                hostos.lock(lock)
             except BlockingIOError:
                 raise RuntimeError('another factory worker owns this database') from None
             self._lock_depth = 1
@@ -742,7 +742,7 @@ class Factory:
                 yield
             finally:
                 self._lock_depth = 0
-                fcntl.flock(lock, fcntl.LOCK_UN)
+                hostos.unlock(lock)
 
     def transition(self, job_id, state, detail):
         with self.db:
@@ -777,11 +777,7 @@ class Factory:
             if row['state'] != 'needs_reconciliation':
                 raise ValueError('only an interrupted job can be resolved')
             if row['child_group']:
-                try:
-                    os.killpg(row['child_group'], 0)
-                except ProcessLookupError:
-                    pass
-                else:
+                if hostos.group_alive(row['child_group']):
                     raise RuntimeError('recorded child process group still exists; inspect before resolution')
             with self.db:
                 # The strike is recorded in the same transaction as the final
@@ -1601,16 +1597,11 @@ class Factory:
         started = time.monotonic()
         # Bounded captured output; drain the remainder so a noisy child cannot
         # deadlock or fill the evidence filesystem. stderr is merged with stdout.
-        import selectors
         # The child cannot execute the task until its identity is durably saved.
         # Parent death before the one-byte release closes stdin and exits it.
-        launch = ('import os,sys; gate=sys.stdin.buffer.read(1); '
-                  'sys.exit(125) if gate != b"G" else None; '
-                  'fd=os.open(os.devnull,os.O_RDONLY); os.dup2(fd,0); '
-                  'os.execvpe(sys.argv[1],sys.argv[1:],os.environ)')
-        child = subprocess.Popen([sys.executable, '-c', launch, *argv], cwd=cwd, stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 start_new_session=True, env=env)
+        child = hostos.popen_group([sys.executable, '-c', hostos.LAUNCH, *argv], cwd=cwd,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, env=env)
         selector = None
         timed_out = False
         written = 0
@@ -1618,8 +1609,7 @@ class Factory:
         try:
             with self.db:
                 self.db.execute('UPDATE jobs SET child_group=? WHERE id=?', (child.pid, job_id))
-            selector = selectors.DefaultSelector()
-            selector.register(child.stdout, selectors.EVENT_READ)
+            selector = hostos.output_selector(child.stdout)
             child.stdin.write(b'G')
             child.stdin.flush()
             child.stdin.close()
@@ -1629,7 +1619,7 @@ class Factory:
                         timed_out = True
                         break
                     for key, _ in selector.select(timeout=min(.1, max(0, timeout - (time.monotonic() - started)))):
-                        chunk = os.read(key.fileobj.fileno(), 65536)
+                        chunk = hostos.read_ready(key)
                         if not chunk:
                             selector.unregister(key.fileobj)
                         else:
@@ -1647,7 +1637,7 @@ class Factory:
             # Clean up descendants even when the main command exits or its
             # captured pipe remains open. These are trusted local job processes.
             try:
-                os.killpg(child.pid, signal.SIGKILL)
+                hostos.kill_group(child.pid)
             except ProcessLookupError:
                 pass
             child.wait()
