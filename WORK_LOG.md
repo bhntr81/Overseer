@@ -4366,3 +4366,21 @@ briefed by the primary agent (Claude Fable 5.2), executed by the primary agent.
 - Known limits are in `docs/DEVELOPMENT.md` (job name lifetime, exit status on timeout, shebang and
   `.cmd` arguments).
 
+## 2026-11-12 — The prompt-writing method as a snapshot in `promptwriting/`
+
+Conclusion: an agent on any machine now has the prompt-writing method in this repository.
+Filed against the CONTEXT pillar (rules given to the model).
+
+- `scripts/sync-promptwriting` copies `README.md`, `AGENTS.md`, `GUIDE.md`, `TEMPLATE.md`, and
+  `LESSONS.md` (header only, no rows) from the canonical project beside this repository into
+  `promptwriting/`. It only reads the canonical project. `--check` reports drift (exit 1) and exits
+  0 with a note where the canonical project is absent. Tests: `tests/test_sync_promptwriting.py`.
+- Not published, because this repository is public and they quote other private projects:
+  `DESIGN.md` (its Appendix A names one) and the `prompts/` archive. The snapshot's README says so;
+  `GUIDE.md` still cites findings F1 to F11 from that design record.
+- Judged private in the snapshot: nothing beyond the owner's first name in one example in
+  `GUIDE.md` and machine-local paths, both already public here.
+- `AGENTS.md` names `promptwriting/GUIDE.md` as the fallback; `docs/DEVELOPMENT.md` matches.
+- The script and its tests were written together, before the hash was recorded.
+- Open, for John: publish `DESIGN.md` after its Appendix A is edited in the canonical project? (yes/no)
+
