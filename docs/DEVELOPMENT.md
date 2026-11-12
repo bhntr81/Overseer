@@ -12,7 +12,7 @@ no LLM calls. The monitor additionally needs tmux.
 | Environment | Status | Evidence |
 |---|---|---|
 | Linux (tmux installed) | Supported: the full suite, the factory, and the monitor | Suite run on Kali; CI job `tests` on ubuntu-latest |
-| Windows, native (PowerShell) | Supported: the package, the factory, the loop, and the suite. **Not supported: the tmux monitor and `overseer here`** | CI job `windows` on windows-latest runs `.\scripts\check.ps1` and `.\scripts\check-doc-references.ps1`: 647 tests run, 629 passed, 18 skipped, and 271 document references checked, in [run 43168733243](https://github.com/bhntr81/Overseer/actions/runs/43168733243) (2026-11-12, Python 3.15); the ubuntu job of the same run: 655 run, 654 passed, 1 skipped |
+| Windows, native (PowerShell) | Supported: the package, the factory, the loop, and the suite. **Not supported: the tmux monitor and `overseer here`** | CI job `windows` on windows-latest runs `.\scripts\check.ps1` and `.\scripts\check-doc-references.ps1`: 667 tests run, 651 passed, 16 skipped, and 279 document references checked, in [run 43175199795](https://github.com/bhntr81/Overseer/actions/runs/43175199795) (2026-11-12, Python 3.15); the ubuntu job of the same run: 675 run, 672 passed, 3 skipped |
 | Windows via WSL2 | Expected to work as Linux, monitor included; **not tested** | Not executed |
 | ChatGPT Codex app on Windows | Works through `AGENTS.md` plus the PowerShell commands below | Instruction files checked by inspection; the commands it is told to run are the ones the `windows` CI job runs. **Not executed inside the app** |
 | Claude desktop app on Windows (Code tab) | Works through `CLAUDE.md` (imports `AGENTS.md`) plus the same commands | Same as above. **Not executed inside the app** |
@@ -38,7 +38,8 @@ isolation probe is Linux-only. Use WSL2 for all of these.
 Tests skipped on Windows, each with its reason in the test: the monitor command line (`run`,
 `status`; 5 tests), the pty mode (`tests/test_local.py`, the whole module), `/proc` and POSIX pane
 scope (3), the bubblewrap probe (4), the live tmux transport (1), a file name that is not Unicode
-(1), and the loop's multi-line step brief through a `.cmd` fake worker (1 test in 3 classes).
+(1), and one test of the POSIX branch of the launch rule (1). The loop and provider tests use a
+native `.exe` fake worker on Windows, so the multi-line step brief is tested there, not skipped.
 
 Limits of the Windows path, stated plainly:
 
@@ -48,10 +49,24 @@ Limits of the Windows path, stated plainly:
   without running the task. If the controller dies **and** the task's own command has exited while
   a grandchild lingers, that grandchild is no longer found; on Linux it is.
 - A task killed on timeout reports the exit status Windows gives a terminated process, not `-9`.
-- A task command must be something `CreateProcess` can start: an `.exe`, or a `.cmd`/`.bat` file.
-  A script with only a shebang line is not runnable; name the interpreter in the argument list.
-  A `.cmd` file cannot receive an argument that contains a line break, so a worker client that is
-  installed as a `.cmd` shim does not get the loop's multi-line step brief intact.
+- How a command is started (`hostos.prepare`, called by the factory for a task's implementation
+  and for each check, before any child process exists). A program named without a directory is
+  looked up in the workspace and on `PATH` with the `PATHEXT` extensions, as the shell does, so a
+  client installed only as `opencode.cmd` is found by the name `opencode`. A program that does not
+  exist fails the command with one line that names it (exit status 127), and no child is started.
+- A native program (`.exe`) receives every argument exactly as written: line breaks, quotes, `%`.
+- A `.cmd` or `.bat` file is run by `cmd.exe`, which reads the command line by its own rules.
+  Measured on windows-latest before this rule (run 43174757467): an instruction with a line break
+  arrived cut at the first line; one with `" & echo` ran the injected command; `%PATH%` arrived
+  expanded; each job still reported `passed`. No escaping makes arbitrary text safe there. So such
+  a file is started only when every argument is made of letters, digits, spaces and `_./:\=+@,~-`.
+  Otherwise the command is **refused** (exit status 126, one line in the log, no child started):
+  the text never arrives altered. The loop's sized step brief contains a line break, so a worker
+  client that exists only as a `.cmd` shim cannot run a sized loop: install a native `.exe` of the
+  client, use WSL2, or name the interpreter and script in the argument list.
+- A script with only a shebang line is not a program on Windows; name the interpreter.
+- Not executed: any real client (`opencode`, `claude`, `codex`). How each is installed on Windows,
+  and the flags in `provider.py`, are unverified.
 
 ## Configuration: public example, local file
 
