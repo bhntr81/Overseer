@@ -151,6 +151,13 @@ Bash or PowerShell: in Git Bash run `python scripts/check` and `python scripts/c
 
 **Claude Code (terminal).** `CLAUDE.md` imports `AGENTS.md`; the workflow is the same on each system.
 
+**The prompt-writing method.** `AGENTS.md` sends project work through a prompt-writing role whose
+method lives in the author's machine-local project. On any other machine use the snapshot in this
+repository, [promptwriting/GUIDE.md](../promptwriting/GUIDE.md). It is written from the author's project by
+`python3 scripts/sync-promptwriting`; `--check` exits 1 when the two differ and 0, with a note, on a
+machine that does not have the author's project. The design record (`DESIGN.md`) and the prompt
+archive are not in the snapshot.
+
 ## Known limitations
 
 - Native Windows: the monitor, `overseer here`, and the isolation probe are not supported (above).
@@ -159,4 +166,6 @@ Bash or PowerShell: in Git Bash run `python scripts/check` and `python scripts/c
   they are told to run were checked by inspection and, for the commands, by the `windows` CI job.
 - The factory's argument-vector runner is not itself sandboxed; the bubblewrap profile only probes.
 - `AGENTS.md` refers to the author's private playbook path outside this repository; on another
-  machine that file is absent, and the instructions say to report that rather than invent it.
+  machine that file is absent, and the instructions say to report that rather than invent it. The
+  prompt-writing method is the exception: its snapshot is in `promptwriting/`, without the design
+  record and the prompt archive, which stay in the author's project.
