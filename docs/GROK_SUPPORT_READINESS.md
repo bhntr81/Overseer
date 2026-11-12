@@ -35,7 +35,7 @@ Grok adapter run does.
 - The install record reports Grok Build **1.0.62** in
   `/home/kali/.local/share/grok-build/1.0.62/grok`, linked from
   `/home/kali/.local/bin/grok`. It records successful version, help, and fresh
-  shell resolution checks. See [DEVTOOLS_INSTALL_RESULT.md](../DEVTOOLS_INSTALL_RESULT.md)
+  shell resolution checks. See [DEVTOOLS_INSTALL_RESULT.md](internal/DEVTOOLS_INSTALL_RESULT.md)
   and the retained output in
   `../artifacts/devtools-install/20261019T031003Z/`.
 - The saved 1.0.62 help output includes `-p/--single`, `--output-format`

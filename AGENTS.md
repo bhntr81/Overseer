@@ -26,7 +26,9 @@ Read `docs/DEVELOPMENT.md` first: setup, `config.example.json` to local `config.
 On native Windows the package, the factory, and the suite run; the tmux monitor and `overseer here`
 do not (use WSL2). Platform code goes in `overseer/hostos.py` and nowhere else.
 The shared-workflow paragraph above names the author's machine-local playbook; if it is absent, say
-so and continue from this file.
+so and continue from this file. User documentation is `README.md` and `docs/REFERENCE.md`;
+development records, including past next-prompt files, are in `docs/internal/` (new
+`*_NEXT_PROMPT.md` files go in `docs/internal/prompts/`).
 
 ## Harness framework
 

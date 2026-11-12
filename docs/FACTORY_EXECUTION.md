@@ -48,14 +48,15 @@ routing-policy JSON is a proposal, not an active authority mechanism.
   work is not automatically rerun. A recorded live child group prevents resolution.
 - `scripts/check` isolates tests from the live tmux server.
 - `.github/workflows/check.yml` defines a read-only CI check, using pinned checkout
-  and setup-python action commits. It is not yet running on a remote repository.
+  action commits. It runs on GitHub for every push to `main` and every pull request, on
+  ubuntu-latest and windows-latest.
 - Private runtime state under `~/.local/state/overseer/factory`; profiles, downloads,
   and runtime artifacts are excluded from the source repository.
 
 ## Using the first slice
 
 ```sh
-cd /home/kali/Programming/Projects/Overseer
+cd /path/to/Overseer
 python3 scripts/check
 python3 -m overseer.factory submit factory/tasks/overseer-checks.json
 python3 -m overseer.factory run-one
