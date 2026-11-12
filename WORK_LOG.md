@@ -4384,3 +4384,20 @@ Filed against the CONTEXT pillar (rules given to the model).
 - The script and its tests were written together, before the hash was recorded.
 - Open, for John: publish `DESIGN.md` after its Appendix A is edited in the canonical project? (yes/no)
 
+## 2026-11-12 — The prompt-writing project moved into `promptwriting/`
+
+Conclusion: `promptwriting/` is now the prompt-writing project itself, not a snapshot. The owner
+asked for the project to live in this folder and for Overseer to integrate it.
+Filed against the CONTEXT pillar (rules given to the model).
+
+- The former canonical directory beside this repository was moved here; a symlink is left at the
+  old path on the author's machine. `scripts/sync-promptwriting` and its test are removed: there is
+  no second copy to keep in step.
+- `promptwriting/prompts/` and `promptwriting/DESIGN.md` are git-ignored and stay on the author's
+  machine, because they quote other, private projects. The filled outcome rows are in
+  `promptwriting/prompts/LESSONS.md`; the published `LESSONS.md` keeps its header and no rows.
+- `tests/test_promptwriting_layout.py` checks the five published files, the ignore entries, that
+  git tracks nothing else there, and that `AGENTS.md` names `promptwriting/GUIDE.md`.
+- `AGENTS.md`, `docs/DEVELOPMENT.md` and `docs/HARNESS_FRAMEWORK.md` say the same.
+- Checked on Kali: `python3 scripts/check` 661 tests OK (1 skipped); doc references pass.
+

@@ -152,11 +152,10 @@ Bash or PowerShell: in Git Bash run `python scripts/check` and `python scripts/c
 **Claude Code (terminal).** `CLAUDE.md` imports `AGENTS.md`; the workflow is the same on each system.
 
 **The prompt-writing method.** `AGENTS.md` sends project work through a prompt-writing role whose
-method lives in the author's machine-local project. On any other machine use the snapshot in this
-repository, [promptwriting/GUIDE.md](../promptwriting/GUIDE.md). It is written from the author's project by
-`python3 scripts/sync-promptwriting`; `--check` exits 1 when the two differ and 0, with a note, on a
-machine that does not have the author's project. The design record (`DESIGN.md`) and the prompt
-archive are not in the snapshot.
+method lives in this repository, [promptwriting/GUIDE.md](../promptwriting/GUIDE.md). That directory is
+the project itself, on every machine. The design record (`DESIGN.md`) and the prompt archive
+(`prompts/`) exist only on the author's machine and are git-ignored, because they quote other,
+private projects.
 
 ## Known limitations
 
@@ -167,5 +166,5 @@ archive are not in the snapshot.
 - The factory's argument-vector runner is not itself sandboxed; the bubblewrap profile only probes.
 - `AGENTS.md` refers to the author's private playbook path outside this repository; on another
   machine that file is absent, and the instructions say to report that rather than invent it. The
-  prompt-writing method is the exception: its snapshot is in `promptwriting/`, without the design
-  record and the prompt archive, which stay in the author's project.
+  prompt-writing method is the exception: it lives in `promptwriting/`, without the design
+  record and the prompt archive, which stay on the author's machine.

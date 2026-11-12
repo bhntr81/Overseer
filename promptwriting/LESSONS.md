@@ -22,5 +22,9 @@ How to fill a row:
 
 If three prompts in a row get no outcome, the log is not working: tell the owner.
 
+Where the rows are: on the author's machine they are kept in `prompts/LESSONS.md`,
+which is not published because the rows name other, private projects. Add and
+fill rows there. On any other machine, add rows to the table below.
+
 | Date | Prompt | Project | Target | Class | Writer | Cold read | Achieved | Corrections | Waste | Cost | Cause | Lesson |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|

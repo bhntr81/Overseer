@@ -10,11 +10,11 @@ and verify it within the authorized scope. Preserve this project's specific
 constraints and model requirements. This standing workflow supersedes older
 wording that made optimizer guidance optional; it adds no runtime dependency.
 
-The prompt-writing method that workflow names lives at a machine-local path
-(`PROMPTWRITING/GUIDE.md` beside this repository). When that path is absent, as it is
-on any machine but the author's, use the snapshot in this repository:
-`promptwriting/GUIDE.md`, with `promptwriting/TEMPLATE.md`. The snapshot is written by
-`python3 scripts/sync-promptwriting`; do not edit it by hand.
+The prompt-writing method that workflow names lives in this repository:
+`promptwriting/GUIDE.md`, with `promptwriting/TEMPLATE.md` and the entry point
+`promptwriting/AGENTS.md`. This is the project itself, not a copy; edit it here.
+Its `prompts/` archive and `DESIGN.md` exist only on the author's machine and are
+git-ignored, because they quote other, private projects. Never commit them.
 
 ## Getting started (any agent: ChatGPT Codex app, Claude desktop app, Claude Code, others; Linux or Windows)
 

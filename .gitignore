@@ -9,3 +9,6 @@ artifacts/
 # Local, machine-specific configuration: copy config.example.json to config.json.
 config.json
 config.json.bak*
+# The prompt-writing project lives in promptwriting/; these parts quote private projects.
+promptwriting/prompts/
+promptwriting/DESIGN.md
