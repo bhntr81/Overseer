@@ -182,11 +182,7 @@ class GroupTest(unittest.TestCase):
 
     @staticmethod
     def diagnosis(group):
-        if not hostos.WINDOWS:
-            return 'group %d' % group
-        import ctypes
-        handle = hostos._kernel().OpenJobObjectW(4, False, hostos._job_name(group))
-        return 'job %r open=%r error=%r' % (hostos._job_name(group), handle, ctypes.get_last_error())
+        return 'group %d was not found after its controller died' % group
 
     def test_a_finished_group_is_not_alive_and_killing_it_reports_that(self):
         child = hostos.popen_group([sys.executable, '-c', 'pass'])

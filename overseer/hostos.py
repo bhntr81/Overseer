@@ -5,8 +5,8 @@ exclusive non-blocking file lock, a child started in a group of its own, a way
 to tell whether that group still has a live process and to kill all of it, and
 a bounded read of a child's output. POSIX supplies them with flock, sessions,
 killpg, and select on a pipe. Native Windows supplies them with a byte-range
-lock, a named job object, and a reader thread. Callers use the functions here
-and never name fcntl or killpg themselves.
+lock, a named job object (`overseer/winjob.py`), and a reader thread. Callers
+use the functions here and never name fcntl or killpg themselves.
 
 The tmux monitor and the pty single-program mode are not carried over: they
 need tmux and POSIX terminals, and `require_posix` refuses them on Windows
@@ -19,6 +19,8 @@ import signal
 import subprocess
 import threading
 from types import SimpleNamespace
+
+from overseer import winjob
 
 WINDOWS = os.name == 'nt'
 
@@ -95,7 +97,7 @@ def popen_group(argv, **options):
         return subprocess.Popen(argv, start_new_session=True, **options)
     child = subprocess.Popen(argv, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, **options)
     try:
-        _JOBS[child.pid] = _adopt(child.pid)
+        winjob.JOBS[child.pid] = winjob.adopt(child.pid)
     except OSError:
         child.kill()
         child.wait()
@@ -113,14 +115,14 @@ def group_alive(pid):
         except PermissionError:
             return True
         return True
-    handle, owned = _job(pid, _JOB_QUERY)
+    handle, owned = winjob.find(pid, winjob.QUERY)
     if not handle:
         return False
     try:
-        return _active(handle) > 0
+        return winjob.active(handle) > 0
     finally:
         if not owned:
-            _kernel().CloseHandle(handle)
+            winjob.close(handle)
 
 
 def kill_group(pid):
@@ -131,16 +133,16 @@ def kill_group(pid):
     if not WINDOWS:
         os.killpg(pid, signal.SIGKILL)
         return
-    handle, _ = _job(pid, _JOB_QUERY | _JOB_TERMINATE)
-    _JOBS.pop(pid, None)
+    handle, _ = winjob.find(pid, winjob.QUERY | winjob.TERMINATE)
+    winjob.JOBS.pop(pid, None)
     if not handle:
         raise ProcessLookupError('no process group %d' % pid)
     try:
-        active = _active(handle)
-        if active and not _kernel().TerminateJobObject(handle, 1):
-            raise _last_error('TerminateJobObject')
+        active = winjob.active(handle)
+        if active:
+            winjob.terminate(handle)
     finally:
-        _kernel().CloseHandle(handle)
+        winjob.close(handle)
     if not active:
         raise ProcessLookupError('no process group %d' % pid)
 
@@ -149,106 +151,11 @@ def terminate_group(pid):
     """Ask the group started as `pid` to stop: SIGTERM on POSIX, a kill on Windows."""
     if not WINDOWS:
         os.killpg(pid, signal.SIGTERM)
-    elif pid in _JOBS or group_alive(pid):
+    elif pid in winjob.JOBS or group_alive(pid):
         kill_group(pid)
     else:
         # A child that was not started through popen_group has no job; end it alone.
         os.kill(pid, signal.SIGTERM)
-
-
-# Windows job objects. A job lives while it has a process or an open handle, and
-# it keeps its name only while a handle is open. The controller holds one and the
-# gated launcher holds another, so a group whose controller died is found again
-# by name for as long as its launcher runs.
-_JOBS = {}
-_JOB_TERMINATE = 0x0008
-_JOB_QUERY = 0x0004
-_PROCESS_TERMINATE = 0x0001
-_PROCESS_SET_QUOTA = 0x0100
-_BASIC_ACCOUNTING = 1
-_KERNEL = None
-
-
-def _kernel():
-    global _KERNEL
-    if _KERNEL is None:
-        import ctypes
-        from ctypes import wintypes
-        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-        signatures = {
-            'CreateJobObjectW': (wintypes.HANDLE, [ctypes.c_void_p, wintypes.LPCWSTR]),
-            'OpenJobObjectW': (wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]),
-            'OpenProcess': (wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
-            'AssignProcessToJobObject': (wintypes.BOOL, [wintypes.HANDLE, wintypes.HANDLE]),
-            'TerminateJobObject': (wintypes.BOOL, [wintypes.HANDLE, wintypes.UINT]),
-            'QueryInformationJobObject': (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
-                                                         wintypes.DWORD, ctypes.c_void_p]),
-            'CloseHandle': (wintypes.BOOL, [wintypes.HANDLE]),
-        }
-        for name, (result, arguments) in signatures.items():
-            function = getattr(kernel, name)
-            function.restype = result
-            function.argtypes = arguments
-        _KERNEL = kernel
-    return _KERNEL
-
-
-def _last_error(call):
-    import ctypes
-    code = ctypes.get_last_error()
-    return OSError(code, '%s failed: %s' % (call, ctypes.FormatError(code)))
-
-
-def _job_name(pid):
-    return 'overseer-group-%d' % pid
-
-
-def _adopt(pid):
-    """Create the job for a new child and put the child in it; return the job handle."""
-    kernel = _kernel()
-    job = kernel.CreateJobObjectW(None, _job_name(pid))
-    if not job:
-        raise _last_error('CreateJobObjectW')
-    process = kernel.OpenProcess(_PROCESS_TERMINATE | _PROCESS_SET_QUOTA, False, pid)
-    if not process:
-        error = _last_error('OpenProcess')
-        kernel.CloseHandle(job)
-        raise error
-    try:
-        if not kernel.AssignProcessToJobObject(job, process):
-            error = _last_error('AssignProcessToJobObject')
-            kernel.CloseHandle(job)
-            raise error
-    finally:
-        kernel.CloseHandle(process)
-    return job
-
-
-def _job(pid, access):
-    """Return (handle, owned): this process's own handle, or one opened by name."""
-    if pid in _JOBS:
-        return _JOBS[pid], True
-    return _kernel().OpenJobObjectW(access, False, _job_name(pid)), False
-
-
-def _active(handle):
-    """The number of live processes in a job."""
-    import ctypes
-    from ctypes import wintypes
-
-    class Accounting(ctypes.Structure):
-        _fields_ = [('TotalUserTime', ctypes.c_int64), ('TotalKernelTime', ctypes.c_int64),
-                    ('ThisPeriodTotalUserTime', ctypes.c_int64),
-                    ('ThisPeriodTotalKernelTime', ctypes.c_int64),
-                    ('TotalPageFaultCount', wintypes.DWORD), ('TotalProcesses', wintypes.DWORD),
-                    ('ActiveProcesses', wintypes.DWORD),
-                    ('TotalTerminatedProcesses', wintypes.DWORD)]
-
-    record = Accounting()
-    if not _kernel().QueryInformationJobObject(handle, _BASIC_ACCOUNTING, ctypes.byref(record),
-                                               ctypes.sizeof(record), None):
-        raise _last_error('QueryInformationJobObject')
-    return record.ActiveProcesses
 
 
 # --- bounded reads of a child's output --------------------------------------

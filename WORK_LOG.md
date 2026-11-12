@@ -4325,3 +4325,44 @@ screen moves the pane on. Two queue-path tests in `tests/test_stopgate.py`.
   criteria say no text on the screen is ever John's reply. Test added.
 - Not restarted: John paused Overseer work ("lets go back to the ocr for now");
   the fix loads at the next `systemctl --user restart overseer`.
+
+## 2026-11-12 — Native Windows support (host compatibility layer, windows-latest CI)
+
+Conclusion: on native Windows the package imports, the factory and the loop run, and the suite
+passes. The tmux monitor, `overseer here`, and the bubblewrap probe stay POSIX-only and refuse with
+one line naming WSL2. Filed against the STATE pillar (the single-writer lock).
+
+Request (John, 2026-11-11): make Overseer usable by the ChatGPT Codex app on Windows and the Claude
+desktop app. Prompt: `WINDOWS_SUPPORT_NEXT_PROMPT.md`, written by a general-purpose subagent
+briefed by the primary agent (Claude Fable 5.2), executed by the primary agent.
+
+- New `overseer/hostos.py` (one module owns every platform branch; its Windows job-object calls
+  are in `overseer/winjob.py`, split out to keep both under 300 lines): exclusive non-blocking lock
+  (`flock` / `msvcrt.locking` on byte 0), a child in its own group (session / named job object),
+  group liveness and kill including grandchildren, the gated launcher, and a bounded output reader
+  (selector / reader thread). `factory.py`, `orchestrate.py`, `__main__.py`, and `stopgate.py` call
+  it; none names `fcntl` any more. `factory.py` shrank by 8 lines.
+- `skills.py`: an `installed_path` recorded on a POSIX machine counts as absolute when read on Windows.
+- `.gitattributes` forces LF (`git add --renormalize .` changed no file). CI gained a `windows` job
+  that runs `scripts/check.ps1` and `scripts/check-doc-references.ps1`.
+- Executed: Linux locally (`python3 scripts/check`, `python3 scripts/check-doc-references`) and CI
+  run 43168733243: ubuntu 655 run / 654 passed / 1 skipped; windows-latest 647 run / 629 passed /
+  18 skipped. Baseline before the work: 637 tests on Linux.
+- Only inspected, not executed: the Codex app and the Claude desktop app themselves; WSL2.
+- Four CI rounds. Round 1: 537 passed, 51 failed. Product fixes found by CI: a job object loses its
+  name when its last handle closes, so the launcher now holds one and refuses to run the task
+  (exit 125) when it cannot; `stopgate._kill` used `killpg`; the provenance path check.
+- Test re-freezes (tests are frozen before implementing; each change below was made in a test
+  phase, hashes recorded per round): (1) new `tests/test_hostos.py`; `test_factory` cleanup uses
+  `hostos.kill_group`. (2) Windows skips with reasons (list in `docs/DEVELOPMENT.md`); fake worker
+  scripts get a `.cmd` starter on Windows; text written with `write_bytes` where exact bytes are
+  compared (Windows text mode writes CRLF); a factory closed before its directory is removed; the
+  selector failure is injected at `hostos.output_selector`. (3) `core.autocrlf=false` in the diff
+  tests' git helper; the multi-line step-brief test skipped for the `.cmd` fake; a controller-death
+  group test added. (4) `test_hard_worker_crash_requires_reconciliation` waits for the task to
+  start before killing the worker (it raced on Windows); launcher tests start a real group.
+  `hostos.py` was first written a few minutes before the first hash was recorded; no caller was
+  wired until after it.
+- Known limits are in `docs/DEVELOPMENT.md` (job name lifetime, exit status on timeout, shebang and
+  `.cmd` arguments).
+
