@@ -23,6 +23,7 @@ The reason. The hard part, if any.>
 
 ## Done means
 - <A check the reader can run.>
+- <The baseline check still passes: what worked before still works.>
 
 ## Report back
 <Where to write it. Conclusion first. Measured vs estimated. What was skipped and
