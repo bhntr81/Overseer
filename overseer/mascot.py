@@ -17,10 +17,11 @@ import zlib
 
 WOOD, WOOD_DARK, WOOD_LIGHT = '#8a5a2b', '#4a2c12', '#b07a42'
 STEEL, STEEL_EDGE, STEEL_DARK = '#dfe6ef', '#8a97a8', '#4b5563'
-ROBE, ROBE_DARK, ROBE_LIGHT = '#2f3442', '#11141b', '#434a5c'
-VOID, EYE, EYE_GLOW = '#05070a', '#d9ffe9', '#2bff8a'
-BONE, BONE_DARK = '#e9e4d4', '#8f8a78'
-SKULL, SKULL_DARK, MIST, HAZE = '#5dff9f', '#0b3d22', '#bff7d6', '#e3fbec'
+ROBE, ROBE_DARK, ROBE_LIGHT = '#16181d', '#050608', '#2a2e38'
+VOID, EYE_SOCKET, EYE_GLOW, EYE = '#020203', '#2a0505', '#ff2a1a', '#ffd9b0'
+BONE, BONE_DARK = '#ece3c6', '#8c8268'
+SKULL, SKULL_DARK, MIST = '#a8efc9', '#1d4436', '#2f5a6e'
+NIGHT, NIGHT_EDGE = '#1c2160', '#0d1033'
 
 
 def _arc(cx, cy, radius, start, end, steps=24):
@@ -60,68 +61,83 @@ def _curve(start, control, end, width, shrink=0.0, taper=False, steps=28):
     return left + right[::-1]
 
 
-# The scythe he holds. The handle (the snath) is long, wooden and gently bowed,
-# standing at his right; the blade leaves its top and sweeps left over his hood,
-# hooking down to its point.
-SNATH = ((51.0, 63.0), (55.0, 34.0), (47.0, 7.0))
-BLADE = ((47.0, 8.0), (25.0, -3.0), (11.0, 19.0))
-# Where the little skulls float, as (x, y, size).
-SKULLS = ((6.5, 37.0, 3.0), (10.0, 54.0, 2.6), (59.0, 18.0, 2.6), (59.5, 47.0, 3.0), (26.0, 61.5, 2.4))
+# The scythe: a long, thin, gently bowed wooden handle held across his body from
+# lower left to upper right, and a long narrow blade leaving its top end and
+# angling down to the right.
+SNATH = ((1.5, 55.0), (30.0, 24.0), (57.0, 7.0))
+BLADE = ((56.5, 6.5), (63.5, 16.0), (59.5, 39.0))
+# The floating skulls, as (x, y, size): behind him first, then in front.
+SKULLS_BEHIND = ((7.0, 31.0, 2.3), (11.0, 21.0, 1.6), (47.0, 30.0, 2.0), (53.0, 41.0, 2.2))
+SKULLS_FRONT = ((44.0, 49.0, 2.4), (9.0, 59.0, 2.0), (20.5, 61.0, 2.2), (33.0, 58.5, 1.8),
+                (57.0, 54.0, 2.0))
 
 
-def _skull(x, y, r):
-    """One small green skull in its own glow: cranium, jaw, two dark eyes."""
-    return [
-        ('circle', (x, y + 0.3 * r, 1.9 * r), MIST),
+def _skull(x, y, r, glow=True):
+    """One small pale-green skull: cranium, jaw, two dark eye sockets, a faint glow."""
+    parts = [('circle', (x, y + 0.3 * r, 1.7 * r), MIST)] if glow else []
+    return parts + [
         ('circle', (x, y, r), SKULL),
         ('poly', [(x - 0.55 * r, y + 0.45 * r), (x + 0.55 * r, y + 0.45 * r),
-                  (x + 0.45 * r, y + 1.15 * r), (x - 0.45 * r, y + 1.15 * r)], SKULL),
+                  (x + 0.42 * r, y + 1.15 * r), (x - 0.42 * r, y + 1.15 * r)], SKULL),
         ('circle', (x - 0.38 * r, y - 0.05 * r, 0.3 * r), SKULL_DARK),
         ('circle', (x + 0.38 * r, y - 0.05 * r, 0.3 * r), SKULL_DARK),
     ]
 
 
+def _hand(x, y, size=2.4):
+    """A skeletal hand closed round the handle: knuckles in a row, a dark outline."""
+    return [('circle', (x, y, size + 0.7), BONE_DARK)] + [
+        ('circle', (x - size * 0.55 + i * size * 0.37, y - size * 0.15, size * 0.42), BONE)
+        for i in range(4)] + [('circle', (x, y + size * 0.35, size * 0.7), BONE)]
+
+
 def shapes():
     """The drawing, back to front: ('poly', points, colour) and ('circle', (x, y, r), colour)."""
     root, control, tip = BLADE
-    drawing = [
-        # The spectral haze he stands in.
-        ('circle', (30.0, 36.0, 22.0), HAZE),
-        # The scythe's handle, behind him.
-        ('poly', _curve(*SNATH, 5.0), WOOD_DARK),
-        ('poly', _curve(*SNATH, 5.0, shrink=0.9), WOOD),
-        ('poly', _curve((53.0, 60.0), (56.4, 34.5), (48.8, 9.5), 0.9), WOOD_LIGHT),
-        # The robe: a hood that widens into a body and trails off in wisps.
-        ('poly', [(30.0, 8.0), (38.5, 12.0), (42.0, 22.0), (44.0, 36.0), (46.5, 50.0),
-                  (42.0, 55.0), (39.5, 50.5), (36.5, 60.0), (32.5, 52.0), (28.0, 62.0),
-                  (24.5, 52.5), (20.0, 58.5), (17.5, 50.0), (13.5, 52.5), (15.5, 38.0),
-                  (18.0, 22.0), (21.5, 12.0)], ROBE_DARK),
-        ('poly', [(30.0, 9.6), (37.4, 13.2), (40.6, 22.4), (42.4, 36.0), (44.4, 49.0),
-                  (42.0, 52.0), (39.3, 47.5), (36.4, 56.5), (32.5, 49.5), (28.0, 58.5),
-                  (24.8, 50.0), (20.2, 55.5), (18.0, 48.0), (15.6, 49.5), (17.2, 38.0),
-                  (19.4, 22.4), (22.6, 13.2)], ROBE),
-        ('poly', [(30.0, 9.6), (35.0, 12.0), (29.0, 30.0), (24.0, 48.0), (21.0, 46.0),
-                  (24.5, 30.0)], ROBE_LIGHT),
-        # The face: a dark void under the hood with two green eyes.
-        ('poly', [(30.0, 14.0), (35.0, 17.0), (36.0, 23.0), (33.0, 28.5), (27.0, 28.5),
-                  (24.0, 23.0), (25.0, 17.0)], VOID),
-        ('circle', (27.6, 21.5, 1.7), EYE_GLOW),
-        ('circle', (32.4, 21.5, 1.7), EYE_GLOW),
-        ('circle', (27.6, 21.5, 0.9), EYE),
-        ('circle', (32.4, 21.5, 0.9), EYE),
-        # His sleeve reaching to the handle, and the bony hand gripping it.
-        ('poly', _band(38.0, 33.0, 50.5, 31.0, 6.4), ROBE_DARK),
-        ('poly', _band(38.5, 33.0, 50.0, 31.1, 4.4), ROBE),
-        ('circle', (52.5, 31.0, 2.6), BONE_DARK),
-        ('circle', (52.5, 31.0, 1.9), BONE),
-        # The blade, over his hood.
-        ('poly', _curve(root, control, tip, 11.5, taper=True), STEEL_DARK),
-        ('poly', _curve(root, control, tip, 11.5, shrink=1.0, taper=True), STEEL),
-        ('poly', _curve((root[0] - 1.0, root[1] + 2.6), (control[0] + 1.5, control[1] + 5.5),
-                        (tip[0] + 1.0, tip[1] - 0.5), 2.6, taper=True), STEEL_EDGE),
-        ('circle', (47.0, 7.5, 2.2), STEEL_DARK),
+    drawing = [('circle', (32.0, 32.0, 31.5), NIGHT_EDGE), ('circle', (32.0, 32.0, 30.0), NIGHT)]
+    for x, y, r in SKULLS_BEHIND:
+        drawing += _skull(x, y, r)
+    drawing += [
+        # The robe: a hood over a black robe that flows down into wisps.
+        ('poly', [(26.0, 6.0), (33.5, 9.0), (36.5, 18.0), (39.0, 26.0), (40.5, 38.0),
+                  (38.0, 47.0), (35.0, 44.0), (31.5, 55.0), (27.5, 46.5), (22.5, 53.0),
+                  (20.5, 44.0), (15.0, 47.0), (16.0, 36.0), (14.5, 28.0), (17.5, 18.0),
+                  (19.5, 9.5)], ROBE_DARK),
+        ('poly', [(26.0, 7.6), (32.4, 10.2), (35.2, 18.5), (37.6, 26.4), (39.0, 37.5),
+                  (37.2, 44.0), (35.0, 41.5), (31.4, 51.0), (27.6, 43.5), (22.8, 49.5),
+                  (21.2, 41.5), (16.8, 43.5), (17.6, 36.0), (16.2, 28.2), (18.9, 18.5),
+                  (20.6, 10.6)], ROBE),
+        ('poly', [(26.0, 7.6), (30.0, 9.4), (25.5, 24.0), (21.0, 40.0), (18.6, 38.0), (21.5, 24.0)],
+         ROBE_LIGHT),
+        # Deep in the hood, a skull with burning red eyes.
+        ('poly', [(26.0, 10.0), (31.0, 12.5), (32.0, 19.0), (29.5, 24.5), (22.5, 24.5),
+                  (20.0, 19.0), (21.0, 12.5)], VOID),
+        ('circle', (26.0, 16.0, 4.6), BONE),
+        ('poly', [(22.6, 18.0), (29.4, 18.0), (28.4, 22.4), (23.6, 22.4)], BONE),
+        ('circle', (24.2, 15.8, 1.55), EYE_SOCKET),
+        ('circle', (27.8, 15.8, 1.55), EYE_SOCKET),
+        ('circle', (24.2, 15.8, 1.0), EYE_GLOW),
+        ('circle', (27.8, 15.8, 1.0), EYE_GLOW),
+        ('circle', (24.0, 15.6, 0.4), EYE),
+        ('circle', (27.6, 15.6, 0.4), EYE),
+        ('poly', [(26.0, 17.6), (26.9, 19.3), (25.1, 19.3)], EYE_SOCKET),
+        ('poly', [(24.0, 20.6), (28.0, 20.6), (28.0, 21.2), (24.0, 21.2)], BONE_DARK),
+        # Sleeves reaching out to where the hands hold the handle.
+        ('poly', _band(18.0, 27.0, 13.5, 41.0, 6.0), ROBE_DARK),
+        ('poly', _band(18.2, 27.4, 13.8, 40.4, 4.2), ROBE),
+        ('poly', _band(33.5, 25.0, 39.5, 23.5, 5.4), ROBE_DARK),
+        ('poly', _band(33.8, 25.0, 39.0, 23.6, 3.6), ROBE),
+        # The scythe across him, in front of the robe.
+        ('poly', _curve(*SNATH, 3.6), WOOD_DARK),
+        ('poly', _curve(*SNATH, 3.6, shrink=0.8), WOOD),
+        ('poly', _curve((2.0, 54.0), (30.0, 23.0), (56.5, 6.4), 0.7), WOOD_LIGHT),
+        ('poly', _curve(root, control, tip, 5.0, taper=True), STEEL_DARK),
+        ('poly', _curve(root, control, tip, 5.0, shrink=0.7, taper=True), STEEL),
+        ('poly', _curve((root[0] + 0.6, root[1] + 1.5), (control[0] - 0.5, control[1] + 1.0),
+                        (tip[0] - 0.3, tip[1] - 1.0), 1.4, taper=True), STEEL_EDGE),
     ]
-    for x, y, r in SKULLS:
+    drawing += _hand(13.2, 42.4) + _hand(40.0, 22.6)
+    for x, y, r in SKULLS_FRONT:
         drawing += _skull(x, y, r)
     return drawing
 
