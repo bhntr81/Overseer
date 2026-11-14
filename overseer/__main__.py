@@ -379,6 +379,7 @@ def main():
     size.add_argument("--json", action="store_true")
     size.add_argument("--plan", action="store_true", help="also write out the steps and their iterations")
     size.add_argument("--steps", help="comma-separated step names to use instead of the tier's template")
+    sub.add_parser("gui", help="open the Overseer window: build a program from one request, or finish a repo")
     progress = sub.add_parser("progress", help="evaluate a saved step plan (the .plan.json beside the ledger)")
     progress.add_argument("plan_file", type=Path)
     progress.add_argument("--json", action="store_true")
@@ -389,6 +390,9 @@ def main():
             hostos.require_posix("overseer " + args.action)
         if args.action == "run":
             return run(args)
+        if args.action == "gui":
+            from overseer import gui
+            return gui.main()
         if args.action == "status":
             config = settings(configfile.default_path(ROOT))
             state = read_state(args.state)

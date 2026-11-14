@@ -63,11 +63,16 @@ def _refuse_if_inside_work_tree(path):
         raise TargetError('refusing a path inside an existing git work tree: %s' % path)
 
 
-def init(directory, spec=None):
+def init(directory, spec=None, allow_nested=False):
     """Scaffold a target git repository and return its facts, or raise TargetError.
 
     The directory must be an absolute, non-symlinked path that is absent or an
-    empty existing directory, and must not lie inside an existing git work tree.
+    empty existing directory, and must not lie inside an existing git work tree
+    unless ``allow_nested``. The window's "build a new program" passes it: a
+    person who keeps their whole home folder in git (this author's machine)
+    would otherwise be refused every project folder they could pick, and a
+    repository nested in another is ordinary git, seen by the outer one as an
+    untracked folder.
     """
     path = Path(directory)
     if not path.is_absolute():
@@ -79,7 +84,8 @@ def init(directory, spec=None):
             raise TargetError('the target path exists and is not a directory: %s' % path)
         if any(path.iterdir()):
             raise TargetError('refusing a non-empty directory: %s' % path)
-    _refuse_if_inside_work_tree(path)
+    if not allow_nested:
+        _refuse_if_inside_work_tree(path)
     path.mkdir(parents=True, exist_ok=True)
     _git(path, 'init', '--quiet')
     copied = False

@@ -4537,3 +4537,27 @@ Conclusion: the repository is prepared as a stopping point. No functionality was
 - Not executed: any real client through the factory or loop; `overseer start` with a real client
   in the clean environment; WSL2; macOS; the ChatGPT Codex app and the Claude desktop app.
 - No licence file exists and none was added: choosing one is the owner's decision.
+
+## 2026-11-13 - The Overseer app for Windows: one request in, a working program out
+
+Conclusion: Overseer now has a window and a Windows `.exe`. Executed on the author's Windows
+laptop (Python 3.14, Tk 9.0); the release workflow and PyInstaller build are not yet run.
+- `overseer/build.py`: "build a new program" (new folder, SPEC.md, nested git allowed) and
+  "continue an existing project" set up the factory loop from one request. Every step gets a
+  preamble (objective, notes file, report format); `overseer_check.py`, written by the worker,
+  is the factory's check after every step. Ledger under `%LOCALAPPDATA%\Overseer`.
+- `overseer/orchestrate.py`: loop-spec `preamble` in every prompt, a `steer` hook for the
+  operator's messages, `permission_mode` passed to the worker, and a stop with needs_input
+  (not a crash) when a prompt would exceed the instruction limit.
+- `overseer/provider.py`: Claude permission mode is a parameter (default acceptEdits as before).
+- `overseer/target.py`: `init(allow_nested=True)`, needed when the home folder is a git repo.
+- `overseer/gui.py`, `overseer/mascot.py`, `overseer/assets/`: the window (tkinter), the
+  mascot (a hooded spectre holding a scythe, in a cloud of green skulls; one vector drawing,
+  rasterised by the standard library), self-installing `.exe`, Desktop shortcut.
+- `Overseer.pyw`, `install.cmd`, `scripts/build-exe.ps1`, `.github/workflows/release.yml`.
+- Tests: `tests/test_build.py` (incl. end to end: a fake Claude `.exe` builds a program whose
+  check passes, operator note reaches the prompt), `tests/test_mascot.py`: 13 OK. Affected:
+  test_provider, test_loop, test_cli: OK. test_target: 3 errors on this laptop with and
+  without the change (its temp folder is inside a git-tracked home).
+- Not executed: the release workflow, PyInstaller, `install.cmd`, a real Claude build.
+  The release workflow's setup-python and upload-artifact use version tags, not SHA pins.

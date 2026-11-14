@@ -185,6 +185,29 @@ watch: the monitor reads tmux panes.
 
 ## Windows
 
+### The Overseer app
+
+Download `Overseer.exe` from the latest GitHub release and run it: it offers to install
+itself for your user (no admin rights) with Desktop and Start Menu shortcuts. From a clone,
+double-click `install.cmd` instead; it builds the same `.exe` with PyInstaller, or makes a
+Desktop shortcut to `Overseer.pyw` if it cannot. `python -m overseer gui` opens the window
+on any system with Python and Tk.
+
+The window has two modes. **Build a new program**: describe what you want once, pick an
+empty folder and press Build. **Continue an existing project**: pick a folder and,
+optionally, what to focus on; the agent finds the unfinished work from the project's notes,
+TODOs, failing tests and history. Either way Overseer runs the factory loop
+(`overseer/build.py`): one fresh worker session per step, each given the objective and the
+report format, until the worker reports done and `overseer_check.py`, a script the worker
+writes and the factory runs itself after every step, passes. It stops early when the
+worker needs you, after repeated failures, or at the step limit. While it runs you can
+steer it (your message goes at the top of the next step) or ask Claude about the project in
+read-only plan mode. The agent is Claude Code by default; letting it run commands, which
+installing packages and running tests need, is a checkbox. Each step spends the chosen
+agent's account credits.
+
+### The rest on Windows
+
 On native Windows the factory, the loop, and the test suite run; this is exercised by CI on
 `windows-latest`. The monitor, `overseer here`, and the isolation probe need tmux or a POSIX
 terminal and exit with one line that points to WSL2. A worker client installed as a native

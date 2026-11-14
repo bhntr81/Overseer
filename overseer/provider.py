@@ -125,9 +125,18 @@ def default_runner(env=None):
     return detect_session(env)['runner'] or DEFAULT_RUNNER
 
 
-def _claude_argv(instruction, model, claude='claude'):
-    """Claude Code headless. Unverified here; it spends the account's credits."""
-    argv = [claude, '-p', '--permission-mode', 'acceptEdits']
+# Claude Code's permission modes. acceptEdits lets a worker edit files but not
+# run commands; bypassPermissions also lets it run them, which building a
+# program from nothing needs (installing packages, running its tests), and is
+# chosen only when the operator asks for it.
+CLAUDE_PERMISSION_MODES = ('acceptEdits', 'bypassPermissions', 'default', 'plan')
+
+
+def _claude_argv(instruction, model, claude='claude', permission_mode='acceptEdits'):
+    """Claude Code headless; it spends the account's credits."""
+    if permission_mode not in CLAUDE_PERMISSION_MODES:
+        raise ValueError('unknown Claude permission mode: %s' % permission_mode)
+    argv = [claude, '-p', '--permission-mode', permission_mode]
     if model:
         argv += ['--model', model]
     argv.append(instruction)
@@ -144,7 +153,8 @@ def _codex_argv(instruction, model, codex='codex'):
 
 
 def resolve_worker(instruction, model=None, runner=None, env=None,
-                   opencode=DEFAULT_OPENCODE, claude='claude', codex='codex'):
+                   opencode=DEFAULT_OPENCODE, claude='claude', codex='codex',
+                   permission_mode='acceptEdits'):
     """Resolve the worker invocation for one instruction.
 
     Runner precedence: an explicit ``runner`` wins, else the detected session's
@@ -168,7 +178,7 @@ def resolve_worker(instruction, model=None, runner=None, env=None,
         model = model or DEFAULT_MODEL
         argv = worker_argv(instruction, model=model, opencode=opencode, json_output=True)
     elif chosen == 'claude':
-        argv = _claude_argv(instruction, model, claude)
+        argv = _claude_argv(instruction, model, claude, permission_mode)
     else:
         argv = _codex_argv(instruction, model, codex)
     return {'runner': chosen, 'model': model, 'argv': argv,
@@ -177,7 +187,8 @@ def resolve_worker(instruction, model=None, runner=None, env=None,
 
 def build_task(task_id, objective, workspace, checks, instruction,
                model=None, runner=None, env=None, timeout_seconds=600,
-               opencode=DEFAULT_OPENCODE, repair_allowance=1, wall_time_seconds=600):
+               opencode=DEFAULT_OPENCODE, repair_allowance=1, wall_time_seconds=600,
+               permission_mode='acceptEdits'):
     """Return ``(spec, resolved)``: a submittable command-mode factory task whose
     implementation is the resolved worker invocation.
 
@@ -185,7 +196,8 @@ def build_task(task_id, objective, workspace, checks, instruction,
     the checks one for one. Submitting and running it drives the chosen model;
     the factory validates, hashes, and freezes the spec as for any other task.
     """
-    resolved = resolve_worker(instruction, model=model, runner=runner, env=env, opencode=opencode)
+    resolved = resolve_worker(instruction, model=model, runner=runner, env=env, opencode=opencode,
+                              permission_mode=permission_mode)
     spec = {
         'id': task_id, 'objective': objective, 'workspace': workspace,
         'timeout_seconds': timeout_seconds,

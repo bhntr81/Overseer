@@ -112,8 +112,15 @@ def _result(state, iterations, last_job, detail):
 
 
 def run_loop(db_path, loop_spec, target, once=False, dry_run=False, env=None,
-             opencode='opencode', now=None, router=None):
-    """Drive the factory from the loop spec until a stop condition. Returns a result."""
+             opencode='opencode', now=None, router=None, steer=None):
+    """Drive the factory from the loop spec until a stop condition. Returns a result.
+
+    ``steer``, when given, is called before each job is built and returns a
+    message the operator typed since the last job, or None; the message goes at
+    the top of that job's prompt. It is the person at the keyboard speaking,
+    not a model, so it is the one input besides the worker report that may add
+    to an instruction.
+    """
     now = time.time if now is None else now
     router = route.start_session if router is None else router
     escalate_to = loop_spec.get('escalate_to') or 'none'
@@ -138,7 +145,8 @@ def run_loop(db_path, loop_spec, target, once=False, dry_run=False, env=None,
             if plan is not None:
                 state['plan'] = _load_plan(db_path, loop_spec, plan)
             result = _drive(factory, loop_spec, target, prefix, checks, runner, cap,
-                            once, dry_run, env, opencode, now, escalate_to, router, plan, state)
+                            once, dry_run, env, opencode, now, escalate_to, router, plan, state,
+                            steer)
             if plan is not None:
                 result['sizing'] = plan.as_dict()
                 evaluation = blueprint.evaluate(state['plan'])
@@ -190,8 +198,27 @@ def _escalate(factory, lineage_root, lineage, escalate_to, target, dry_run, rout
                       'routed a frozen lineage to %s; pane %s' % (escalate_to, pane))
 
 
+def _compose_prompt(loop_spec, brief, instruction, note):
+    """The worker's prompt: the operator's note, the step brief, the preamble, the instruction.
+
+    Every job is a fresh worker session that has seen nothing before, so the
+    loop spec's ``preamble`` (what is being built, where its spec and notes are,
+    how to report) goes into every prompt, not only the first.
+    """
+    parts = []
+    if note:
+        parts.append('Message from the operator (follow it): ' + note)
+    if brief:
+        parts.append(brief)
+    if loop_spec.get('preamble'):
+        parts.append(loop_spec['preamble'])
+    parts.append(instruction)
+    return '\n\n'.join(parts)
+
+
 def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
-           once, dry_run, env, opencode, now, escalate_to, router, plan=None, state=None):
+           once, dry_run, env, opencode, now, escalate_to, router, plan=None, state=None,
+           steer=None):
     instruction = loop_spec['objective']
     last_job = None
     last_failed = False
@@ -236,16 +263,20 @@ def _drive(factory, loop_spec, target, prefix, checks, runner, cap,
             wall = plan.budget['wall_time_seconds']
         if allowance is None:
             allowance = 1
-        prompt = instruction
-        if plan is not None:
-            brief = blueprint.step_brief(state['plan'])
-            if brief:
-                prompt = brief + '\n\n' + instruction
-        spec, resolved = build_task(
-            task_id, loop_spec['objective'], target, checks, prompt,
-            model=model, runner=runner, env=env,
-            timeout_seconds=loop_spec.get('timeout_seconds', 600),
-            opencode=opencode, repair_allowance=allowance, wall_time_seconds=wall)
+        brief = blueprint.step_brief(state['plan']) if plan is not None else ''
+        note = steer() if steer is not None and not dry_run else None
+        prompt = _compose_prompt(loop_spec, brief, instruction, note)
+        try:
+            spec, resolved = build_task(
+                task_id, loop_spec['objective'], target, checks, prompt,
+                model=model, runner=runner, env=env,
+                timeout_seconds=loop_spec.get('timeout_seconds', 600),
+                opencode=opencode, repair_allowance=allowance, wall_time_seconds=wall,
+                permission_mode=loop_spec.get('permission_mode', 'acceptEdits'))
+        except ValueError as error:
+            # An instruction the worker wrote may be too long once the brief and
+            # preamble are added; stop and say so rather than cut its words.
+            return _result('needs_input', iteration, last_job, 'the next job cannot be built: %s' % error)
         if loop_spec.get('envelope'):
             spec['envelope'] = loop_spec['envelope']
         if dry_run:
